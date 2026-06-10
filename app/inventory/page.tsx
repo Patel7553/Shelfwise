@@ -2,21 +2,16 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
-import { useSearchParams } from "next/navigation";
 
 export default function Inventory() {
   const [products, setProducts] = useState<any[]>([]);
-  const searchParams = useSearchParams();
+  
 
   const [search, setSearch] = useState("");
 
-  const [category, setCategory] = useState(
-  searchParams.get("category") || "All");
-  
+  const [category, setCategory] = useState("All");
 
-  const [statusFilter, setStatusFilter] = useState(
-    searchParams.get("status") || "All"
-  );
+  const [statusFilter, setStatusFilter] = useState("All");
 
   const [sortOrder, setSortOrder] = useState("nearest");
 
