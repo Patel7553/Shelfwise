@@ -12,15 +12,17 @@ export default function Dashboard() {
   }, []);
 
   async function loadProducts() {
-    const { data } = await supabase
-      .from("products")
-      .select("*")
-      .order("created_at", { ascending: false });
+  const { data, error } = await supabase
+    .from("products")
+    .select("*");
 
-    if (data) {
-      setProducts(data);
-    }
+  console.log("DATA", data);
+  console.log("ERROR", error);
+
+  if (data) {
+    setProducts(data);
   }
+}
 
   const total = products.length;
   console.log(products);
