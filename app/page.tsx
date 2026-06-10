@@ -16,17 +16,13 @@ export default function Dashboard() {
     .from("products")
     .select("*");
 
-  console.log("DATA", data);
-  console.log("ERROR", error);
-
-  if (data) {
+    if (data) {
     setProducts(data);
   }
 }
 
   const total = products.length;
-  console.log(products);
-  const expiringSoonProducts = products.filter(
+    const expiringSoonProducts = products.filter(
     (p) =>
       p.expiry_date &&
       new Date(p.expiry_date) <
