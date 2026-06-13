@@ -101,3 +101,274 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: |
+  ShelfWise — Kitchen inventory & waste-reduction web app for restaurants, cafes, hotels & institutional kitchens.
+  Built with Next.js (App Router) + MongoDB. Core features: dashboard with status counts, product CRUD, search/filter/sort,
+  CSV export, AI Logbook Scan (GPT-4o vision), Recipe Scan (ingredient + allergen extraction), per-kitchen settings
+  with onboarding wizard + custom fields.
+
+backend:
+  - task: "Products CRUD + filtering"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Endpoints:
+              GET /api/products?status=&category=&storage=&search=&sort=
+              POST /api/products
+              PUT /api/products/:id
+              DELETE /api/products/:id
+              POST /api/products/bulk
+            Server-side computes _status (Expired / Expiring / Critical / Ok) per record.
+            Filters: status, category, storage, search (name substring, case-insensitive), sort by expiryDate asc/desc.
+            Uses uuid v4 (no Mongo ObjectId leakage). All persistence in MONGO_URL DB_NAME (env-driven).
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ All CRUD operations tested and working:
+            - GET /api/products: Returns 8 items, all with _status field and UUID v4 IDs
+            - Filter by status (Expired/Expiring/Critical/Ok): All filters working correctly
+            - Filter by category (Dairy): Returns 2 items, all match
+            - Filter by storage (Fridge): Returns 5 items, all match
+            - Search by name (case-insensitive): "milk" finds "Whole Milk"
+            - Sort by expiryDate (asc/desc): Both directions working correctly
+            - POST /api/products with customFields: Created successfully, custom fields preserved
+            - PUT /api/products/:id with customFields: Updated successfully, changes persisted
+            - POST /api/products/bulk: Inserted 2 items successfully
+            - DELETE /api/products/:id: Deletion verified
+            No ObjectId leakage, all responses JSON-serializable.
+
+  - task: "Dashboard stats endpoint"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            GET /api/stats returns { total, expiring, expired, critical } — counts must match
+            the underlying products with computed statuses.
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ Stats endpoint working correctly:
+            - Total: 8/8 ✓
+            - Expired: 1/1 ✓
+            - Expiring: 4/4 ✓
+            - Critical: 1/1 ✓
+            All counts match underlying products perfectly.
+
+  - task: "Facets endpoint (categories, storages)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            GET /api/facets returns distinct categories + storages from existing products, sorted alphabetically.
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ Facets endpoint working correctly:
+            - Returns 7 distinct categories, sorted alphabetically
+            - Returns 3 distinct storages, sorted alphabetically
+            All data correctly extracted and sorted.
+
+  - task: "Seed sample data"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "low"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            POST /api/seed wipes products collection and inserts 8 sample kitchen items spanning Expired / Expiring / Ok / Critical.
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ Seed endpoint working correctly:
+            - Successfully inserted 8 sample products
+            - Products span all status types (Expired/Expiring/Critical/Ok)
+
+  - task: "AI Logbook Scan (vision)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            POST /api/scan accepts { image: "data:image/...;base64,..." } and calls GPT-4o via
+            Emergent Universal LLM Key at https://integrations.emergentagent.com/llm/v1/chat/completions.
+            Returns { items: [{ name, quantity, unit, expiryDate, category, storageType, location, preparedBy }] }.
+            Verified manually with a sample grocery list image → 7 items extracted.
+            Validates that image is a data URL and key is set. Should reject invalid payloads with 400.
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ AI Logbook Scan working correctly:
+            - Invalid payload (missing image): Returns 400 ✓
+            - Invalid payload (non-data-url): Returns 400 ✓
+            - Valid data URL: Returns 200 with items array ✓
+            Error handling and validation working as expected.
+
+  - task: "AI Recipe Scan"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            POST /api/recipe accepts { image } OR { text }. Calls GPT-4o, parses recipe into
+            { title, servings, ingredients[], allergens[], steps[] } and cross-references with inventory
+            (substring matching) to add matched[] with status (in_stock / low / expired / missing) +
+            summary { inStock, low, expired, missing }. Verified manually with carbonara + creamy salmon pasta recipes.
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ AI Recipe Scan working correctly:
+            - Invalid payload (no image/text): Returns 400 ✓
+            - With text (Spaghetti Carbonara): Returns complete recipe with title, 7 ingredients, 3 allergens, matched ingredients, and summary ✓
+            - With image: Returns 200 with all required fields ✓
+            Inventory matching and summary generation working correctly.
+
+  - task: "Kitchen settings & custom fields"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            GET /api/settings returns single 'kitchen' doc (or defaults with onboarded:false).
+            PUT /api/settings upserts the kitchen doc with kitchenName, kitchenType, onboarded, customFields[].
+            customFields are sanitized: key forced to /^[a-z0-9_]+$/, type restricted to text|number|date,
+            entries without label are filtered out.
+            Products POST + PUT accept and persist customFields as a free-form object { [key]: value }.
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ Kitchen settings working correctly:
+            - GET /api/settings: Returns kitchen doc with all required fields ✓
+            - PUT /api/settings: Successfully updates kitchenName, kitchenType, onboarded, and 4 custom fields ✓
+            - Persistence verified: GET after PUT returns updated values ✓
+            Custom fields sanitization and validation working as expected.
+
+frontend:
+  - task: "Frontend UI (Dashboard, Inventory, Scan, Recipe, Wizard)"
+    implemented: true
+    working: "NA"
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Frontend complete with Dashboard view (status cards, urgent items, expiry alert banner),
+            Inventory view (search, status/category/storage filters, expiry sort, CSV export, image thumbnails),
+            Add/Edit dialog with photo upload + dynamic custom fields, AI Scan dialog, Recipe Scan dialog,
+            3-step Setup Wizard auto-opens for new kitchens, Settings dialog for editing later.
+            Backend testing first per protocol — frontend testing requires explicit user permission.
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 1
+  run_ui: false
+
+test_plan:
+  current_focus: []
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Backend implementation is complete across 4 phases. Please run a comprehensive backend test pass.
+
+        Environment notes:
+          - Base URL: read NEXT_PUBLIC_BASE_URL from /app/.env and prefix with /api
+          - All endpoints prefixed with /api
+          - MongoDB and EMERGENT_LLM_KEY are pre-configured in /app/.env — DO NOT modify
+
+        Suggested test flow:
+          1. POST /api/seed to load sample data.
+          2. GET /api/products with no filter → expect 8 items, each with _status field.
+          3. GET /api/products?status=Expired, ?status=Expiring, ?status=Critical, ?status=Ok — verify subsets.
+          4. GET /api/products?category=Dairy, ?storage=Fridge — verify category/storage filters.
+          5. GET /api/products?search=milk — case-insensitive substring on name.
+          6. GET /api/products?sort=asc and ?sort=desc — verify ordering by expiryDate.
+          7. GET /api/stats — counts must match GET /api/products groupings.
+          8. GET /api/facets — distinct sorted categories and storages.
+          9. POST /api/products with full payload (including customFields: { supplier: "ACME" }) → 201 + record returned.
+          10. PUT /api/products/:id with updates including customFields → updated record.
+          11. POST /api/products/bulk with array of 2-3 items.
+          12. DELETE /api/products/:id.
+          13. GET /api/settings (initially onboarded:false) → PUT with kitchenName, kitchenType, customFields, onboarded:true → GET again to confirm persistence.
+          14. POST /api/scan with invalid payload (missing image / non-data-url) → expect 400.
+          15. POST /api/scan with valid data URL of a small handwritten/text image → expect 200 with items[].
+          16. POST /api/recipe with { text: "..." } using a real recipe → expect title, ingredients, allergens, matched, summary.
+          17. POST /api/recipe with neither image nor text → 400.
+          18. Confirm all responses are JSON-serializable (no ObjectId leakage).
+
+        Known constraints:
+          - Use the EMERGENT_LLM_KEY already in /app/.env — do not request a new key.
+          - GPT-4o vision calls can take 1-5 seconds per call; keep timeouts generous.
+    
+    - agent: "testing"
+      message: |
+        ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (22/22)
+        
+        Comprehensive backend test suite executed successfully. All endpoints tested with real-looking data:
+        
+        **Test Results Summary:**
+        1. ✅ Products CRUD + filtering (10 tests) - All operations working
+        2. ✅ Dashboard stats endpoint - Counts match perfectly
+        3. ✅ Facets endpoint - Distinct values sorted correctly
+        4. ✅ Seed sample data - 8 products inserted
+        5. ✅ AI Logbook Scan - Error handling + valid requests working
+        6. ✅ AI Recipe Scan - Text/image processing + inventory matching working
+        7. ✅ Kitchen settings & custom fields - CRUD + persistence working
+        8. ✅ Data integrity - No ObjectId leakage, all UUID v4
+        
+        **Key Validations:**
+        - Status computation (Expired/Expiring/Critical/Ok) working correctly
+        - All filters (status, category, storage, search, sort) working
+        - Custom fields preserved in products and settings
+        - AI endpoints using EMERGENT_LLM_KEY successfully
+        - Error handling (400 responses) working as expected
+        - All responses JSON-serializable
+        
+        **Test file:** /app/backend_test.py (can be re-run anytime)
+        
+        No critical issues found. Backend is production-ready.
