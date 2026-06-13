@@ -22,6 +22,14 @@ export default function Inventory() {
   const [statusFilter, setStatusFilter] = useState("All");
 
   useEffect(() => {
+  console.log("URL STATUS:", status);
+
+  if (status) {
+    setStatusFilter(status);
+  }
+}, [status]);
+  
+  useEffect(() => {
   if (status === "Expired") {
     setStatusFilter("Expired");
   }
@@ -208,6 +216,7 @@ export default function Inventory() {
 
   let statusProducts = [...products];
   console.log("STATUS =", status);
+  console.log("TOTAL PRODUCTS =", products.length);
 
 if (status === "Expired") {
   statusProducts = statusProducts.filter(
@@ -218,8 +227,15 @@ if (status === "Expired") {
 }
 
 if (status === "Critical") {
+  console.log("CRITICAL FILTER RUNNING");
+
   statusProducts = statusProducts.filter(
     (p) => Number(p.quantity) <= 2
+  );
+
+  console.log(
+    "AFTER FILTER =",
+    statusProducts.length
   );
 }
 
@@ -237,7 +253,7 @@ if (status === "Expiring") {
   });
 }
   
-  let filteredProducts = statusProducts.filter((p) => {
+  let filteredProducts = statusProducts;
     const matchesSearch = p.name
       ?.toLowerCase()
       .includes(search.toLowerCase());
