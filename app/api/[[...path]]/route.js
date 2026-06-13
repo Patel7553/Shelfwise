@@ -82,6 +82,11 @@ export async function GET(request, { params }) {
       return json(docs)
     }
 
+    if (path === 'settings') {
+      const settings = await db.collection('settings').findOne({ id: 'kitchen' }, { projection: { _id: 0 } })
+      return json(settings || { id: 'kitchen', onboarded: false, kitchenName: '', kitchenType: '', customFields: [] })
+    }
+
     if (path === 'facets') {
       const docs = await col.find({}, { projection: { _id: 0, category: 1, storageType: 1 } }).toArray()
       const categories = Array.from(new Set(docs.map(d => d.category).filter(Boolean))).sort()
@@ -339,6 +344,7 @@ export async function POST(request, { params }) {
         location: body.location || '',
         preparedBy: body.preparedBy || '',
         imageUrl: body.imageUrl || '',
+        customFields: body.customFields && typeof body.customFields === 'object' ? body.customFields : {},
         createdAt: now,
         updatedAt: now,
       }
@@ -378,6 +384,24 @@ export async function PUT(request, { params }) {
     const db = await getDb()
     const col = db.collection('products')
 
+    if (segs[0] === 'settings') {
+      const body = await request.json()
+      const doc = {
+        id: 'kitchen',
+        kitchenName: body.kitchenName || '',
+        kitchenType: body.kitchenType || '',
+        onboarded: body.onboarded === true,
+        customFields: Array.isArray(body.customFields) ? body.customFields.map(f => ({
+          key: String(f.key || '').replace(/[^a-zA-Z0-9_]/g, '_').toLowerCase(),
+          label: String(f.label || '').trim(),
+          type: ['text', 'number', 'date'].includes(f.type) ? f.type : 'text'
+        })).filter(f => f.key && f.label) : [],
+        updatedAt: new Date().toISOString()
+      }
+      await db.collection('settings').updateOne({ id: 'kitchen' }, { $set: doc }, { upsert: true })
+      return json(doc)
+    }
+
     if (segs[0] === 'products' && segs[1]) {
       const id = segs[1]
       const body = await request.json()
@@ -391,6 +415,7 @@ export async function PUT(request, { params }) {
         location: body.location || '',
         preparedBy: body.preparedBy || '',
         imageUrl: body.imageUrl || '',
+        customFields: body.customFields && typeof body.customFields === 'object' ? body.customFields : {},
         updatedAt: new Date().toISOString(),
       }
       await col.updateOne({ id }, { $set: update })

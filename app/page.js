@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, Settings, ArrowRight } from 'lucide-react'
 
 const STATUS_META = {
   Expired: { label: 'Expired', color: 'bg-red-100 text-red-700 border-red-200' },
@@ -22,7 +22,8 @@ const STATUS_META = {
 
 const EMPTY_FORM = {
   name: '', quantity: '', unit: 'ea', expiryDate: '', category: '',
-  storageType: 'Fridge', location: '', preparedBy: '', imageUrl: ''
+  storageType: 'Fridge', location: '', preparedBy: '', imageUrl: '',
+  customFields: {}
 }
 
 function getInitialFromURL() {
@@ -66,6 +67,11 @@ function App() {
   const [recipeLoading, setRecipeLoading] = useState(false)
   const [recipeResult, setRecipeResult] = useState(null)
 
+  // Settings & wizard
+  const [settings, setSettings] = useState({ kitchenName: '', kitchenType: '', customFields: [], onboarded: true })
+  const [wizardOpen, setWizardOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
   const fetchProducts = async () => {
     setLoading(true)
     try {
@@ -93,6 +99,31 @@ function App() {
     } catch {}
   }
 
+  const fetchSettings = async () => {
+    try {
+      const res = await fetch('/api/settings')
+      const data = await res.json()
+      setSettings(data)
+      if (data && data.onboarded === false) setWizardOpen(true)
+    } catch {}
+  }
+
+  const saveSettings = async (next) => {
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(next)
+      })
+      const data = await res.json()
+      setSettings(data)
+      toast.success('Settings saved')
+      return data
+    } catch {
+      toast.error('Failed to save settings')
+    }
+  }
+
   const fetchStats = async () => {
     try {
       const res = await fetch('/api/stats')
@@ -103,6 +134,7 @@ function App() {
 
   useEffect(() => { fetchProducts() }, [statusFilter, search, sort, categoryFilter, storageFilter])
   useEffect(() => { fetchStats(); fetchFacets() }, [products.length, view])
+  useEffect(() => { fetchSettings() }, [])
 
   const openAdd = () => {
     setEditing(null)
@@ -116,7 +148,8 @@ function App() {
       name: p.name || '', quantity: p.quantity ?? '', unit: p.unit || 'ea',
       expiryDate: p.expiryDate || '', category: p.category || '',
       storageType: p.storageType || 'Fridge', location: p.location || '',
-      preparedBy: p.preparedBy || '', imageUrl: p.imageUrl || ''
+      preparedBy: p.preparedBy || '', imageUrl: p.imageUrl || '',
+      customFields: p.customFields || {}
     })
     setDialogOpen(true)
   }
@@ -401,7 +434,7 @@ function App() {
             </div>
             <div>
               <h1 className="text-lg font-bold tracking-tight">ShelfWise</h1>
-              <p className="text-xs text-muted-foreground -mt-0.5">Kitchen Inventory & Waste Reduction</p>
+              <p className="text-xs text-muted-foreground -mt-0.5">{settings.kitchenName ? settings.kitchenName : 'Kitchen Inventory & Waste Reduction'}{settings.kitchenType ? ` · ${settings.kitchenType}` : ''}</p>
             </div>
           </div>
           <nav className="flex items-center gap-1">
@@ -410,6 +443,9 @@ function App() {
             </Button>
             <Button variant={view === 'inventory' ? 'default' : 'ghost'} size="sm" onClick={() => { setStatusFilter('All'); setView('inventory') }}>
               <Package className="h-4 w-4 mr-2" /> Inventory
+            </Button>
+            <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title="Settings">
+              <Settings className="h-4 w-4" />
             </Button>
           </nav>
         </div>
@@ -508,6 +544,24 @@ function App() {
                 )}
               </div>
             </div>
+            {settings.customFields?.length > 0 && (
+              <div className="col-span-2 pt-2 border-t">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Custom Fields</p>
+                <div className="grid grid-cols-2 gap-4">
+                  {settings.customFields.map(f => (
+                    <div key={f.key}>
+                      <Label htmlFor={`cf-${f.key}`}>{f.label}</Label>
+                      <Input
+                        id={`cf-${f.key}`}
+                        type={f.type === 'date' ? 'date' : f.type === 'number' ? 'number' : 'text'}
+                        value={form.customFields?.[f.key] ?? ''}
+                        onChange={e => setForm({ ...form, customFields: { ...(form.customFields || {}), [f.key]: e.target.value } })}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
@@ -663,6 +717,12 @@ function App() {
           {recipeResult && <RecipeResult result={recipeResult} onBack={() => setRecipeResult(null)} onClose={() => setRecipeOpen(false)} goToInventory={goToInventory} />}
         </DialogContent>
       </Dialog>
+
+      {/* Setup Wizard */}
+      <SetupWizard open={wizardOpen} onClose={() => setWizardOpen(false)} settings={settings} saveSettings={saveSettings} />
+
+      {/* Settings Dialog */}
+      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} settings={settings} saveSettings={saveSettings} />
     </div>
   )
 }
@@ -1031,6 +1091,228 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+function SetupWizard({ open, onClose, settings, saveSettings }) {
+  const [step, setStep] = useState(0)
+  const [name, setName] = useState('')
+  const [type, setType] = useState('Restaurant')
+  const [fields, setFields] = useState([])
+
+  useEffect(() => {
+    if (open) {
+      setStep(0)
+      setName(settings.kitchenName || '')
+      setType(settings.kitchenType || 'Restaurant')
+      setFields(settings.customFields?.length ? [...settings.customFields] : [])
+    }
+  }, [open])
+
+  const addField = () => setFields([...fields, { key: `field_${fields.length + 1}`, label: '', type: 'text' }])
+  const updateField = (i, patch) => setFields(fields.map((f, idx) => idx === i ? { ...f, ...patch } : f))
+  const removeField = (i) => setFields(fields.filter((_, idx) => idx !== i))
+
+  const finish = async () => {
+    const cleanFields = fields
+      .filter(f => f.label.trim())
+      .map(f => ({
+        key: (f.key || f.label).toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 40),
+        label: f.label.trim(),
+        type: f.type || 'text'
+      }))
+    await saveSettings({ kitchenName: name.trim() || 'My Kitchen', kitchenType: type, customFields: cleanFields, onboarded: true })
+    onClose()
+    toast.success('Welcome to ShelfWise! 🎉')
+  }
+
+  if (!open) return null
+  const kitchenTypes = ['Restaurant', 'Cafe', 'Hotel', 'School', 'Hospital', 'Catering', 'Bakery', 'Other']
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-[640px] max-h-[92vh] overflow-y-auto">
+        <DialogHeader>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            {[0, 1, 2].map(i => (
+              <div key={i} className={`h-1.5 rounded-full flex-1 transition ${i <= step ? 'bg-emerald-500' : 'bg-slate-200'}`} />
+            ))}
+          </div>
+          <DialogTitle className="pt-3 text-2xl">
+            {step === 0 && 'Welcome to ShelfWise 👋'}
+            {step === 1 && 'Set up your kitchen'}
+            {step === 2 && 'Add custom fields (optional)'}
+          </DialogTitle>
+        </DialogHeader>
+
+        {step === 0 && (
+          <div className="py-4 space-y-4">
+            <p className="text-muted-foreground">Track perishable stock, reduce waste, and never miss an expiry again. Let's get you set up in under a minute.</p>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="rounded-lg border p-3 text-center">
+                <ScanLine className="h-6 w-6 mx-auto text-emerald-600" />
+                <p className="text-xs font-medium mt-1">AI Logbook Scan</p>
+                <p className="text-[10px] text-muted-foreground">Photo → inventory</p>
+              </div>
+              <div className="rounded-lg border p-3 text-center">
+                <BookOpen className="h-6 w-6 mx-auto text-purple-600" />
+                <p className="text-xs font-medium mt-1">Recipe Scan</p>
+                <p className="text-[10px] text-muted-foreground">Allergens & stock</p>
+              </div>
+              <div className="rounded-lg border p-3 text-center">
+                <Clock className="h-6 w-6 mx-auto text-amber-600" />
+                <p className="text-xs font-medium mt-1">Expiry Alerts</p>
+                <p className="text-[10px] text-muted-foreground">Never waste again</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 1 && (
+          <div className="py-4 space-y-4">
+            <div>
+              <Label>Kitchen Name</Label>
+              <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Bella Cucina" />
+            </div>
+            <div>
+              <Label>Kitchen Type</Label>
+              <div className="grid grid-cols-4 gap-2 mt-2">
+                {kitchenTypes.map(t => (
+                  <button key={t} onClick={() => setType(t)}
+                    className={`text-sm py-2 px-2 rounded-lg border transition ${type === t ? 'bg-emerald-600 text-white border-emerald-600' : 'hover:bg-slate-50 border-slate-200'}`}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className="py-4 space-y-3">
+            <p className="text-sm text-muted-foreground">Add any extra fields your kitchen tracks — supplier, cost, batch number, etc. Skip if you don't need them.</p>
+            <div className="space-y-2">
+              {fields.map((f, i) => (
+                <div key={i} className="flex gap-2 items-end">
+                  <div className="flex-1">
+                    <Label className="text-xs">Field Name</Label>
+                    <Input value={f.label} onChange={e => updateField(i, { label: e.target.value })} placeholder="Supplier" />
+                  </div>
+                  <div className="w-32">
+                    <Label className="text-xs">Type</Label>
+                    <Select value={f.type} onValueChange={v => updateField(i, { type: v })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="text">Text</SelectItem>
+                        <SelectItem value="number">Number</SelectItem>
+                        <SelectItem value="date">Date</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button variant="ghost" size="icon" onClick={() => removeField(i)}><X className="h-4 w-4" /></Button>
+                </div>
+              ))}
+            </div>
+            <Button variant="outline" size="sm" onClick={addField}><Plus className="h-4 w-4 mr-2" /> Add field</Button>
+          </div>
+        )}
+
+        <DialogFooter className="flex justify-between sm:justify-between">
+          <Button variant="ghost" onClick={() => step > 0 ? setStep(step - 1) : onClose()}>{step === 0 ? 'Skip' : 'Back'}</Button>
+          {step < 2 ? (
+            <Button onClick={() => setStep(step + 1)} className="bg-emerald-600 hover:bg-emerald-700">
+              Next <ArrowRight className="h-4 w-4 ml-2" />
+            </Button>
+          ) : (
+            <Button onClick={finish} className="bg-emerald-600 hover:bg-emerald-700">
+              <Check className="h-4 w-4 mr-2" /> Finish Setup
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function SettingsDialog({ open, onClose, settings, saveSettings }) {
+  const [name, setName] = useState('')
+  const [type, setType] = useState('Restaurant')
+  const [fields, setFields] = useState([])
+
+  useEffect(() => {
+    if (open) {
+      setName(settings.kitchenName || '')
+      setType(settings.kitchenType || 'Restaurant')
+      setFields(settings.customFields?.length ? [...settings.customFields] : [])
+    }
+  }, [open])
+
+  const addField = () => setFields([...fields, { key: `field_${fields.length + 1}`, label: '', type: 'text' }])
+  const updateField = (i, patch) => setFields(fields.map((f, idx) => idx === i ? { ...f, ...patch } : f))
+  const removeField = (i) => setFields(fields.filter((_, idx) => idx !== i))
+
+  const save = async () => {
+    const cleanFields = fields.filter(f => f.label.trim()).map(f => ({
+      key: (f.key || f.label).toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 40),
+      label: f.label.trim(),
+      type: f.type || 'text'
+    }))
+    await saveSettings({ kitchenName: name.trim(), kitchenType: type, customFields: cleanFields, onboarded: true })
+    onClose()
+  }
+
+  const kitchenTypes = ['Restaurant', 'Cafe', 'Hotel', 'School', 'Hospital', 'Catering', 'Bakery', 'Other']
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-[640px] max-h-[92vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Settings className="h-5 w-5" /> Kitchen Settings</DialogTitle>
+        </DialogHeader>
+        <div className="py-2 space-y-4">
+          <div>
+            <Label>Kitchen Name</Label>
+            <Input value={name} onChange={e => setName(e.target.value)} />
+          </div>
+          <div>
+            <Label>Kitchen Type</Label>
+            <Select value={type} onValueChange={setType}>
+              <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+              <SelectContent>{kitchenTypes.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <Label>Custom Fields</Label>
+              <Button variant="outline" size="sm" onClick={addField}><Plus className="h-4 w-4 mr-1" /> Add</Button>
+            </div>
+            {fields.length === 0 && <p className="text-xs text-muted-foreground">No custom fields yet. Add fields like supplier, cost, batch number, etc.</p>}
+            <div className="space-y-2">
+              {fields.map((f, i) => (
+                <div key={i} className="flex gap-2 items-end">
+                  <div className="flex-1">
+                    <Input value={f.label} onChange={e => updateField(i, { label: e.target.value })} placeholder="Field name" />
+                  </div>
+                  <Select value={f.type} onValueChange={v => updateField(i, { type: v })}>
+                    <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="text">Text</SelectItem>
+                      <SelectItem value="number">Number</SelectItem>
+                      <SelectItem value="date">Date</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button variant="ghost" size="icon" onClick={() => removeField(i)}><X className="h-4 w-4" /></Button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={save} className="bg-emerald-600 hover:bg-emerald-700"><Check className="h-4 w-4 mr-2" /> Save</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
