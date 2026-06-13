@@ -176,11 +176,122 @@ Be aggressive about extracting items even from messy handwriting. Output strictl
   })).filter(it => it.name)
 }
 
+async function scanRecipe({ image, text }) {
+  const key = process.env.EMERGENT_LLM_KEY
+  if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+
+  const systemPrompt = `You are an expert culinary assistant. You analyze recipes and extract structured data.
+
+Return ONLY a valid JSON object of the form:
+{
+  "title": "recipe title or null",
+  "servings": "servings string or null",
+  "ingredients": [
+    { "name": "short ingredient name", "quantity": number, "unit": "string", "notes": "string" }
+  ],
+  "allergens": ["gluten","dairy","nuts","eggs","soy","shellfish","fish","sesame","peanuts","mustard","celery","sulfites"],
+  "steps": ["step 1", "step 2", ...]
+}
+
+Rules:
+- Ingredient "name" should be normalized and short (e.g. "milk", "flour", "chicken breast", "olive oil").
+- "quantity" is a number, default 1 if unclear.
+- "unit" examples: "g","kg","mL","L","tsp","tbsp","cup","ea","pinch","clove".
+- "notes" for prep notes like "chopped", "softened", or "" if none.
+- "allergens" is the list of common allergen categories present in this recipe based on its ingredients. Use only the lowercase enums above.
+- "steps" is a concise list of cooking steps. Up to 10 steps.
+- Output strictly valid JSON. No commentary.`
+
+  const userContent = image
+    ? [
+        { type: 'text', text: 'Analyze this recipe image and extract the structured data as specified.' },
+        { type: 'image_url', image_url: { url: image } }
+      ]
+    : [{ type: 'text', text: `Analyze this recipe text and extract the structured data:\n\n${text}` }]
+
+  const body = {
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userContent }
+    ],
+    temperature: 0,
+    response_format: { type: 'json_object' }
+  }
+
+  const res = await fetch(EMERGENT_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  if (!res.ok) throw new Error(`Recipe API ${res.status}: ${(await res.text()).slice(0, 300)}`)
+  const data = await res.json()
+  const content = data?.choices?.[0]?.message?.content || '{}'
+  let parsed
+  try { parsed = JSON.parse(content) }
+  catch {
+    const m = content.match(/\{[\s\S]*\}/)
+    parsed = m ? JSON.parse(m[0]) : {}
+  }
+  return {
+    title: parsed.title || null,
+    servings: parsed.servings || null,
+    ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients : [],
+    allergens: Array.isArray(parsed.allergens) ? parsed.allergens : [],
+    steps: Array.isArray(parsed.steps) ? parsed.steps : []
+  }
+}
+
+function matchIngredientToInventory(name, products) {
+  const n = String(name || '').toLowerCase().trim()
+  if (!n) return null
+  // exact match on name (case insensitive)
+  let match = products.find(p => (p.name || '').toLowerCase() === n)
+  if (match) return match
+  // substring either way (e.g. "milk" matches "Whole Milk")
+  match = products.find(p => {
+    const pn = (p.name || '').toLowerCase()
+    return pn.includes(n) || n.includes(pn)
+  })
+  return match || null
+}
+
 export async function POST(request, { params }) {
   try {
     const path = (params?.path || []).join('/')
     const db = await getDb()
     const col = db.collection('products')
+
+    if (path === 'recipe') {
+      const body = await request.json()
+      const image = body.image
+      const text = body.text
+      if (!image && !text) return json({ error: 'image or text required' }, 400)
+      if (image && !image.startsWith('data:image/')) return json({ error: 'invalid image data URL' }, 400)
+
+      const recipe = await scanRecipe({ image, text })
+      const products = (await col.find({}, { projection: { _id: 0 } }).toArray()).map(enrich)
+
+      const matched = recipe.ingredients.map(ing => {
+        const product = matchIngredientToInventory(ing.name, products)
+        let status = 'missing'
+        if (product) {
+          if (product._status === 'Expired') status = 'expired'
+          else if (product._status === 'Critical') status = 'low'
+          else status = 'in_stock'
+        }
+        return { ...ing, status, product: product ? { id: product.id, name: product.name, quantity: product.quantity, unit: product.unit, expiryDate: product.expiryDate, _status: product._status } : null }
+      })
+
+      const summary = {
+        inStock: matched.filter(m => m.status === 'in_stock').length,
+        low: matched.filter(m => m.status === 'low').length,
+        expired: matched.filter(m => m.status === 'expired').length,
+        missing: matched.filter(m => m.status === 'missing').length,
+      }
+
+      return json({ ...recipe, matched, summary })
+    }
 
     if (path === 'scan') {
       const body = await request.json()

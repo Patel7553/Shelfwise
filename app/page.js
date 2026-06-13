@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert } from 'lucide-react'
 
 const STATUS_META = {
   Expired: { label: 'Expired', color: 'bg-red-100 text-red-700 border-red-200' },
@@ -57,6 +57,14 @@ function App() {
   const [scanLoading, setScanLoading] = useState(false)
   const [scanItems, setScanItems] = useState([]) // editable parsed items
   const [scanSaving, setScanSaving] = useState(false)
+
+  // Recipe Scan state
+  const [recipeOpen, setRecipeOpen] = useState(false)
+  const [recipeMode, setRecipeMode] = useState('text') // 'text' | 'image'
+  const [recipeText, setRecipeText] = useState('')
+  const [recipeImage, setRecipeImage] = useState(null)
+  const [recipeLoading, setRecipeLoading] = useState(false)
+  const [recipeResult, setRecipeResult] = useState(null)
 
   const fetchProducts = async () => {
     setLoading(true)
@@ -269,6 +277,64 @@ function App() {
     setForm(prev => ({ ...prev, imageUrl: dataUrl }))
   }
 
+  // Recipe scan handlers
+  const openRecipe = () => {
+    setRecipeOpen(true)
+    setRecipeResult(null)
+    setRecipeImage(null)
+    setRecipeText('')
+    setRecipeMode('text')
+  }
+
+  const onRecipeImage = async (file) => {
+    if (!file) return
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const img = new Image()
+        img.onload = () => {
+          const maxDim = 1400
+          let { width, height } = img
+          if (width > maxDim || height > maxDim) {
+            const scale = Math.min(maxDim / width, maxDim / height)
+            width = Math.round(width * scale); height = Math.round(height * scale)
+          }
+          const canvas = document.createElement('canvas')
+          canvas.width = width; canvas.height = height
+          canvas.getContext('2d').drawImage(img, 0, 0, width, height)
+          resolve(canvas.toDataURL('image/jpeg', 0.85))
+        }
+        img.onerror = reject
+        img.src = reader.result
+      }
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+    setRecipeImage(dataUrl)
+  }
+
+  const runRecipeScan = async () => {
+    if (recipeMode === 'text' && !recipeText.trim()) { toast.error('Paste a recipe first'); return }
+    if (recipeMode === 'image' && !recipeImage) { toast.error('Upload a recipe image first'); return }
+    setRecipeLoading(true)
+    try {
+      const payload = recipeMode === 'image' ? { image: recipeImage } : { text: recipeText }
+      const res = await fetch('/api/recipe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Recipe scan failed')
+      setRecipeResult(data)
+      toast.success(`Analyzed: ${data.matched?.length || 0} ingredients · ${data.allergens?.length || 0} allergen${(data.allergens?.length || 0) !== 1 ? 's' : ''}`)
+    } catch (e) {
+      toast.error(e.message || 'Recipe scan failed')
+    } finally {
+      setRecipeLoading(false)
+    }
+  }
+
   const exportCSV = () => {
     if (!products.length) {
       toast.info('Nothing to export')
@@ -351,7 +417,7 @@ function App() {
 
       <main className="container mx-auto px-4 py-8">
         {view === 'dashboard' && (
-          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} />
+          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openRecipe={openRecipe} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -539,11 +605,69 @@ function App() {
           )}
         </DialogContent>
       </Dialog>
+      {/* Recipe Scan Dialog */}
+      <Dialog open={recipeOpen} onOpenChange={setRecipeOpen}>
+        <DialogContent className="sm:max-w-[920px] max-h-[92vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <BookOpen className="h-5 w-5 text-purple-600" /> Scan Recipe
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground">Paste or upload a recipe. AI will extract ingredients, flag allergens, and check what's already in your inventory.</p>
+          </DialogHeader>
+
+          {!recipeResult && (
+            <div className="space-y-4 py-2">
+              <div className="flex gap-2 border-b pb-2">
+                <Button variant={recipeMode === 'text' ? 'default' : 'ghost'} size="sm" onClick={() => setRecipeMode('text')} className={recipeMode === 'text' ? 'bg-purple-600 hover:bg-purple-700' : ''}>Paste Text</Button>
+                <Button variant={recipeMode === 'image' ? 'default' : 'ghost'} size="sm" onClick={() => setRecipeMode('image')} className={recipeMode === 'image' ? 'bg-purple-600 hover:bg-purple-700' : ''}>Upload Image</Button>
+              </div>
+
+              {recipeMode === 'text' ? (
+                <textarea
+                  className="w-full min-h-[260px] rounded-lg border border-input bg-background p-3 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  placeholder="Paste your recipe here including ingredients and instructions..."
+                  value={recipeText}
+                  onChange={e => setRecipeText(e.target.value)}
+                />
+              ) : (
+                <label className="block">
+                  <input type="file" accept="image/*" className="hidden" onChange={e => onRecipeImage(e.target.files?.[0])} />
+                  <div className="border-2 border-dashed border-purple-200 rounded-xl p-8 hover:border-purple-400 hover:bg-purple-50/40 transition cursor-pointer text-center">
+                    {recipeImage ? (
+                      <div className="space-y-3">
+                        <img src={recipeImage} alt="preview" className="max-h-72 mx-auto rounded-lg shadow-sm" />
+                        <p className="text-sm text-muted-foreground">Click to choose a different image</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="h-14 w-14 mx-auto rounded-full bg-purple-100 flex items-center justify-center">
+                          <Upload className="h-6 w-6 text-purple-600" />
+                        </div>
+                        <p className="font-medium">Upload a recipe photo</p>
+                        <p className="text-xs text-muted-foreground">A cookbook page, recipe card, or recipe screenshot.</p>
+                      </div>
+                    )}
+                  </div>
+                </label>
+              )}
+
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setRecipeOpen(false)}>Cancel</Button>
+                <Button onClick={runRecipeScan} disabled={recipeLoading} className="bg-purple-600 hover:bg-purple-700">
+                  {recipeLoading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Analyzing...</> : <><Sparkles className="h-4 w-4 mr-2" /> Analyze Recipe</>}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {recipeResult && <RecipeResult result={recipeResult} onBack={() => setRecipeResult(null)} onClose={() => setRecipeOpen(false)} goToInventory={goToInventory} />}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
 
-function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan }) {
+function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openRecipe }) {
   const cards = [
     { key: 'All', label: 'All Items', value: stats.total, icon: Boxes, color: 'from-slate-500 to-slate-700', accent: 'text-slate-600', bg: 'bg-slate-50' },
     { key: 'Expiring', label: 'Expiring Soon', value: stats.expiring, icon: Clock, color: 'from-amber-500 to-orange-500', accent: 'text-amber-600', bg: 'bg-amber-50' },
@@ -568,6 +692,9 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
           )}
           <Button variant="outline" onClick={openScan} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50">
             <ScanLine className="h-4 w-4 mr-2" /> Scan with AI
+          </Button>
+          <Button variant="outline" onClick={openRecipe} className="border-purple-200 text-purple-700 hover:bg-purple-50">
+            <BookOpen className="h-4 w-4 mr-2" /> Scan Recipe
           </Button>
           <Button onClick={openAdd} className="bg-emerald-600 hover:bg-emerald-700">
             <Plus className="h-4 w-4 mr-2" /> Add Product
@@ -678,6 +805,101 @@ function UrgentList() {
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+function RecipeResult({ result, onBack, onClose, goToInventory }) {
+  const statusMeta = {
+    in_stock: { label: 'In Stock', color: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: Check },
+    low: { label: 'Low Stock', color: 'bg-orange-100 text-orange-700 border-orange-200', icon: AlertCircle },
+    expired: { label: 'Expired', color: 'bg-red-100 text-red-700 border-red-200', icon: PackageX },
+    missing: { label: 'Missing', color: 'bg-slate-100 text-slate-600 border-slate-200', icon: X },
+  }
+  const s = result.summary || {}
+  const summary = [
+    { key: 'in_stock', count: s.inStock || 0, color: 'text-emerald-600' },
+    { key: 'low', count: s.low || 0, color: 'text-orange-600' },
+    { key: 'expired', count: s.expired || 0, color: 'text-red-600' },
+    { key: 'missing', count: s.missing || 0, color: 'text-slate-600' },
+  ]
+  return (
+    <div className="space-y-5 py-2">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h3 className="text-xl font-bold">{result.title || 'Recipe Analysis'}</h3>
+          {result.servings && <p className="text-sm text-muted-foreground">{result.servings}</p>}
+        </div>
+        {result.allergens?.length > 0 && (
+          <div className="flex items-start gap-2 max-w-md">
+            <ShieldAlert className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
+            <div>
+              <p className="text-xs font-semibold text-amber-800 uppercase tracking-wide">Allergens Detected</p>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {result.allergens.map(a => (
+                  <Badge key={a} variant="outline" className="bg-amber-50 text-amber-800 border-amber-300 capitalize">{a}</Badge>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-4 gap-3">
+        {summary.map(c => {
+          const meta = statusMeta[c.key]
+          const Icon = meta.icon
+          return (
+            <div key={c.key} className={`rounded-lg border p-3 ${meta.color}`}>
+              <div className="flex items-center gap-2">
+                <Icon className="h-4 w-4" />
+                <p className="text-xs font-medium uppercase tracking-wide">{meta.label}</p>
+              </div>
+              <p className="text-2xl font-bold mt-1">{c.count}</p>
+            </div>
+          )
+        })}
+      </div>
+
+      <div>
+        <p className="font-semibold mb-2 text-sm">Ingredients ({result.matched?.length || 0})</p>
+        <div className="border rounded-lg divide-y overflow-hidden max-h-[360px] overflow-y-auto">
+          {(result.matched || []).map((m, i) => {
+            const meta = statusMeta[m.status] || statusMeta.missing
+            return (
+              <div key={i} className="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-slate-50">
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-sm capitalize">{m.name}</p>
+                  <p className="text-xs text-muted-foreground">{m.quantity} {m.unit}{m.notes ? ` · ${m.notes}` : ''}</p>
+                </div>
+                <div className="flex items-center gap-3">
+                  {m.product && (
+                    <span className="text-xs text-muted-foreground">{m.product.quantity} {m.product.unit} in stock</span>
+                  )}
+                  <Badge variant="outline" className={meta.color}>{meta.label}</Badge>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {result.steps?.length > 0 && (
+        <details className="border rounded-lg p-3">
+          <summary className="font-semibold text-sm cursor-pointer">Cooking Steps ({result.steps.length})</summary>
+          <ol className="list-decimal list-inside mt-2 space-y-1 text-sm text-muted-foreground">
+            {result.steps.map((s, i) => <li key={i}>{s}</li>)}
+          </ol>
+        </details>
+      )}
+
+      <div className="flex justify-between pt-2 border-t">
+        <Button variant="ghost" onClick={onBack}><X className="h-4 w-4 mr-2" /> Scan another</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => { onClose(); goToInventory('All') }}>View Inventory</Button>
+          <Button onClick={onClose} className="bg-purple-600 hover:bg-purple-700">Done</Button>
+        </div>
+      </div>
     </div>
   )
 }
