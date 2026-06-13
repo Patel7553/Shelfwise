@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { useRouter } from "next/navigation";
 
 export default function Dashboard() {
 
@@ -16,6 +17,7 @@ if (hour >= 12 && hour < 17) {
 }
   const [products, setProducts] = useState<any[]>([]);
   const [search, setSearch] = useState("");
+  const router = useRouter();
 
   useEffect(() => {
     loadProducts();
@@ -376,7 +378,10 @@ const saucesCount = products.filter(
         {filteredProducts.map((p) => (
           <div
             key={p.id}
+            onClick={() => router.push(`/inventory/edit?id=${p.id}`)}
+            
             style={{
+              cursor: "pointer",
               background: "white",
               borderRadius: "16px",
               padding: "15px",
@@ -417,6 +422,30 @@ const saucesCount = products.filter(
 
             <p>
               {p.storage_type} / {p.shelf}
+            </p>
+
+            <p
+              style={{
+                color: "#e67e22",
+                fontWeight: "600",
+              }}
+            >
+              Expiry:{" "}
+              {p.expiry_date
+                ? new Date(p.expiry_date).toLocaleDateString()
+                : "N/A"}
+            </p>
+
+            <p
+              style={{
+                color: "#e67e22",
+                fontWeight: "600",
+              }}
+            >
+              Expiry:{" "}
+              {p.expiry_date
+                ? new Date(p.expiry_date).toLocaleDateString()
+                : "N/A"}
             </p>
           </div>
         ))}

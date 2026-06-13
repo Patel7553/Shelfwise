@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 
 export default function Inventory() {
@@ -14,6 +15,10 @@ export default function Inventory() {
   const [statusFilter, setStatusFilter] = useState("All");
 
   const [sortOrder, setSortOrder] = useState("nearest");
+  
+  const searchParams = useSearchParams();
+  
+  const status = searchParams.get("status");
 
   useEffect(() => {
     loadProducts();
@@ -181,7 +186,37 @@ export default function Inventory() {
     (p) => Number(p.quantity) <= 2
   ).length;
 
-  let filteredProducts = products.filter((p) => {
+  let statusProducts = [...products];
+
+if (status === "Expired") {
+  statusProducts = statusProducts.filter(
+    (p) =>
+      p.expiry_date &&
+      new Date(p.expiry_date) < new Date()
+  );
+}
+
+if (status === "Critical") {
+  statusProducts = statusProducts.filter(
+    (p) => Number(p.quantity) <= 2
+  );
+}
+
+if (status === "Expiring") {
+  statusProducts = statusProducts.filter((p) => {
+    if (!p.expiry_date) return false;
+
+    const daysLeft = Math.ceil(
+      (new Date(p.expiry_date).getTime() -
+        Date.now()) /
+        (1000 * 60 * 60 * 24)
+    );
+
+    return daysLeft >= 0 && daysLeft <= 7;
+  });
+}
+  
+  let filteredProducts = statusProducts.filter((p) => {
     const matchesSearch = p.name
       ?.toLowerCase()
       .includes(search.toLowerCase());
