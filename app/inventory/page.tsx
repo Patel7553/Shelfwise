@@ -17,7 +17,6 @@ export default function Inventory() {
   const searchParams = useSearchParams();
   
   const status = searchParams.get("status");
-
   console.log("URL STATUS =", status);
   
   const [statusFilter, setStatusFilter] = useState("All");
