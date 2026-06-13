@@ -239,7 +239,7 @@ const saucesCount = products.filter(
 </a>
 
 <a
-  href="/inventory?status=Expiring Soon"
+  href="/inventory?status=Expiring"
   style={{
     textDecoration: "none",
     color: "inherit",

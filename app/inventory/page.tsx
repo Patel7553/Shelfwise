@@ -20,6 +20,8 @@ export default function Inventory() {
   
   const status = searchParams.get("status");
 
+  console.log("STATUS =", status);
+
   useEffect(() => {
     loadProducts();
   }, []);
