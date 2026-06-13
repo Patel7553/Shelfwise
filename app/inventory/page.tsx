@@ -12,13 +12,18 @@ export default function Inventory() {
 
   const [category, setCategory] = useState("All");
 
-  const [statusFilter, setStatusFilter] = useState("All");
-
-  const [sortOrder, setSortOrder] = useState("nearest");
-  
+   
   const searchParams = useSearchParams();
   
   const status = searchParams.get("status");
+  const [statusFilter, setStatusFilter] = useState(
+  status || "All"
+);
+
+  const [sortOrder, setSortOrder] = useState("nearest");
+
+
+  const statusFilter = status;
 
   console.log("STATUS =", status);
 
