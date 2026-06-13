@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 
+
 export default function Inventory() {
   const [products, setProducts] = useState<any[]>([]);
   
@@ -16,8 +17,19 @@ export default function Inventory() {
   const searchParams = useSearchParams();
   
   const status = searchParams.get("status");
+
+  console.log("URL STATUS =", status);
   
   const [statusFilter, setStatusFilter] = useState("All");
+
+
+  useEffect(() => {
+  console.log("URL STATUS:", status);
+
+  if (status) {
+    setStatusFilter(status);
+  }
+}, [status]);
   useEffect(() => {
   if (status === "Expired") {
     setStatusFilter("Expired");
@@ -204,6 +216,7 @@ export default function Inventory() {
   ).length;
 
   let statusProducts = [...products];
+  console.log("STATUS =", status);
 
 if (status === "Expired") {
   statusProducts = statusProducts.filter(
@@ -219,7 +232,7 @@ if (status === "Critical") {
   );
 }
 
-if (status === "Expiring") {
+if (status === "Expiring Soon") {
   statusProducts = statusProducts.filter((p) => {
     if (!p.expiry_date) return false;
 
