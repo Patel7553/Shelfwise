@@ -16,14 +16,24 @@ export default function Inventory() {
   const searchParams = useSearchParams();
   
   const status = searchParams.get("status");
-  const [statusFilter, setStatusFilter] = useState(
-  status || "All"
-);
+  
+  const [statusFilter, setStatusFilter] = useState("All");
+  useEffect(() => {
+  if (status === "Expired") {
+    setStatusFilter("Expired");
+  }
+
+  if (status === "Critical") {
+    setStatusFilter("Critical");
+  }
+
+  if (status === "Expiring") {
+    setStatusFilter("Expiring Soon");
+  }
+}, [status]);
+ 
 
   const [sortOrder, setSortOrder] = useState("nearest");
-
-
-  const statusFilter = status;
 
   console.log("STATUS =", status);
 
