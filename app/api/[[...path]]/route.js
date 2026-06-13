@@ -38,6 +38,10 @@ function enrich(p) {
   return { ...p, _status: computeStatus(p) }
 }
 
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 export async function GET(request, { params }) {
   try {
     const path = (params?.path || []).join('/')
@@ -56,21 +60,17 @@ export async function GET(request, { params }) {
       const category = url.searchParams.get('category')
       const storage = url.searchParams.get('storage')
 
-      let docs = await col.find({}, { projection: { _id: 0 } }).toArray()
+      // Push category, storage, name search into MongoDB query
+      const query = {}
+      if (category && category !== 'All') query.category = category
+      if (storage && storage !== 'All') query.storageType = storage
+      if (search) query.name = { $regex: escapeRegex(search), $options: 'i' }
+
+      let docs = await col.find(query, { projection: { _id: 0 } }).limit(5000).toArray()
       docs = docs.map(enrich)
 
       if (status && status !== 'All') {
         docs = docs.filter(d => d._status === status)
-      }
-      if (category && category !== 'All') {
-        docs = docs.filter(d => (d.category || '') === category)
-      }
-      if (storage && storage !== 'All') {
-        docs = docs.filter(d => (d.storageType || '') === storage)
-      }
-      if (search) {
-        const s = search.toLowerCase()
-        docs = docs.filter(d => (d.name || '').toLowerCase().includes(s))
       }
       if (sort === 'asc' || sort === 'desc') {
         docs.sort((a, b) => {
@@ -88,19 +88,46 @@ export async function GET(request, { params }) {
     }
 
     if (path === 'facets') {
-      const docs = await col.find({}, { projection: { _id: 0, category: 1, storageType: 1 } }).toArray()
-      const categories = Array.from(new Set(docs.map(d => d.category).filter(Boolean))).sort()
-      const storages = Array.from(new Set(docs.map(d => d.storageType).filter(Boolean))).sort()
-      return json({ categories, storages })
+      const [categories, storages] = await Promise.all([
+        col.distinct('category'),
+        col.distinct('storageType'),
+      ])
+      return json({
+        categories: categories.filter(Boolean).sort(),
+        storages: storages.filter(Boolean).sort(),
+      })
     }
 
     if (path === 'stats') {
-      const docs = (await col.find({}, { projection: { _id: 0 } }).toArray()).map(enrich)
+      const today = new Date()
+      const startToday = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+      const in7 = new Date(startToday.getTime() + 7 * 24 * 60 * 60 * 1000)
+      const todayISO = startToday.toISOString().slice(0, 10)
+      const in7ISO = in7.toISOString().slice(0, 10)
+
+      const pipeline = [{
+        $facet: {
+          total: [{ $count: 'count' }],
+          expired: [
+            { $match: { expiryDate: { $ne: null, $lt: todayISO } } },
+            { $count: 'count' }
+          ],
+          expiring: [
+            { $match: { expiryDate: { $ne: null, $gte: todayISO, $lte: in7ISO } } },
+            { $count: 'count' }
+          ],
+          critical: [
+            { $match: { quantity: { $lte: 2 }, $or: [{ expiryDate: null }, { expiryDate: { $gt: in7ISO } }] } },
+            { $count: 'count' }
+          ],
+        }
+      }]
+      const [agg] = await col.aggregate(pipeline).toArray()
       const stats = {
-        total: docs.length,
-        expiring: docs.filter(d => d._status === 'Expiring').length,
-        expired: docs.filter(d => d._status === 'Expired').length,
-        critical: docs.filter(d => d._status === 'Critical').length,
+        total: agg?.total?.[0]?.count || 0,
+        expiring: agg?.expiring?.[0]?.count || 0,
+        expired: agg?.expired?.[0]?.count || 0,
+        critical: agg?.critical?.[0]?.count || 0,
       }
       return json(stats)
     }
@@ -275,7 +302,7 @@ export async function POST(request, { params }) {
       if (image && !image.startsWith('data:image/')) return json({ error: 'invalid image data URL' }, 400)
 
       const recipe = await scanRecipe({ image, text })
-      const products = (await col.find({}, { projection: { _id: 0 } }).toArray()).map(enrich)
+      const products = (await col.find({}, { projection: { _id: 0 } }).limit(5000).toArray()).map(enrich)
 
       const matched = recipe.ingredients.map(ing => {
         const product = matchIngredientToInventory(ing.name, products)
