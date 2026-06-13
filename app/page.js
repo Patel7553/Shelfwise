@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X } from 'lucide-react'
 
 const STATUS_META = {
   Expired: { label: 'Expired', color: 'bg-red-100 text-red-700 border-red-200' },
@@ -44,15 +44,27 @@ function App() {
   const [statusFilter, setStatusFilter] = useState(initial.status)
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState('asc')
+  const [categoryFilter, setCategoryFilter] = useState('All')
+  const [storageFilter, setStorageFilter] = useState('All')
+  const [facets, setFacets] = useState({ categories: [], storages: [] })
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form, setForm] = useState(EMPTY_FORM)
+
+  // AI Scan state
+  const [scanOpen, setScanOpen] = useState(false)
+  const [scanImage, setScanImage] = useState(null) // data URL
+  const [scanLoading, setScanLoading] = useState(false)
+  const [scanItems, setScanItems] = useState([]) // editable parsed items
+  const [scanSaving, setScanSaving] = useState(false)
 
   const fetchProducts = async () => {
     setLoading(true)
     try {
       const params = new URLSearchParams()
       if (statusFilter && statusFilter !== 'All') params.set('status', statusFilter)
+      if (categoryFilter && categoryFilter !== 'All') params.set('category', categoryFilter)
+      if (storageFilter && storageFilter !== 'All') params.set('storage', storageFilter)
       if (search) params.set('search', search)
       if (sort) params.set('sort', sort)
       const res = await fetch(`/api/products?${params.toString()}`)
@@ -65,6 +77,14 @@ function App() {
     }
   }
 
+  const fetchFacets = async () => {
+    try {
+      const res = await fetch('/api/facets')
+      const data = await res.json()
+      setFacets({ categories: data.categories || [], storages: data.storages || [] })
+    } catch {}
+  }
+
   const fetchStats = async () => {
     try {
       const res = await fetch('/api/stats')
@@ -73,8 +93,8 @@ function App() {
     } catch {}
   }
 
-  useEffect(() => { fetchProducts() }, [statusFilter, search, sort])
-  useEffect(() => { fetchStats() }, [products.length, view])
+  useEffect(() => { fetchProducts() }, [statusFilter, search, sort, categoryFilter, storageFilter])
+  useEffect(() => { fetchStats(); fetchFacets() }, [products.length, view])
 
   const openAdd = () => {
     setEditing(null)
@@ -126,6 +146,127 @@ function App() {
     } catch {
       toast.error('Delete failed')
     }
+  }
+
+  const openScan = () => {
+    setScanImage(null)
+    setScanItems([])
+    setScanOpen(true)
+  }
+
+  const onScanFile = async (file) => {
+    if (!file) return
+    // Resize image to keep base64 small
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const img = new Image()
+        img.onload = () => {
+          const maxDim = 1400
+          let { width, height } = img
+          if (width > maxDim || height > maxDim) {
+            const scale = Math.min(maxDim / width, maxDim / height)
+            width = Math.round(width * scale)
+            height = Math.round(height * scale)
+          }
+          const canvas = document.createElement('canvas')
+          canvas.width = width
+          canvas.height = height
+          const ctx = canvas.getContext('2d')
+          ctx.drawImage(img, 0, 0, width, height)
+          resolve(canvas.toDataURL('image/jpeg', 0.85))
+        }
+        img.onerror = reject
+        img.src = reader.result
+      }
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+    setScanImage(dataUrl)
+  }
+
+  const runScan = async () => {
+    if (!scanImage) {
+      toast.error('Please choose an image first')
+      return
+    }
+    setScanLoading(true)
+    try {
+      const res = await fetch('/api/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: scanImage })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Scan failed')
+      const items = (data.items || []).map(it => ({ ...it, _keep: true }))
+      setScanItems(items)
+      if (!items.length) toast.warning('No items detected. Try a clearer photo.')
+      else toast.success(`Detected ${items.length} item${items.length !== 1 ? 's' : ''}`)
+    } catch (e) {
+      toast.error(e.message || 'Scan failed')
+    } finally {
+      setScanLoading(false)
+    }
+  }
+
+  const saveScannedItems = async () => {
+    const toAdd = scanItems.filter(it => it._keep).map(({ _keep, ...rest }) => rest)
+    if (!toAdd.length) {
+      toast.error('No items selected')
+      return
+    }
+    setScanSaving(true)
+    try {
+      const res = await fetch('/api/products/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: toAdd })
+      })
+      if (!res.ok) throw new Error()
+      toast.success(`Added ${toAdd.length} item${toAdd.length !== 1 ? 's' : ''} to inventory`)
+      setScanOpen(false)
+      setScanImage(null)
+      setScanItems([])
+      fetchProducts()
+      fetchStats()
+    } catch {
+      toast.error('Could not save items')
+    } finally {
+      setScanSaving(false)
+    }
+  }
+
+  const updateScanItem = (idx, field, value) => {
+    setScanItems(prev => prev.map((it, i) => i === idx ? { ...it, [field]: value } : it))
+  }
+
+  // Image upload for product form (resize + base64)
+  const onFormImageChange = async (file) => {
+    if (!file) return
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const img = new Image()
+        img.onload = () => {
+          const maxDim = 600
+          let { width, height } = img
+          if (width > maxDim || height > maxDim) {
+            const scale = Math.min(maxDim / width, maxDim / height)
+            width = Math.round(width * scale); height = Math.round(height * scale)
+          }
+          const canvas = document.createElement('canvas')
+          canvas.width = width; canvas.height = height
+          canvas.getContext('2d').drawImage(img, 0, 0, width, height)
+          resolve(canvas.toDataURL('image/jpeg', 0.8))
+        }
+        img.onerror = reject
+        img.src = reader.result
+      }
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+    setForm(prev => ({ ...prev, imageUrl: dataUrl }))
   }
 
   const exportCSV = () => {
@@ -210,7 +351,7 @@ function App() {
 
       <main className="container mx-auto px-4 py-8">
         {view === 'dashboard' && (
-          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} />
+          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -220,7 +361,11 @@ function App() {
             setStatusFilter={(s) => goToInventory(s)}
             search={search} setSearch={setSearch}
             sort={sort} setSort={setSort}
+            categoryFilter={categoryFilter} setCategoryFilter={setCategoryFilter}
+            storageFilter={storageFilter} setStorageFilter={setStorageFilter}
+            facets={facets}
             openAdd={openAdd}
+            openScan={openScan}
             openEdit={openEdit}
             deleteProduct={deleteProduct}
             exportCSV={exportCSV}
@@ -278,6 +423,25 @@ function App() {
               <Label htmlFor="prep">Prepared By</Label>
               <Input id="prep" value={form.preparedBy} onChange={e => setForm({ ...form, preparedBy: e.target.value })} placeholder="Chef name" />
             </div>
+            <div className="col-span-2">
+              <Label>Photo (optional)</Label>
+              <div className="flex items-center gap-3 mt-1">
+                {form.imageUrl ? (
+                  <img src={form.imageUrl} alt="" className="h-16 w-16 rounded-lg object-cover border" />
+                ) : (
+                  <div className="h-16 w-16 rounded-lg bg-slate-100 border flex items-center justify-center text-slate-400">
+                    <Upload className="h-5 w-5" />
+                  </div>
+                )}
+                <label className="inline-flex">
+                  <input type="file" accept="image/*" className="hidden" onChange={e => onFormImageChange(e.target.files?.[0])} />
+                  <span className="px-3 py-2 text-sm border rounded-md cursor-pointer hover:bg-slate-50">Upload photo</span>
+                </label>
+                {form.imageUrl && (
+                  <Button variant="ghost" size="sm" type="button" onClick={() => setForm({ ...form, imageUrl: '' })}>Remove</Button>
+                )}
+              </div>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
@@ -285,11 +449,101 @@ function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* AI Scan Dialog */}
+      <Dialog open={scanOpen} onOpenChange={setScanOpen}>
+        <DialogContent className="sm:max-w-[860px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ScanLine className="h-5 w-5 text-emerald-600" /> Scan Logbook with AI
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground">Snap a photo of your kitchen logbook, fridge whiteboard, or prep list. GPT-4o vision will extract every item.</p>
+          </DialogHeader>
+
+          {!scanItems.length && (
+            <div className="space-y-4 py-2">
+              <label className="block">
+                <input type="file" accept="image/*" capture="environment" className="hidden"
+                  onChange={e => onScanFile(e.target.files?.[0])} />
+                <div className="border-2 border-dashed border-emerald-200 rounded-xl p-8 hover:border-emerald-400 hover:bg-emerald-50/40 transition cursor-pointer text-center">
+                  {scanImage ? (
+                    <div className="space-y-3">
+                      <img src={scanImage} alt="preview" className="max-h-72 mx-auto rounded-lg shadow-sm" />
+                      <p className="text-sm text-muted-foreground">Click to choose a different image</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="h-14 w-14 mx-auto rounded-full bg-emerald-100 flex items-center justify-center">
+                        <Upload className="h-6 w-6 text-emerald-600" />
+                      </div>
+                      <p className="font-medium">Click to upload or take a photo</p>
+                      <p className="text-xs text-muted-foreground">PNG, JPG up to 10MB. We'll auto-resize for fast processing.</p>
+                    </div>
+                  )}
+                </div>
+              </label>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setScanOpen(false)}>Cancel</Button>
+                <Button onClick={runScan} disabled={!scanImage || scanLoading} className="bg-emerald-600 hover:bg-emerald-700">
+                  {scanLoading ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Analyzing...</> : <><Sparkles className="h-4 w-4 mr-2" /> Extract Items</>}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {scanItems.length > 0 && (
+            <div className="space-y-4 py-2">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">Review and edit the detected items. Uncheck any you don't want to add.</p>
+                <p className="text-xs font-medium">{scanItems.filter(i => i._keep).length} of {scanItems.length} selected</p>
+              </div>
+              <div className="border rounded-lg overflow-hidden max-h-[420px] overflow-y-auto">
+                <Table>
+                  <TableHeader className="bg-slate-50 sticky top-0">
+                    <TableRow>
+                      <TableHead className="w-10"></TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead className="w-20">Qty</TableHead>
+                      <TableHead className="w-20">Unit</TableHead>
+                      <TableHead className="w-36">Expiry</TableHead>
+                      <TableHead>Category</TableHead>
+                      <TableHead className="w-28">Storage</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {scanItems.map((it, idx) => (
+                      <TableRow key={idx} className={!it._keep ? 'opacity-40' : ''}>
+                        <TableCell><input type="checkbox" checked={it._keep} onChange={e => updateScanItem(idx, '_keep', e.target.checked)} className="h-4 w-4 accent-emerald-600" /></TableCell>
+                        <TableCell><Input value={it.name} onChange={e => updateScanItem(idx, 'name', e.target.value)} className="h-8" /></TableCell>
+                        <TableCell><Input type="number" value={it.quantity} onChange={e => updateScanItem(idx, 'quantity', e.target.value)} className="h-8" /></TableCell>
+                        <TableCell><Input value={it.unit} onChange={e => updateScanItem(idx, 'unit', e.target.value)} className="h-8" /></TableCell>
+                        <TableCell><Input type="date" value={it.expiryDate || ''} onChange={e => updateScanItem(idx, 'expiryDate', e.target.value)} className="h-8" /></TableCell>
+                        <TableCell><Input value={it.category} onChange={e => updateScanItem(idx, 'category', e.target.value)} className="h-8" /></TableCell>
+                        <TableCell><Input value={it.storageType} onChange={e => updateScanItem(idx, 'storageType', e.target.value)} className="h-8" /></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className="flex justify-between">
+                <Button variant="ghost" onClick={() => { setScanItems([]); setScanImage(null) }}>
+                  <X className="h-4 w-4 mr-2" /> Start over
+                </Button>
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={() => setScanOpen(false)}>Cancel</Button>
+                  <Button onClick={saveScannedItems} disabled={scanSaving} className="bg-emerald-600 hover:bg-emerald-700">
+                    {scanSaving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving...</> : <><Check className="h-4 w-4 mr-2" /> Add to Inventory</>}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
 
-function DashboardView({ stats, products, goToInventory, seedData, openAdd }) {
+function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan }) {
   const cards = [
     { key: 'All', label: 'All Items', value: stats.total, icon: Boxes, color: 'from-slate-500 to-slate-700', accent: 'text-slate-600', bg: 'bg-slate-50' },
     { key: 'Expiring', label: 'Expiring Soon', value: stats.expiring, icon: Clock, color: 'from-amber-500 to-orange-500', accent: 'text-amber-600', bg: 'bg-amber-50' },
@@ -312,11 +566,16 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd }) {
               <Sparkles className="h-4 w-4 mr-2" /> Load sample data
             </Button>
           )}
+          <Button variant="outline" onClick={openScan} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50">
+            <ScanLine className="h-4 w-4 mr-2" /> Scan with AI
+          </Button>
           <Button onClick={openAdd} className="bg-emerald-600 hover:bg-emerald-700">
             <Plus className="h-4 w-4 mr-2" /> Add Product
           </Button>
         </div>
       </div>
+
+      <ExpiryAlertBanner stats={stats} goToInventory={goToInventory} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {cards.map(c => {
@@ -371,6 +630,30 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd }) {
   )
 }
 
+function ExpiryAlertBanner({ stats, goToInventory }) {
+  if (!stats.expired && !stats.expiring) return null
+  const messages = []
+  if (stats.expired > 0) messages.push({ key: 'Expired', text: `${stats.expired} item${stats.expired !== 1 ? 's' : ''} already expired`, color: 'bg-red-50 border-red-200 text-red-800', dot: 'bg-red-500' })
+  if (stats.expiring > 0) messages.push({ key: 'Expiring', text: `${stats.expiring} item${stats.expiring !== 1 ? 's' : ''} expiring within 7 days`, color: 'bg-amber-50 border-amber-200 text-amber-800', dot: 'bg-amber-500' })
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      {messages.map(m => (
+        <button key={m.key} onClick={() => goToInventory(m.key)}
+          className={`text-left flex items-center justify-between rounded-xl border px-4 py-3 ${m.color} hover:shadow-sm transition`}>
+          <div className="flex items-center gap-3">
+            <span className={`h-2.5 w-2.5 rounded-full ${m.dot} animate-pulse`} />
+            <div>
+              <p className="font-semibold text-sm">{m.text}</p>
+              <p className="text-xs opacity-75">Tap to review and take action</p>
+            </div>
+          </div>
+          <AlertTriangle className="h-5 w-5 opacity-60" />
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function UrgentList() {
   const [items, setItems] = useState([])
   useEffect(() => {
@@ -399,7 +682,8 @@ function UrgentList() {
   )
 }
 
-function InventoryView({ products, loading, statusFilter, setStatusFilter, search, setSearch, sort, setSort, openAdd, openEdit, deleteProduct, exportCSV, formatDate }) {
+function InventoryView({ products, loading, statusFilter, setStatusFilter, search, setSearch, sort, setSort, categoryFilter, setCategoryFilter, storageFilter, setStorageFilter, facets, openAdd, openScan, openEdit, deleteProduct, exportCSV, formatDate }) {
+  const activeFilters = [statusFilter !== 'All', categoryFilter !== 'All', storageFilter !== 'All', !!search].filter(Boolean).length
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between flex-wrap gap-4">
@@ -409,6 +693,7 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={exportCSV}><Download className="h-4 w-4 mr-2" /> Export CSV</Button>
+          <Button variant="outline" onClick={openScan} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"><ScanLine className="h-4 w-4 mr-2" /> Scan with AI</Button>
           <Button onClick={openAdd} className="bg-emerald-600 hover:bg-emerald-700"><Plus className="h-4 w-4 mr-2" /> Add Product</Button>
         </div>
       </div>
@@ -421,7 +706,7 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
               <Input className="pl-9" placeholder="Search by product name..." value={search} onChange={e => setSearch(e.target.value)} />
             </div>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-[180px]"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-[160px]"><SelectValue placeholder="Status" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="All">All Statuses</SelectItem>
                 <SelectItem value="Expiring">Expiring Soon</SelectItem>
@@ -430,15 +715,35 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
                 <SelectItem value="Ok">OK</SelectItem>
               </SelectContent>
             </Select>
+            <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+              <SelectTrigger className="w-[160px]"><SelectValue placeholder="Category" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="All">All Categories</SelectItem>
+                {facets.categories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={storageFilter} onValueChange={setStorageFilter}>
+              <SelectTrigger className="w-[140px]"><SelectValue placeholder="Storage" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="All">All Storage</SelectItem>
+                {facets.storages.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+              </SelectContent>
+            </Select>
             <Button variant="outline" onClick={() => setSort(sort === 'asc' ? 'desc' : 'asc')}>
               <ArrowUpDown className="h-4 w-4 mr-2" /> Expiry {sort === 'asc' ? '↑' : '↓'}
             </Button>
+            {activeFilters > 0 && (
+              <Button variant="ghost" size="sm" onClick={() => { setStatusFilter('All'); setCategoryFilter('All'); setStorageFilter('All'); setSearch('') }}>
+                <X className="h-4 w-4 mr-1" /> Clear ({activeFilters})
+              </Button>
+            )}
           </div>
 
           <div className="rounded-lg border overflow-hidden">
             <Table>
               <TableHeader className="bg-slate-50">
                 <TableRow>
+                  <TableHead className="w-14"></TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>Qty</TableHead>
                   <TableHead>Expiry</TableHead>
@@ -452,11 +757,20 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
               </TableHeader>
               <TableBody>
                 {loading ? (
-                  <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground">Loading...</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={10} className="text-center py-8 text-muted-foreground">Loading...</TableCell></TableRow>
                 ) : products.length === 0 ? (
-                  <TableRow><TableCell colSpan={9} className="text-center py-12 text-muted-foreground">No products match your filters.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={10} className="text-center py-12 text-muted-foreground">No products match your filters.</TableCell></TableRow>
                 ) : products.map(p => (
                   <TableRow key={p.id} className="hover:bg-slate-50/60">
+                    <TableCell>
+                      {p.imageUrl ? (
+                        <img src={p.imageUrl} alt="" className="h-10 w-10 rounded-md object-cover border" />
+                      ) : (
+                        <div className="h-10 w-10 rounded-md bg-slate-100 border flex items-center justify-center text-slate-300">
+                          <Package className="h-4 w-4" />
+                        </div>
+                      )}
+                    </TableCell>
                     <TableCell className="font-medium">{p.name}</TableCell>
                     <TableCell>{p.quantity} {p.unit}</TableCell>
                     <TableCell>{formatDate(p.expiryDate)}</TableCell>

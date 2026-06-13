@@ -53,12 +53,20 @@ export async function GET(request, { params }) {
       const status = url.searchParams.get('status')
       const search = url.searchParams.get('search')
       const sort = url.searchParams.get('sort') // 'asc' | 'desc'
+      const category = url.searchParams.get('category')
+      const storage = url.searchParams.get('storage')
 
       let docs = await col.find({}, { projection: { _id: 0 } }).toArray()
       docs = docs.map(enrich)
 
       if (status && status !== 'All') {
         docs = docs.filter(d => d._status === status)
+      }
+      if (category && category !== 'All') {
+        docs = docs.filter(d => (d.category || '') === category)
+      }
+      if (storage && storage !== 'All') {
+        docs = docs.filter(d => (d.storageType || '') === storage)
       }
       if (search) {
         const s = search.toLowerCase()
@@ -72,6 +80,13 @@ export async function GET(request, { params }) {
         })
       }
       return json(docs)
+    }
+
+    if (path === 'facets') {
+      const docs = await col.find({}, { projection: { _id: 0, category: 1, storageType: 1 } }).toArray()
+      const categories = Array.from(new Set(docs.map(d => d.category).filter(Boolean))).sort()
+      const storages = Array.from(new Set(docs.map(d => d.storageType).filter(Boolean))).sort()
+      return json({ categories, storages })
     }
 
     if (path === 'stats') {
@@ -92,11 +107,112 @@ export async function GET(request, { params }) {
   }
 }
 
+const EMERGENT_URL = 'https://integrations.emergentagent.com/llm/v1/chat/completions'
+
+async function scanImageForItems(base64DataUrl) {
+  const key = process.env.EMERGENT_LLM_KEY
+  if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+
+  const today = new Date().toISOString().slice(0, 10)
+  const systemPrompt = `You are an expert kitchen inventory assistant. You read photos of handwritten kitchen logbooks, fridge whiteboards, prep lists, or product labels and extract structured inventory data.
+
+Return ONLY a valid JSON object of the form: {"items":[ ... ]}. Each item must have:
+- "name": short product name (e.g. "Whole Milk", "Chicken Breast")
+- "quantity": a number (default 1 if unclear)
+- "unit": one of "ea", "kg", "g", "L", "mL", "bunch", "pack", "box" (best guess)
+- "expiryDate": "YYYY-MM-DD" if visible in image, else null. Today is ${today} — infer year if only day/month given.
+- "category": broad category like "Dairy", "Meat", "Produce", "Seafood", "Frozen", "Dry Goods", "Pantry", "Beverage", "Other"
+- "storageType": "Fridge", "Freezer", "Dry", or "Ambient" (best guess from context)
+- "location": shelf/location string if visible, else ""
+- "preparedBy": chef/person name if visible, else ""
+
+Be aggressive about extracting items even from messy handwriting. Output strictly valid JSON.`
+
+  const body = {
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Extract every inventory item visible in this image and return them as JSON.' },
+          { type: 'image_url', image_url: { url: base64DataUrl } }
+        ]
+      }
+    ],
+    temperature: 0,
+    response_format: { type: 'json_object' }
+  }
+
+  const res = await fetch(EMERGENT_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  if (!res.ok) {
+    const txt = await res.text()
+    throw new Error(`Vision API ${res.status}: ${txt.slice(0, 300)}`)
+  }
+  const data = await res.json()
+  const content = data?.choices?.[0]?.message?.content || '{}'
+  let parsed
+  try {
+    parsed = JSON.parse(content)
+  } catch (e) {
+    // try to extract JSON substring
+    const m = content.match(/\{[\s\S]*\}/)
+    parsed = m ? JSON.parse(m[0]) : { items: [] }
+  }
+  const items = Array.isArray(parsed) ? parsed : (parsed.items || [])
+  return items.map(it => ({
+    name: String(it.name || '').trim(),
+    quantity: Number(it.quantity) || 1,
+    unit: String(it.unit || 'ea').trim(),
+    expiryDate: it.expiryDate || null,
+    category: String(it.category || '').trim(),
+    storageType: String(it.storageType || 'Fridge').trim(),
+    location: String(it.location || '').trim(),
+    preparedBy: String(it.preparedBy || '').trim(),
+  })).filter(it => it.name)
+}
+
 export async function POST(request, { params }) {
   try {
     const path = (params?.path || []).join('/')
     const db = await getDb()
     const col = db.collection('products')
+
+    if (path === 'scan') {
+      const body = await request.json()
+      const image = body.image // expected: data URL "data:image/...;base64,..."
+      if (!image || !image.startsWith('data:image/')) {
+        return json({ error: 'Invalid or missing image (data URL required)' }, 400)
+      }
+      const items = await scanImageForItems(image)
+      return json({ items })
+    }
+
+    if (path === 'products/bulk') {
+      const body = await request.json()
+      const itemsIn = Array.isArray(body.items) ? body.items : []
+      const now = new Date().toISOString()
+      const docs = itemsIn.map(b => ({
+        id: uuidv4(),
+        name: b.name || '',
+        quantity: Number(b.quantity) || 0,
+        unit: b.unit || 'ea',
+        expiryDate: b.expiryDate || null,
+        category: b.category || '',
+        storageType: b.storageType || 'Fridge',
+        location: b.location || '',
+        preparedBy: b.preparedBy || '',
+        imageUrl: '',
+        createdAt: now,
+        updatedAt: now,
+      })).filter(d => d.name)
+      if (docs.length) await col.insertMany(docs)
+      return json({ inserted: docs.length, items: docs.map(enrich) }, 201)
+    }
 
     if (path === 'products') {
       const body = await request.json()
