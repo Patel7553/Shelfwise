@@ -4,6 +4,16 @@ import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 
 export default function Dashboard() {
+
+ const hour = new Date().getHours();
+
+let greeting = "Good Morning ☀️";
+
+if (hour >= 12 && hour < 17) {
+  greeting = "Good Afternoon 🌤️";
+} else if (hour >= 17) {
+  greeting = "Good Evening 🌙";
+}
   const [products, setProducts] = useState<any[]>([]);
   const [search, setSearch] = useState("");
 
@@ -127,6 +137,8 @@ const saucesCount = products.filter(
     boxShadow: "0 4px 16px rgba(0,0,0,0.05)",
   }}
 >
+
+
   <p
     style={{
       color: "#888",
@@ -134,7 +146,8 @@ const saucesCount = products.filter(
       fontSize: "14px",
     }}
   >
-    Good Morning 👋
+    
+    {greeting} 
   </p>
 
   <h1
