@@ -21,14 +21,6 @@ export default function Inventory() {
   
   const [statusFilter, setStatusFilter] = useState("All");
 
-
-  useEffect(() => {
-  console.log("URL STATUS:", status);
-
-  if (status) {
-    setStatusFilter(status);
-  }
-}, [status]);
   useEffect(() => {
   if (status === "Expired") {
     setStatusFilter("Expired");
@@ -39,7 +31,7 @@ export default function Inventory() {
   }
 
   if (status === "Expiring") {
-    setStatusFilter("Expiring Soon");
+    setStatusFilter("Expiring ");
   }
 }, [status]);
  
@@ -231,7 +223,7 @@ if (status === "Critical") {
   );
 }
 
-if (status === "Expiring Soon") {
+if (status === "Expiring") {
   statusProducts = statusProducts.filter((p) => {
     if (!p.expiry_date) return false;
 
@@ -277,7 +269,7 @@ if (status === "Expiring Soon") {
         daysLeft !== null && daysLeft < 0;
     }
 
-    if (statusFilter === "Expiring Soon") {
+    if (statusFilter === "Expiring") {
       matchesStatus =
         daysLeft !== null &&
         daysLeft >= 0 &&
