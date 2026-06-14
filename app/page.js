@@ -1902,7 +1902,7 @@ function LoginGate({ settings, onAuth, saveSettings }) {
   const tryCode = async (e) => {
     e?.preventDefault()
     if (!code.trim()) { toast.error('Enter the kitchen code'); return }
-    if (!hasInvite) { toast.error('No kitchen set up yet. Use the Email tab first.'); return }
+    if (!hasInvite) { toast.error('No kitchen set up yet. Use the Owner tab first.'); return }
     setBusy(true)
     try {
       const res = await fetch('/api/auth/verify-code', {
@@ -1926,28 +1926,39 @@ function LoginGate({ settings, onAuth, saveSettings }) {
       onAuth()
       return
     }
-    // First time setup — pick kitchen type next
-    if (!kitchenName.trim()) { toast.error('Kitchen name required'); return }
-    setStep('type')
-  }
-
-  const finishSetup = async () => {
+    if (!name.trim()) { toast.error('Your name is required'); return }
+    // First time setup — generate code immediately so they can share it
     setBusy(true)
     try {
       const newCode = Math.floor(100000 + Math.random() * 900000).toString()
       const next = {
         ...settings,
-        kitchenName: kitchenName.trim(),
-        kitchenType,
         alertEmail: email.trim(),
         inviteCode: newCode,
+        onboarded: false,
+      }
+      await saveSettings(next)
+      setGeneratedCode(newCode)
+      if (name.trim()) localStorage.setItem('shelfwise_user', name.trim())
+      setStep('code')
+    } finally { setBusy(false) }
+  }
+
+  const finishSetup = async () => {
+    setBusy(true)
+    try {
+      const next = {
+        ...settings,
+        kitchenName: kitchenName.trim() || 'My Kitchen',
+        kitchenType,
+        alertEmail: email.trim() || settings.alertEmail,
+        inviteCode: generatedCode || settings.inviteCode,
         onboarded: true,
         dashboardWidgets: chosenWidgets,
       }
       await saveSettings(next)
-      setGeneratedCode(newCode)
-      setStep('code')
-      if (name.trim()) localStorage.setItem('shelfwise_user', name.trim())
+      toast.success(`Welcome to ${next.kitchenName}! 🎉`)
+      onAuth()
     } finally { setBusy(false) }
   }
 
@@ -1969,9 +1980,51 @@ function LoginGate({ settings, onAuth, saveSettings }) {
               <p className="text-4xl font-bold tracking-[0.3em] text-emerald-700 my-3 font-mono">{generatedCode}</p>
               <p className="text-xs text-emerald-700">Share this code with your team. They'll use it to log in.</p>
             </div>
-            <Button className="w-full bg-emerald-600 hover:bg-emerald-700" onClick={onAuth}>
-              <Check className="h-4 w-4 mr-2" /> Enter ShelfWise
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={async () => {
+                try {
+                  if (navigator.share) {
+                    await navigator.share({ title: 'ShelfWise Kitchen Code', text: `Join my kitchen on ShelfWise — code: ${generatedCode}` })
+                  } else if (navigator.clipboard) {
+                    await navigator.clipboard.writeText(generatedCode)
+                    toast.success('Code copied!')
+                  }
+                } catch {}
+              }}
+            >
+              📋 Share / Copy code
             </Button>
+            <Button className="w-full bg-emerald-600 hover:bg-emerald-700" onClick={() => setStep('kitchen-name')}>
+              Continue <ArrowRight className="h-4 w-4 ml-2" />
+            </Button>
+          </div>
+        )}
+
+        {step === 'kitchen-name' && (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-bold">Name your kitchen</h2>
+              <p className="text-xs text-muted-foreground mt-1">This shows in the header and on email alerts.</p>
+            </div>
+            <div>
+              <Label>Kitchen Name</Label>
+              <Input value={kitchenName} onChange={e => setKitchenName(e.target.value)} placeholder="e.g. Bella Cucina" autoFocus />
+            </div>
+            <div className="flex justify-between pt-2">
+              <Button variant="ghost" onClick={() => setStep('code')}>Back</Button>
+              <Button
+                onClick={() => {
+                  if (!kitchenName.trim()) { toast.error('Kitchen name required'); return }
+                  setStep('type')
+                }}
+                className="bg-emerald-600 hover:bg-emerald-700"
+              >
+                Next <ArrowRight className="h-4 w-4 ml-2" />
+              </Button>
+            </div>
           </div>
         )}
 
@@ -1990,7 +2043,7 @@ function LoginGate({ settings, onAuth, saveSettings }) {
               ))}
             </div>
             <div className="flex justify-between pt-2">
-              <Button variant="ghost" onClick={() => setStep('login')}>Back</Button>
+              <Button variant="ghost" onClick={() => setStep('kitchen-name')}>Back</Button>
               <Button onClick={() => setStep('widgets')} className="bg-emerald-600 hover:bg-emerald-700">
                 Next <ArrowRight className="h-4 w-4 ml-2" />
               </Button>
@@ -2033,7 +2086,7 @@ function LoginGate({ settings, onAuth, saveSettings }) {
             <div className="flex justify-between">
               <Button variant="ghost" onClick={() => setStep('type')}>Back</Button>
               <Button onClick={finishSetup} disabled={busy || chosenWidgets.length === 0} className="bg-emerald-600 hover:bg-emerald-700">
-                {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />} Create Kitchen
+                {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />} Finish Setup
               </Button>
             </div>
           </div>
@@ -2044,10 +2097,10 @@ function LoginGate({ settings, onAuth, saveSettings }) {
             <p className="text-center text-sm text-muted-foreground mb-4">Sign in with</p>
             <div className="flex gap-2 mb-5 p-1 bg-slate-100 rounded-lg">
               <button onClick={() => setMode('email')} className={`flex-1 py-2.5 text-sm font-semibold rounded-md transition flex items-center justify-center gap-1.5 ${mode === 'email' ? 'bg-white shadow text-slate-900' : 'text-slate-600 hover:text-slate-800'}`}>
-                📧 Email
+                👑 Owner
               </button>
               <button onClick={() => setMode('code')} className={`flex-1 py-2.5 text-sm font-semibold rounded-md transition flex items-center justify-center gap-1.5 ${mode === 'code' ? 'bg-white shadow text-slate-900' : 'text-slate-600 hover:text-slate-800'}`}>
-                🔑 Code
+                👨‍🍳 Chef
               </button>
             </div>
 
@@ -2070,7 +2123,7 @@ function LoginGate({ settings, onAuth, saveSettings }) {
 
             {mode === 'email' && (
               <form onSubmit={signInEmail} className="space-y-4">
-                <p className="text-xs text-muted-foreground">{hasInvite ? 'Sign in with your email.' : 'First time? Set up your new kitchen below.'}</p>
+                <p className="text-xs text-muted-foreground">{hasInvite ? 'Sign in with your email.' : 'First time? Enter your details — we\'ll set up your kitchen in the next few steps.'}</p>
                 <div>
                   <Label>Your name</Label>
                   <Input value={name} onChange={e => setName(e.target.value)} placeholder="Head Chef" />
@@ -2079,14 +2132,8 @@ function LoginGate({ settings, onAuth, saveSettings }) {
                   <Label>Email <span className="text-muted-foreground font-normal">{!hasInvite && '(for alerts)'}</span></Label>
                   <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="chef@kitchen.com" />
                 </div>
-                {!hasInvite && (
-                  <div>
-                    <Label>Kitchen name</Label>
-                    <Input value={kitchenName} onChange={e => setKitchenName(e.target.value)} placeholder="Bella Cucina" />
-                  </div>
-                )}
                 <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700" disabled={busy}>
-                  {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : (hasInvite ? <Check className="h-4 w-4 mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />)} {hasInvite ? 'Sign In' : 'Continue →'}
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : (hasInvite ? <Check className="h-4 w-4 mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />)} {hasInvite ? 'Sign In' : 'Create Kitchen →'}
                 </Button>
               </form>
             )}
