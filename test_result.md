@@ -372,3 +372,22 @@ agent_communication:
         **Test file:** /app/backend_test.py (can be re-run anytime)
         
         No critical issues found. Backend is production-ready.
+
+
+---
+
+## 2026-06-14 — Onboarding Widget Picker (Phase 3+)
+
+**Feature added by main agent**: Visual widget picker added to first-time signup flow + Setup Wizard.
+
+**Frontend changes** (`/app/app/page.js`):
+1. `LoginGate` — added new `'type'` step between login and widgets so first-time signup now asks: Name → Email → Kitchen Name → **Kitchen Type** → **Dashboard Widgets** → Code
+2. `LoginGate` widget picker upgraded from plain checkboxes to clickable cards with icons, descriptions, emerald active state. "Urgent items list" widget removed per user request.
+3. `SetupWizard` (Settings → Re-run wizard) — added new step 2 "What do you want on your dashboard?" with the same card UI between Kitchen Setup and Custom Fields. Total steps now 4.
+4. `SettingsDialog` — added "Re-run setup wizard" button in Kitchen Profile tab so existing users can revisit onboarding any time.
+
+**Backend changes**: None — uses existing `dashboardWidgets` JSONB column added in migration #4.
+
+**Tested locally**: Playwright screenshot run confirms all 3 new steps render correctly (login form → kitchen type grid → widget cards). Code is packaged into `/app/public/shelfwise-supabase.zip` for the user to push to GitHub → Vercel.
+
+**Pending user action**: Replace files in local repo, `git add . && git commit && git push` to deploy.

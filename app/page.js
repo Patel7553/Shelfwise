@@ -27,18 +27,14 @@ const EMPTY_FORM = {
 }
 
 function getInitialFromURL() {
-  if (typeof window === 'undefined') return { view: 'dashboard', status: 'All' }
-  const params = new URLSearchParams(window.location.search)
-  const s = params.get('status')
-  const v = params.get('view')
-  const validStatus = s && ['Expired', 'Expiring', 'Critical', 'Ok', 'All'].includes(s) ? s : 'All'
-  const initialView = (v === 'inventory' || (s && validStatus !== 'All')) ? 'inventory' : 'dashboard'
-  return { view: initialView, status: validStatus }
+  // Always return defaults during SSR and initial render to avoid hydration mismatch.
+  // The URL is read in a useEffect after mount.
+  return { view: 'dashboard', status: 'All' }
 }
 
 function App() {
   const [initial] = useState(getInitialFromURL)
-  const [view, setView] = useState(initial.view) // dashboard | inventory
+  const [view, setView] = useState(initial.view) // dashboard | inventory | recipes
   const [products, setProducts] = useState([])
   const [stats, setStats] = useState({ total: 0, expiring: 0, expired: 0, critical: 0 })
   const [loading, setLoading] = useState(false)
@@ -54,23 +50,37 @@ function App() {
 
   // AI Scan state
   const [scanOpen, setScanOpen] = useState(false)
-  const [scanImage, setScanImage] = useState(null) // data URL
+  const [scanImage, setScanImage] = useState(null)
   const [scanLoading, setScanLoading] = useState(false)
-  const [scanItems, setScanItems] = useState([]) // editable parsed items
+  const [scanItems, setScanItems] = useState([])
   const [scanSaving, setScanSaving] = useState(false)
 
   // Recipe Scan state
   const [recipeOpen, setRecipeOpen] = useState(false)
-  const [recipeMode, setRecipeMode] = useState('text') // 'text' | 'image'
+  const [recipeMode, setRecipeMode] = useState('text')
   const [recipeText, setRecipeText] = useState('')
   const [recipeImage, setRecipeImage] = useState(null)
   const [recipeLoading, setRecipeLoading] = useState(false)
   const [recipeResult, setRecipeResult] = useState(null)
+  const [recipeSaving, setRecipeSaving] = useState(false)
+
+  // Saved Recipes state
+  const [savedRecipes, setSavedRecipes] = useState([])
+  const [recipesSearch, setRecipesSearch] = useState('')
+  const [viewRecipe, setViewRecipe] = useState(null)
 
   // Settings & wizard
-  const [settings, setSettings] = useState({ kitchenName: '', kitchenType: '', customFields: [], onboarded: true })
+  const [settings, setSettings] = useState({ kitchenName: '', kitchenType: '', customFields: [], onboarded: true, inviteCode: '', alertEmail: '', tagline: 'From shelf to plate — never lose track.' })
   const [wizardOpen, setWizardOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [authed, setAuthed] = useState(false)
+  const [mobileNav, setMobileNav] = useState(false)
+
+  // Check localStorage for previous login
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (localStorage.getItem('shelfwise_authed') === '1') setAuthed(true)
+  }, [])
 
   const fetchProducts = async () => {
     setLoading(true)
@@ -135,6 +145,58 @@ function App() {
   useEffect(() => { fetchProducts() }, [statusFilter, search, sort, categoryFilter, storageFilter])
   useEffect(() => { fetchStats(); fetchFacets() }, [products.length, view])
   useEffect(() => { fetchSettings() }, [])
+  useEffect(() => { if (view === 'recipes') fetchRecipes() }, [view, recipesSearch])
+
+  // Read URL params on client mount (avoids SSR hydration mismatch)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const s = params.get('status')
+    const v = params.get('view')
+    const validStatus = s && ['Expired', 'Expiring', 'Critical', 'Ok', 'All'].includes(s) ? s : null
+    if (validStatus) setStatusFilter(validStatus)
+    if (v === 'inventory' || v === 'recipes') setView(v)
+    else if (validStatus && validStatus !== 'All') setView('inventory')
+  }, [])
+
+  const fetchRecipes = async () => {
+    try {
+      const params = new URLSearchParams()
+      if (recipesSearch) params.set('search', recipesSearch)
+      const res = await fetch(`/api/recipes?${params.toString()}`)
+      const data = await res.json()
+      setSavedRecipes(Array.isArray(data) ? data : [])
+    } catch {}
+  }
+
+  const saveCurrentRecipe = async () => {
+    if (!recipeResult) return
+    setRecipeSaving(true)
+    try {
+      const res = await fetch('/api/recipes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(recipeResult)
+      })
+      if (!res.ok) throw new Error()
+      toast.success('Recipe saved! Find it in the Recipes tab.')
+    } catch {
+      toast.error('Failed to save recipe')
+    } finally {
+      setRecipeSaving(false)
+    }
+  }
+
+  const deleteRecipe = async (id) => {
+    try {
+      const res = await fetch(`/api/recipes/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error()
+      toast.success('Recipe deleted')
+      fetchRecipes()
+    } catch {
+      toast.error('Failed to delete recipe')
+    }
+  }
 
   const openAdd = () => {
     setEditing(null)
@@ -400,8 +462,9 @@ function App() {
     }
   }
 
-  const goToInventory = (status) => {
+  const goToInventory = (status, searchTerm) => {
     setStatusFilter(status)
+    if (typeof searchTerm === 'string') setSearch(searchTerm)
     setView('inventory')
     if (typeof window !== 'undefined') {
       const url = new URL(window.location.href)
@@ -424,36 +487,70 @@ function App() {
   const formatDate = (d) => d ? new Date(d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—'
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-emerald-50/40">
+    <div className="min-h-screen bg-gradient-to-br from-amber-50/30 via-white to-emerald-50/40">
+      {!authed && (
+        <LoginGate settings={settings} onAuth={() => { localStorage.setItem('shelfwise_authed', '1'); setAuthed(true) }} saveSettings={saveSettings} />
+      )}
       {/* Top Nav */}
-      <header className="border-b bg-white/80 backdrop-blur-md sticky top-0 z-30">
-        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-sm">
+      <header className="border-b bg-white/90 backdrop-blur-md sticky top-0 z-30">
+        <div className="container mx-auto px-4 py-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-sm shrink-0">
               <ChefHat className="h-5 w-5 text-white" />
             </div>
-            <div>
-              <h1 className="text-lg font-bold tracking-tight">ShelfWise</h1>
-              <p className="text-xs text-muted-foreground -mt-0.5">{settings.kitchenName ? settings.kitchenName : 'Kitchen Inventory & Waste Reduction'}{settings.kitchenType ? ` · ${settings.kitchenType}` : ''}</p>
+            <div className="min-w-0">
+              <h1 className="text-lg font-bold tracking-tight truncate">{settings.kitchenName || 'ShelfWise'}</h1>
+              <p className="text-xs text-muted-foreground -mt-0.5 truncate hidden sm:block">{settings.tagline || 'From shelf to plate — never lose track.'}{settings.kitchenType ? ' · ' + settings.kitchenType : ''}</p>
             </div>
           </div>
-          <nav className="flex items-center gap-1">
+
+          {/* Desktop nav */}
+          <nav className="hidden md:flex items-center gap-1">
             <Button variant={view === 'dashboard' ? 'default' : 'ghost'} size="sm" onClick={goToDashboard}>
               <LayoutDashboard className="h-4 w-4 mr-2" /> Dashboard
             </Button>
             <Button variant={view === 'inventory' ? 'default' : 'ghost'} size="sm" onClick={() => { setStatusFilter('All'); setView('inventory') }}>
               <Package className="h-4 w-4 mr-2" /> Inventory
             </Button>
+            <Button variant={view === 'recipes' ? 'default' : 'ghost'} size="sm" onClick={() => setView('recipes')}>
+              <BookOpen className="h-4 w-4 mr-2" /> Recipes
+            </Button>
             <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title="Settings">
               <Settings className="h-4 w-4" />
             </Button>
           </nav>
+
+          {/* Mobile menu button */}
+          <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setMobileNav(v => !v)}>
+            <Settings className="h-5 w-5" />
+          </Button>
         </div>
+
+        {/* Mobile nav drawer */}
+        {mobileNav && (
+          <div className="md:hidden border-t bg-white px-4 py-3 space-y-2">
+            <Button variant={view === 'dashboard' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { goToDashboard(); setMobileNav(false) }}>
+              <LayoutDashboard className="h-4 w-4 mr-2" /> Dashboard
+            </Button>
+            <Button variant={view === 'inventory' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setStatusFilter('All'); setView('inventory'); setMobileNav(false) }}>
+              <Package className="h-4 w-4 mr-2" /> Inventory
+            </Button>
+            <Button variant={view === 'recipes' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('recipes'); setMobileNav(false) }}>
+              <BookOpen className="h-4 w-4 mr-2" /> Recipes
+            </Button>
+            <Button variant="ghost" className="w-full justify-start" onClick={() => { setSettingsOpen(true); setMobileNav(false) }}>
+              <Settings className="h-4 w-4 mr-2" /> Settings
+            </Button>
+            <Button variant="ghost" className="w-full justify-start text-red-600" onClick={() => { localStorage.removeItem('shelfwise_authed'); setAuthed(false); setMobileNav(false) }}>
+              <X className="h-4 w-4 mr-2" /> Sign out
+            </Button>
+          </div>
+        )}
       </header>
 
       <main className="container mx-auto px-4 py-8">
         {view === 'dashboard' && (
-          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openRecipe={openRecipe} />
+          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -472,6 +569,16 @@ function App() {
             deleteProduct={deleteProduct}
             exportCSV={exportCSV}
             formatDate={formatDate}
+          />
+        )}
+        {view === 'recipes' && (
+          <RecipesView
+            recipes={savedRecipes}
+            search={recipesSearch}
+            setSearch={setRecipesSearch}
+            openRecipe={openRecipe}
+            onView={setViewRecipe}
+            onDelete={deleteRecipe}
           />
         )}
       </main>
@@ -714,27 +821,62 @@ function App() {
             </div>
           )}
 
-          {recipeResult && <RecipeResult result={recipeResult} onBack={() => setRecipeResult(null)} onClose={() => setRecipeOpen(false)} goToInventory={goToInventory} />}
+          {recipeResult && <RecipeResult result={recipeResult} onBack={() => setRecipeResult(null)} onClose={() => setRecipeOpen(false)} goToInventory={goToInventory} onSave={saveCurrentRecipe} saving={recipeSaving} />}
         </DialogContent>
       </Dialog>
+
+      {/* View saved recipe */}
+      <ViewRecipeDialog recipe={viewRecipe} onClose={() => setViewRecipe(null)} onDelete={deleteRecipe} />
 
       {/* Setup Wizard */}
       <SetupWizard open={wizardOpen} onClose={() => setWizardOpen(false)} settings={settings} saveSettings={saveSettings} />
 
       {/* Settings Dialog */}
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} settings={settings} saveSettings={saveSettings} />
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        settings={settings}
+        saveSettings={saveSettings}
+        openWizard={() => { setSettingsOpen(false); setWizardOpen(true) }}
+      />
     </div>
   )
 }
 
-function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openRecipe }) {
-  const cards = [
-    { key: 'All', label: 'All Items', value: stats.total, icon: Boxes, color: 'from-slate-500 to-slate-700', accent: 'text-slate-600', bg: 'bg-slate-50' },
-    { key: 'Expiring', label: 'Expiring Soon', value: stats.expiring, icon: Clock, color: 'from-amber-500 to-orange-500', accent: 'text-amber-600', bg: 'bg-amber-50' },
-    { key: 'Expired', label: 'Expired', value: stats.expired, icon: PackageX, color: 'from-red-500 to-rose-600', accent: 'text-red-600', bg: 'bg-red-50' },
-    { key: 'Critical', label: 'Critical Stock', value: stats.critical, icon: AlertTriangle, color: 'from-orange-500 to-red-500', accent: 'text-orange-600', bg: 'bg-orange-50' },
-  ]
+function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openRecipe, onViewRecipe, widgets }) {
+  const [quickSearch, setQuickSearch] = useState('')
+  const [globalResults, setGlobalResults] = useState(null)
+  const [globalLoading, setGlobalLoading] = useState(false)
+  const show = (k) => !widgets || widgets.length === 0 || widgets.includes(k)
 
+  const onSearch = async (e) => {
+    e.preventDefault()
+    const q = quickSearch.trim()
+    if (!q) { setGlobalResults(null); return }
+    setGlobalLoading(true)
+    try {
+      const [pRes, rRes] = await Promise.all([
+        fetch(`/api/products?search=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => []),
+        fetch(`/api/recipes?search=${encodeURIComponent(q)}`).then(r => r.json()).catch(() => []),
+      ])
+      setGlobalResults({
+        products: Array.isArray(pRes) ? pRes : [],
+        recipes: Array.isArray(rRes) ? rRes : [],
+      })
+    } finally {
+      setGlobalLoading(false)
+    }
+  }
+
+  const clearSearch = () => { setQuickSearch(''); setGlobalResults(null) }
+
+  const cardsAll = [
+    { key: 'all_items', label: 'All Items', value: stats.total, icon: Boxes, color: 'from-slate-500 to-slate-700', accent: 'text-slate-600', bg: 'bg-slate-50', filterKey: 'All' },
+    { key: 'expiring', label: 'Expiring Soon', value: stats.expiring, icon: Clock, color: 'from-amber-500 to-orange-500', accent: 'text-amber-600', bg: 'bg-amber-50', filterKey: 'Expiring' },
+    { key: 'expired', label: 'Expired', value: stats.expired, icon: PackageX, color: 'from-red-500 to-rose-600', accent: 'text-red-600', bg: 'bg-red-50', filterKey: 'Expired' },
+    { key: 'critical', label: 'Critical Stock', value: stats.critical, icon: AlertTriangle, color: 'from-orange-500 to-red-500', accent: 'text-orange-600', bg: 'bg-orange-50', filterKey: 'Critical' },
+  ]
+  const cards = cardsAll.filter(c => show(c.key))
   const isEmpty = stats.total === 0
 
   return (
@@ -753,22 +895,86 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
           <Button variant="outline" onClick={openScan} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50">
             <ScanLine className="h-4 w-4 mr-2" /> Scan with AI
           </Button>
-          <Button variant="outline" onClick={openRecipe} className="border-purple-200 text-purple-700 hover:bg-purple-50">
-            <BookOpen className="h-4 w-4 mr-2" /> Scan Recipe
-          </Button>
           <Button onClick={openAdd} className="bg-emerald-600 hover:bg-emerald-700">
             <Plus className="h-4 w-4 mr-2" /> Add Product
           </Button>
         </div>
       </div>
 
-      <ExpiryAlertBanner stats={stats} goToInventory={goToInventory} />
+      {show('expiry_alerts') && <ExpiryAlertBanner stats={stats} goToInventory={goToInventory} />}
 
+      {show('search') && (
+      <>
+      <form onSubmit={onSearch} className="relative max-w-2xl">
+        <Search className="h-5 w-5 absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          className="pl-12 pr-28 h-12 text-base rounded-xl border-2 focus:border-emerald-400"
+          placeholder="Search products & recipes... (press Enter)"
+          value={quickSearch}
+          onChange={e => setQuickSearch(e.target.value)}
+        />
+        <Button type="submit" size="sm" className="absolute right-2 top-1/2 -translate-y-1/2 bg-emerald-600 hover:bg-emerald-700" disabled={globalLoading}>
+          {globalLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Search'}
+        </Button>
+      </form>
+
+      {globalResults && (
+        <Card className="border-0 shadow-sm">
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-sm font-semibold">
+                Search results for "{quickSearch}" — {globalResults.products.length} product{globalResults.products.length !== 1 ? 's' : ''}, {globalResults.recipes.length} recipe{globalResults.recipes.length !== 1 ? 's' : ''}
+              </p>
+              <Button variant="ghost" size="sm" onClick={clearSearch}><X className="h-4 w-4 mr-1" /> Clear</Button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1"><Package className="h-3 w-3" /> Products</p>
+                {globalResults.products.length === 0 ? (
+                  <p className="text-sm text-muted-foreground italic">No products found.</p>
+                ) : (
+                  <ul className="divide-y border rounded-lg">
+                    {globalResults.products.slice(0, 8).map(p => (
+                      <li key={p.id}>
+                        <button onClick={() => goToInventory('All', quickSearch)} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex justify-between items-center">
+                          <span className="font-medium text-sm">{p.name}</span>
+                          <span className="text-xs text-muted-foreground">{p.quantity} {p.unit}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-1"><BookOpen className="h-3 w-3" /> Recipes</p>
+                {globalResults.recipes.length === 0 ? (
+                  <p className="text-sm text-muted-foreground italic">No recipes found.</p>
+                ) : (
+                  <ul className="divide-y border rounded-lg">
+                    {globalResults.recipes.slice(0, 8).map(r => (
+                      <li key={r.id}>
+                        <button onClick={() => onViewRecipe(r)} className="w-full text-left px-3 py-2 hover:bg-slate-50">
+                          <span className="font-medium text-sm">{r.title || 'Untitled'}</span>
+                          <span className="text-xs text-muted-foreground ml-2">· {Array.isArray(r.ingredients) ? r.ingredients.length : 0} ingredients</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      </>
+      )}
+
+      {cards.length > 0 && (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {cards.map(c => {
           const Icon = c.icon
           return (
-            <button key={c.key} onClick={() => goToInventory(c.key)} className="text-left">
+            <button key={c.key} onClick={() => goToInventory(c.filterKey)} className="text-left">
               <Card className="transition-all hover:shadow-lg hover:-translate-y-0.5 cursor-pointer border-0 shadow-sm overflow-hidden group">
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
@@ -790,8 +996,10 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
           )
         })}
       </div>
+      )}
 
       {/* Urgent items panel */}
+      {show('urgent_list') && (
       <Card className="border-0 shadow-sm">
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -813,6 +1021,7 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
           )}
         </CardContent>
       </Card>
+      )}
     </div>
   )
 }
@@ -869,78 +1078,64 @@ function UrgentList() {
   )
 }
 
-function RecipeResult({ result, onBack, onClose, goToInventory }) {
-  const statusMeta = {
-    in_stock: { label: 'In Stock', color: 'bg-emerald-100 text-emerald-700 border-emerald-200', icon: Check },
-    low: { label: 'Low Stock', color: 'bg-orange-100 text-orange-700 border-orange-200', icon: AlertCircle },
-    expired: { label: 'Expired', color: 'bg-red-100 text-red-700 border-red-200', icon: PackageX },
-    missing: { label: 'Missing', color: 'bg-slate-100 text-slate-600 border-slate-200', icon: X },
+function RecipeResult({ result, onBack, onClose, goToInventory, onSave, saving }) {
+  const [scale, setScale] = useState(1)
+  const scaleQty = (q) => {
+    const n = Number(q) || 0
+    const scaled = n * scale
+    // pretty-format: integer if whole, else 2 decimals (trimmed)
+    return Number.isInteger(scaled) ? scaled : Math.round(scaled * 100) / 100
   }
-  const s = result.summary || {}
-  const summary = [
-    { key: 'in_stock', count: s.inStock || 0, color: 'text-emerald-600' },
-    { key: 'low', count: s.low || 0, color: 'text-orange-600' },
-    { key: 'expired', count: s.expired || 0, color: 'text-red-600' },
-    { key: 'missing', count: s.missing || 0, color: 'text-slate-600' },
-  ]
   return (
     <div className="space-y-5 py-2">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h3 className="text-xl font-bold">{result.title || 'Recipe Analysis'}</h3>
-          {result.servings && <p className="text-sm text-muted-foreground">{result.servings}</p>}
-        </div>
-        {result.allergens?.length > 0 && (
-          <div className="flex items-start gap-2 max-w-md">
-            <ShieldAlert className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
-            <div>
-              <p className="text-xs font-semibold text-amber-800 uppercase tracking-wide">Allergens Detected</p>
-              <div className="flex flex-wrap gap-1.5 mt-1">
+      {/* BIG allergen warning banner at the TOP */}
+      {result.allergens?.length > 0 && (
+        <div className="rounded-xl border-2 border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 p-4">
+          <div className="flex items-start gap-3">
+            <div className="h-10 w-10 rounded-full bg-amber-200 flex items-center justify-center shrink-0">
+              <ShieldAlert className="h-6 w-6 text-amber-700" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-bold text-amber-900 uppercase tracking-wider">⚠️ Contains Allergens</p>
+              <p className="text-xs text-amber-800 mt-0.5">This recipe contains the following allergens. Please review before serving.</p>
+              <div className="flex flex-wrap gap-2 mt-2.5">
                 {result.allergens.map(a => (
-                  <Badge key={a} variant="outline" className="bg-amber-50 text-amber-800 border-amber-300 capitalize">{a}</Badge>
+                  <span key={a} className="px-3 py-1 rounded-full bg-amber-200 text-amber-900 text-sm font-semibold capitalize border border-amber-400">{a}</span>
                 ))}
               </div>
             </div>
           </div>
-        )}
+        </div>
+      )}
+
+      <div>
+        <h3 className="text-2xl font-bold">{result.title || 'Recipe Analysis'}</h3>
+        {result.servings && <p className="text-sm text-muted-foreground">{result.servings}</p>}
       </div>
 
-      <div className="grid grid-cols-4 gap-3">
-        {summary.map(c => {
-          const meta = statusMeta[c.key]
-          const Icon = meta.icon
-          return (
-            <div key={c.key} className={`rounded-lg border p-3 ${meta.color}`}>
-              <div className="flex items-center gap-2">
-                <Icon className="h-4 w-4" />
-                <p className="text-xs font-medium uppercase tracking-wide">{meta.label}</p>
-              </div>
-              <p className="text-2xl font-bold mt-1">{c.count}</p>
-            </div>
-          )
-        })}
+      {/* Scale selector */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Scale recipe</span>
+        {[1, 2, 3, 4, 5].map(n => (
+          <button key={n} onClick={() => setScale(n)}
+            className={`h-9 w-12 rounded-lg border-2 font-bold text-sm transition ${scale === n ? 'border-purple-500 bg-purple-600 text-white' : 'border-slate-200 hover:border-purple-300 bg-white text-slate-700'}`}>
+            {n}×
+          </button>
+        ))}
+        {scale > 1 && <span className="text-xs text-muted-foreground italic">Quantities multiplied by {scale}</span>}
       </div>
 
       <div>
         <p className="font-semibold mb-2 text-sm">Ingredients ({result.matched?.length || 0})</p>
         <div className="border rounded-lg divide-y overflow-hidden max-h-[360px] overflow-y-auto">
-          {(result.matched || []).map((m, i) => {
-            const meta = statusMeta[m.status] || statusMeta.missing
-            return (
-              <div key={i} className="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-slate-50">
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-sm capitalize">{m.name}</p>
-                  <p className="text-xs text-muted-foreground">{m.quantity} {m.unit}{m.notes ? ` · ${m.notes}` : ''}</p>
-                </div>
-                <div className="flex items-center gap-3">
-                  {m.product && (
-                    <span className="text-xs text-muted-foreground">{m.product.quantity} {m.product.unit} in stock</span>
-                  )}
-                  <Badge variant="outline" className={meta.color}>{meta.label}</Badge>
-                </div>
+          {(result.matched || []).map((m, i) => (
+            <div key={i} className="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-slate-50">
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm capitalize">{m.name}</p>
+                <p className="text-xs text-muted-foreground">{scaleQty(m.quantity)} {m.unit}{m.notes ? ` · ${m.notes}` : ''}</p>
               </div>
-            )
-          })}
+            </div>
+          ))}
         </div>
       </div>
 
@@ -956,11 +1151,178 @@ function RecipeResult({ result, onBack, onClose, goToInventory }) {
       <div className="flex justify-between pt-2 border-t">
         <Button variant="ghost" onClick={onBack}><X className="h-4 w-4 mr-2" /> Scan another</Button>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => { onClose(); goToInventory('All') }}>View Inventory</Button>
+          <Button variant="outline" onClick={onSave} disabled={saving}>
+            {saving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving...</> : <><Check className="h-4 w-4 mr-2" /> Save Recipe</>}
+          </Button>
           <Button onClick={onClose} className="bg-purple-600 hover:bg-purple-700">Done</Button>
         </div>
       </div>
     </div>
+  )
+}
+
+function RecipesView({ recipes, search, setSearch, openRecipe, onView, onDelete }) {
+  const [tab, setTab] = useState('saved') // 'saved' | 'scan'
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-3xl font-bold tracking-tight">Recipes</h2>
+        <p className="text-muted-foreground mt-1">Browse saved recipes or scan a new one</p>
+      </div>
+
+      {/* Two-tab toggle */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <button onClick={() => setTab('saved')}
+          className={`text-left rounded-xl border-2 p-5 transition ${tab === 'saved' ? 'border-purple-500 bg-purple-50' : 'border-slate-200 hover:border-purple-300 bg-white'}`}>
+          <div className="flex items-center gap-3">
+            <div className={`h-11 w-11 rounded-lg flex items-center justify-center ${tab === 'saved' ? 'bg-purple-600 text-white' : 'bg-purple-100 text-purple-600'}`}>
+              <BookOpen className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="font-semibold">Saved Recipes</p>
+              <p className="text-xs text-muted-foreground">{recipes.length} recipe{recipes.length !== 1 ? 's' : ''} in your collection</p>
+            </div>
+          </div>
+        </button>
+        <button onClick={() => { setTab('scan'); openRecipe() }}
+          className={`text-left rounded-xl border-2 p-5 transition ${tab === 'scan' ? 'border-purple-500 bg-purple-50' : 'border-slate-200 hover:border-purple-300 bg-white'}`}>
+          <div className="flex items-center gap-3">
+            <div className={`h-11 w-11 rounded-lg flex items-center justify-center ${tab === 'scan' ? 'bg-purple-600 text-white' : 'bg-purple-100 text-purple-600'}`}>
+              <ScanLine className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="font-semibold">Scan or Upload Recipe</p>
+              <p className="text-xs text-muted-foreground">Paste text or upload a recipe photo</p>
+            </div>
+          </div>
+        </button>
+      </div>
+
+      {tab === 'saved' && (
+        <Card className="border-0 shadow-sm">
+          <CardContent className="pt-6">
+            <div className="relative max-w-md mb-4">
+              <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input className="pl-9" placeholder="Search saved recipes..." value={search} onChange={e => setSearch(e.target.value)} />
+            </div>
+
+            {recipes.length === 0 ? (
+              <div className="text-center py-16 text-muted-foreground">
+                <BookOpen className="h-12 w-12 mx-auto mb-3 opacity-30" />
+                <p className="font-medium">No saved recipes yet</p>
+                <p className="text-sm">Click "Scan or Upload Recipe" above to start your collection.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {recipes.map(r => (
+                  <button key={r.id} onClick={() => onView(r)} className="text-left">
+                    <Card className="hover:shadow-md hover:-translate-y-0.5 transition cursor-pointer h-full">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-base line-clamp-2">{r.title || 'Untitled'}</CardTitle>
+                        {r.servings && <CardDescription>{r.servings}</CardDescription>}
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        {Array.isArray(r.allergens) && r.allergens.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {r.allergens.slice(0, 5).map(a => (
+                              <Badge key={a} variant="outline" className="bg-amber-50 text-amber-800 border-amber-300 capitalize text-[10px]">{a}</Badge>
+                            ))}
+                            {r.allergens.length > 5 && <Badge variant="outline" className="text-[10px]">+{r.allergens.length - 5}</Badge>}
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <span>{Array.isArray(r.ingredients) ? r.ingredients.length : 0} ingredients</span>
+                          <span>{r.created_at ? new Date(r.created_at).toLocaleDateString() : ''}</span>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </button>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}
+
+function ViewRecipeDialog({ recipe, onClose, onDelete }) {
+  const [scale, setScale] = useState(1)
+  useEffect(() => { setScale(1) }, [recipe?.id])
+  const scaleQty = (q) => {
+    const n = Number(q) || 0
+    const scaled = n * scale
+    return Number.isInteger(scaled) ? scaled : Math.round(scaled * 100) / 100
+  }
+  if (!recipe) return null
+  return (
+    <Dialog open={!!recipe} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-[760px] max-h-[92vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><BookOpen className="h-5 w-5 text-purple-600" /> {recipe.title || 'Untitled recipe'}</DialogTitle>
+          {recipe.servings && <p className="text-sm text-muted-foreground">{recipe.servings}</p>}
+        </DialogHeader>
+
+        {Array.isArray(recipe.allergens) && recipe.allergens.length > 0 && (
+          <div className="rounded-xl border-2 border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 p-4">
+            <div className="flex items-start gap-3">
+              <div className="h-10 w-10 rounded-full bg-amber-200 flex items-center justify-center shrink-0">
+                <ShieldAlert className="h-6 w-6 text-amber-700" />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-bold text-amber-900 uppercase tracking-wider">⚠️ Contains Allergens</p>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {recipe.allergens.map(a => (
+                    <span key={a} className="px-3 py-1 rounded-full bg-amber-200 text-amber-900 text-sm font-semibold capitalize border border-amber-400">{a}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Scale recipe</span>
+          {[1, 2, 3, 4, 5].map(n => (
+            <button key={n} onClick={() => setScale(n)}
+              className={`h-9 w-12 rounded-lg border-2 font-bold text-sm transition ${scale === n ? 'border-purple-500 bg-purple-600 text-white' : 'border-slate-200 hover:border-purple-300 bg-white text-slate-700'}`}>
+              {n}×
+            </button>
+          ))}
+          {scale > 1 && <span className="text-xs text-muted-foreground italic">Quantities multiplied by {scale}</span>}
+        </div>
+
+        <div>
+          <p className="font-semibold text-sm mb-2">Ingredients</p>
+          <ul className="space-y-1 text-sm border rounded-lg divide-y">
+            {(recipe.ingredients || []).map((ing, i) => (
+              <li key={i} className="px-3 py-2 flex justify-between">
+                <span className="capitalize">{ing.name}</span>
+                <span className="text-muted-foreground">{scaleQty(ing.quantity)} {ing.unit}{ing.notes ? ` · ${ing.notes}` : ''}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {recipe.steps?.length > 0 && (
+          <div>
+            <p className="font-semibold text-sm mb-2">Cooking Steps</p>
+            <ol className="list-decimal list-inside space-y-1 text-sm text-muted-foreground">
+              {recipe.steps.map((s, i) => <li key={i}>{s}</li>)}
+            </ol>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="ghost" className="text-red-600 hover:bg-red-50" onClick={() => { onDelete(recipe.id); onClose() }}>
+            <Trash2 className="h-4 w-4 mr-2" /> Delete
+          </Button>
+          <Button onClick={onClose} className="bg-purple-600 hover:bg-purple-700">Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1099,6 +1461,16 @@ function SetupWizard({ open, onClose, settings, saveSettings }) {
   const [name, setName] = useState('')
   const [type, setType] = useState('Restaurant')
   const [fields, setFields] = useState([])
+  const [widgets, setWidgets] = useState([])
+
+  const WIDGET_SUGGESTIONS = [
+    { key: 'all_items', label: 'All Items', desc: 'Total count of products in your stock', icon: Boxes, color: 'text-slate-600', bg: 'bg-slate-50' },
+    { key: 'expiring', label: 'Expiring Soon', desc: 'Items expiring within 7 days', icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
+    { key: 'expired', label: 'Expired', desc: 'Items already past their expiry date', icon: PackageX, color: 'text-red-600', bg: 'bg-red-50' },
+    { key: 'critical', label: 'Critical Stock', desc: 'Products running low on quantity', icon: AlertTriangle, color: 'text-orange-600', bg: 'bg-orange-50' },
+    { key: 'expiry_alerts', label: 'Expiry Alert Banner', desc: 'Big alert when items are expiring', icon: AlertCircle, color: 'text-rose-600', bg: 'bg-rose-50' },
+    { key: 'search', label: 'Global Search', desc: 'Quick search box on dashboard', icon: Search, color: 'text-blue-600', bg: 'bg-blue-50' },
+  ]
 
   useEffect(() => {
     if (open) {
@@ -1106,8 +1478,14 @@ function SetupWizard({ open, onClose, settings, saveSettings }) {
       setName(settings.kitchenName || '')
       setType(settings.kitchenType || 'Restaurant')
       setFields(settings.customFields?.length ? [...settings.customFields] : [])
+      const existing = Array.isArray(settings.dashboardWidgets) && settings.dashboardWidgets.length
+        ? settings.dashboardWidgets
+        : WIDGET_SUGGESTIONS.map(w => w.key)
+      setWidgets(existing)
     }
   }, [open])
+
+  const toggleWidget = (k) => setWidgets(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
 
   const addField = () => setFields([...fields, { key: `field_${fields.length + 1}`, label: '', type: 'text' }])
   const updateField = (i, patch) => setFields(fields.map((f, idx) => idx === i ? { ...f, ...patch } : f))
@@ -1121,27 +1499,35 @@ function SetupWizard({ open, onClose, settings, saveSettings }) {
         label: f.label.trim(),
         type: f.type || 'text'
       }))
-    await saveSettings({ kitchenName: name.trim() || 'My Kitchen', kitchenType: type, customFields: cleanFields, onboarded: true })
+    await saveSettings({
+      kitchenName: name.trim() || 'My Kitchen',
+      kitchenType: type,
+      customFields: cleanFields,
+      dashboardWidgets: widgets,
+      onboarded: true
+    })
     onClose()
     toast.success('Welcome to ShelfWise! 🎉')
   }
 
   if (!open) return null
   const kitchenTypes = ['Restaurant', 'Cafe', 'Hotel', 'School', 'Hospital', 'Catering', 'Bakery', 'Other']
+  const totalSteps = 4
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
       <DialogContent className="sm:max-w-[640px] max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            {[0, 1, 2].map(i => (
+            {Array.from({ length: totalSteps }).map((_, i) => (
               <div key={i} className={`h-1.5 rounded-full flex-1 transition ${i <= step ? 'bg-emerald-500' : 'bg-slate-200'}`} />
             ))}
           </div>
           <DialogTitle className="pt-3 text-2xl">
             {step === 0 && 'Welcome to ShelfWise 👋'}
             {step === 1 && 'Set up your kitchen'}
-            {step === 2 && 'Add custom fields (optional)'}
+            {step === 2 && 'What do you want on your dashboard?'}
+            {step === 3 && 'Add custom fields (optional)'}
           </DialogTitle>
         </DialogHeader>
 
@@ -1190,6 +1576,38 @@ function SetupWizard({ open, onClose, settings, saveSettings }) {
 
         {step === 2 && (
           <div className="py-4 space-y-3">
+            <p className="text-sm text-muted-foreground">Tap the cards you want to see on your dashboard. Pick at least one — you can change this later in Settings.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {WIDGET_SUGGESTIONS.map(w => {
+                const Icon = w.icon
+                const active = widgets.includes(w.key)
+                return (
+                  <button
+                    key={w.key}
+                    type="button"
+                    onClick={() => toggleWidget(w.key)}
+                    className={`text-left flex items-start gap-3 p-3 rounded-lg border-2 transition ${active ? 'border-emerald-500 bg-emerald-50/60 shadow-sm' : 'border-slate-200 hover:border-emerald-300 bg-white'}`}
+                  >
+                    <div className={`h-9 w-9 rounded-lg ${w.bg} flex items-center justify-center flex-shrink-0`}>
+                      <Icon className={`h-5 w-5 ${w.color}`} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold">{w.label}</p>
+                        {active && <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">{w.desc}</p>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+            <p className="text-[11px] text-muted-foreground pt-1">{widgets.length} selected</p>
+          </div>
+        )}
+
+        {step === 3 && (
+          <div className="py-4 space-y-3">
             <p className="text-sm text-muted-foreground">Add any extra fields your kitchen tracks — supplier, cost, batch number, etc. Skip if you don't need them.</p>
             <div className="space-y-2">
               {fields.map((f, i) => (
@@ -1219,8 +1637,12 @@ function SetupWizard({ open, onClose, settings, saveSettings }) {
 
         <DialogFooter className="flex justify-between sm:justify-between">
           <Button variant="ghost" onClick={() => step > 0 ? setStep(step - 1) : onClose()}>{step === 0 ? 'Skip' : 'Back'}</Button>
-          {step < 2 ? (
-            <Button onClick={() => setStep(step + 1)} className="bg-emerald-600 hover:bg-emerald-700">
+          {step < totalSteps - 1 ? (
+            <Button
+              onClick={() => setStep(step + 1)}
+              disabled={step === 2 && widgets.length === 0}
+              className="bg-emerald-600 hover:bg-emerald-700"
+            >
               Next <ArrowRight className="h-4 w-4 ml-2" />
             </Button>
           ) : (
@@ -1234,22 +1656,65 @@ function SetupWizard({ open, onClose, settings, saveSettings }) {
   )
 }
 
-function SettingsDialog({ open, onClose, settings, saveSettings }) {
+function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
+  const [tab, setTab] = useState('profile') // 'profile' | 'login' | 'dashboard' | 'fields'
   const [name, setName] = useState('')
   const [type, setType] = useState('Restaurant')
   const [fields, setFields] = useState([])
+  const [inviteCode, setInviteCode] = useState('')
+  const [alertEmail, setAlertEmail] = useState('')
+  const [testing, setTesting] = useState(false)
+  const [widgets, setWidgets] = useState([])
+  const ALL_WIDGETS = [
+    { key: 'all_items', label: 'All Items count' },
+    { key: 'expiring', label: 'Expiring Soon' },
+    { key: 'expired', label: 'Expired items' },
+    { key: 'critical', label: 'Critical Stock level' },
+    { key: 'expiry_alerts', label: 'Expiry alert banner' },
+    { key: 'urgent_list', label: 'Urgent items list' },
+    { key: 'search', label: 'Global search box' },
+  ]
 
   useEffect(() => {
     if (open) {
+      setTab('profile')
       setName(settings.kitchenName || '')
       setType(settings.kitchenType || 'Restaurant')
       setFields(settings.customFields?.length ? [...settings.customFields] : [])
+      setInviteCode(settings.inviteCode || '')
+      setAlertEmail(settings.alertEmail || '')
+      setWidgets(Array.isArray(settings.dashboardWidgets) ? settings.dashboardWidgets : ALL_WIDGETS.map(w => w.key))
     }
   }, [open])
 
-  const addField = () => setFields([...fields, { key: `field_${fields.length + 1}`, label: '', type: 'text' }])
-  const updateField = (i, patch) => setFields(fields.map((f, idx) => idx === i ? { ...f, ...patch } : f))
-  const removeField = (i) => setFields(fields.filter((_, idx) => idx !== i))
+  const toggleWidget = (k) => setWidgets(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
+
+  const addField = () => {
+    const newField = { key: `field_${fields.length + 1}_${Date.now().toString(36)}`, label: '', type: 'text' }
+    setFields(prev => [...prev, newField])
+    // Scroll to bottom of fields list after render
+    setTimeout(() => {
+      const el = document.getElementById('cf-list-end')
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }, 50)
+  }
+  const updateField = (i, patch) => setFields(prev => prev.map((f, idx) => idx === i ? { ...f, ...patch } : f))
+  const removeField = (i) => setFields(prev => prev.filter((_, idx) => idx !== i))
+  const rotateCode = () => setInviteCode(Math.floor(100000 + Math.random() * 900000).toString())
+
+  const sendTestEmail = async () => {
+    if (!alertEmail.trim()) { toast.error('Set an alert email first'); return }
+    setTesting(true)
+    try {
+      await saveSettings({ kitchenName: name.trim(), kitchenType: type, customFields: fields.filter(f => f.label.trim()), inviteCode, alertEmail: alertEmail.trim(), onboarded: true })
+      const res = await fetch('/api/email/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: alertEmail.trim() }) })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed')
+      toast.success(`Test email sent to ${alertEmail}! Check your inbox.`)
+    } catch (e) {
+      toast.error(e.message || 'Failed to send')
+    } finally { setTesting(false) }
+  }
 
   const save = async () => {
     const cleanFields = fields.filter(f => f.label.trim()).map(f => ({
@@ -1257,63 +1722,380 @@ function SettingsDialog({ open, onClose, settings, saveSettings }) {
       label: f.label.trim(),
       type: f.type || 'text'
     }))
-    await saveSettings({ kitchenName: name.trim(), kitchenType: type, customFields: cleanFields, onboarded: true })
+    await saveSettings({ kitchenName: name.trim(), kitchenType: type, customFields: cleanFields, inviteCode, alertEmail: alertEmail.trim(), dashboardWidgets: widgets, onboarded: true })
     onClose()
   }
 
   const kitchenTypes = ['Restaurant', 'Cafe', 'Hotel', 'School', 'Hospital', 'Catering', 'Bakery', 'Other']
 
+  const tabs = [
+    { key: 'profile', label: 'Kitchen Profile', icon: ChefHat },
+    { key: 'login', label: 'Login & Alerts', icon: Settings },
+    { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { key: 'fields', label: 'Custom Fields', icon: Package },
+  ]
+
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-[640px] max-h-[92vh] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-[680px] max-h-[92vh] overflow-hidden flex flex-col p-0">
+        <DialogHeader className="px-6 pt-6 pb-3 border-b">
           <DialogTitle className="flex items-center gap-2"><Settings className="h-5 w-5" /> Kitchen Settings</DialogTitle>
         </DialogHeader>
-        <div className="py-2 space-y-4">
-          <div>
-            <Label>Kitchen Name</Label>
-            <Input value={name} onChange={e => setName(e.target.value)} />
-          </div>
-          <div>
-            <Label>Kitchen Type</Label>
-            <Select value={type} onValueChange={setType}>
-              <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-              <SelectContent>{kitchenTypes.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <Label>Custom Fields</Label>
-              <Button variant="outline" size="sm" onClick={addField}><Plus className="h-4 w-4 mr-1" /> Add</Button>
-            </div>
-            {fields.length === 0 && <p className="text-xs text-muted-foreground">No custom fields yet. Add fields like supplier, cost, batch number, etc.</p>}
-            <div className="space-y-2">
-              {fields.map((f, i) => (
-                <div key={i} className="flex gap-2 items-end">
-                  <div className="flex-1">
-                    <Input value={f.label} onChange={e => updateField(i, { label: e.target.value })} placeholder="Field name" />
-                  </div>
-                  <Select value={f.type} onValueChange={v => updateField(i, { type: v })}>
-                    <SelectTrigger className="w-28"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="text">Text</SelectItem>
-                      <SelectItem value="number">Number</SelectItem>
-                      <SelectItem value="date">Date</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Button variant="ghost" size="icon" onClick={() => removeField(i)}><X className="h-4 w-4" /></Button>
-                </div>
-              ))}
-            </div>
+
+        {/* Tabs */}
+        <div className="px-6 pt-3 border-b bg-slate-50/60">
+          <div className="flex gap-1">
+            {tabs.map(t => {
+              const Icon = t.icon
+              return (
+                <button key={t.key} onClick={() => setTab(t.key)}
+                  className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition ${tab === t.key ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-slate-600 hover:text-slate-900'}`}>
+                  <Icon className="h-4 w-4" /> {t.label}
+                </button>
+              )
+            })}
           </div>
         </div>
-        <DialogFooter>
+
+        <div className="flex-1 overflow-y-auto px-6 py-5">
+          {tab === 'profile' && (
+            <div className="space-y-4">
+              <div>
+                <Label>Kitchen Name</Label>
+                <Input value={name} onChange={e => setName(e.target.value)} placeholder="Bella Cucina" />
+              </div>
+              <div>
+                <Label>Kitchen Type</Label>
+                <Select value={type} onValueChange={setType}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>{kitchenTypes.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <p className="text-xs text-muted-foreground">These appear in the header and your email alerts.</p>
+
+              {openWizard && (
+                <div className="pt-4 mt-2 border-t">
+                  <Label className="text-sm font-semibold">Setup Wizard</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5 mb-2">Re-run the setup wizard to revisit kitchen type, dashboard widgets, and custom fields.</p>
+                  <Button variant="outline" size="sm" onClick={openWizard}>
+                    <Sparkles className="h-4 w-4 mr-2" /> Re-run setup wizard
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === 'login' && (
+            <div className="space-y-5">
+              <div className="rounded-lg border-2 border-emerald-200 bg-emerald-50 p-4">
+                <Label className="text-emerald-900 text-sm font-bold">🔑 Kitchen Login Code</Label>
+                <p className="text-xs text-emerald-700 mt-1 mb-3">Share this code with your team so they can sign in.</p>
+                <div className="flex gap-2">
+                  <Input value={inviteCode} onChange={e => setInviteCode(e.target.value)} className="text-center font-mono text-xl tracking-[0.25em] bg-white h-12" />
+                  <Button variant="outline" size="sm" type="button" onClick={rotateCode}>New Code</Button>
+                </div>
+              </div>
+
+              <div className="rounded-lg border-2 border-amber-200 bg-amber-50 p-4">
+                <Label className="text-amber-900 text-sm font-bold">📧 Alert Email</Label>
+                <p className="text-xs text-amber-700 mt-1 mb-3">Daily expiry alerts will be sent here.</p>
+                <div className="flex gap-2">
+                  <Input type="email" value={alertEmail} onChange={e => setAlertEmail(e.target.value)} placeholder="chef@kitchen.com" className="bg-white" />
+                  <Button variant="outline" size="sm" type="button" onClick={sendTestEmail} disabled={testing}>
+                    {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send Test'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {tab === 'dashboard' && (
+            <div className="space-y-3">
+              <div>
+                <Label>Dashboard widgets</Label>
+                <p className="text-xs text-muted-foreground">Tick what you want to see on the home screen.</p>
+              </div>
+              <div className="space-y-2">
+                {ALL_WIDGETS.map(w => (
+                  <label key={w.key} className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition ${widgets.includes(w.key) ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-emerald-300'}`}>
+                    <input type="checkbox" checked={widgets.includes(w.key)} onChange={() => toggleWidget(w.key)} className="h-4 w-4 accent-emerald-600" />
+                    <span className="text-sm font-medium">{w.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {tab === 'fields' && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label>Custom Fields</Label>
+                  <p className="text-xs text-muted-foreground">Track extras like supplier, cost, batch number, etc.</p>
+                </div>
+                <Button variant="default" size="sm" onClick={addField} className="bg-emerald-600 hover:bg-emerald-700"><Plus className="h-4 w-4 mr-1" /> Add Field</Button>
+              </div>
+
+              {fields.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground border-2 border-dashed rounded-lg">
+                  <Package className="h-10 w-10 mx-auto mb-2 opacity-30" />
+                  <p className="text-sm font-medium">No custom fields yet</p>
+                  <p className="text-xs">Click "Add Field" above to create one.</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {fields.map((f, i) => (
+                    <div key={f.key || i} className="flex gap-2 items-center bg-white border rounded-lg p-2">
+                      <span className="text-xs text-muted-foreground font-semibold w-6 text-center">{i + 1}</span>
+                      <Input value={f.label} onChange={e => updateField(i, { label: e.target.value })} placeholder="Field name (e.g. Supplier)" className="flex-1" />
+                      <Select value={f.type} onValueChange={v => updateField(i, { type: v })}>
+                        <SelectTrigger className="w-28 shrink-0"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="text">Text</SelectItem>
+                          <SelectItem value="number">Number</SelectItem>
+                          <SelectItem value="date">Date</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button variant="ghost" size="icon" onClick={() => removeField(i)} className="text-red-600 hover:bg-red-50 shrink-0"><X className="h-4 w-4" /></Button>
+                    </div>
+                  ))}
+                  <div id="cf-list-end" />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter className="px-6 py-4 border-t bg-slate-50/60">
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={save} className="bg-emerald-600 hover:bg-emerald-700"><Check className="h-4 w-4 mr-2" /> Save</Button>
+          <Button onClick={save} className="bg-emerald-600 hover:bg-emerald-700"><Check className="h-4 w-4 mr-2" /> Save All</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   )
 }
+
+function LoginGate({ settings, onAuth, saveSettings }) {
+  const [mode, setMode] = useState('email')
+  const [code, setCode] = useState('')
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [kitchenName, setKitchenName] = useState('')
+  const [kitchenType, setKitchenType] = useState('Restaurant')
+  const [generatedCode, setGeneratedCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [step, setStep] = useState('login') // 'login' | 'type' | 'widgets' | 'code'
+  const KITCHEN_TYPES = ['Restaurant', 'Cafe', 'Hotel', 'School', 'Hospital', 'Catering', 'Bakery', 'Other']
+  const ALL_WIDGETS = [
+    { key: 'all_items', label: 'All Items', desc: 'Total products in stock', icon: Boxes, color: 'text-slate-600', bg: 'bg-slate-50' },
+    { key: 'expiring', label: 'Expiring Soon', desc: 'Items expiring within 7 days', icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
+    { key: 'expired', label: 'Expired', desc: 'Items already past expiry', icon: PackageX, color: 'text-red-600', bg: 'bg-red-50' },
+    { key: 'critical', label: 'Critical Stock', desc: 'Products running low', icon: AlertTriangle, color: 'text-orange-600', bg: 'bg-orange-50' },
+    { key: 'expiry_alerts', label: 'Expiry Alert Banner', desc: 'Big alert when items expire', icon: AlertCircle, color: 'text-rose-600', bg: 'bg-rose-50' },
+    { key: 'search', label: 'Global Search', desc: 'Quick search box on dashboard', icon: Search, color: 'text-blue-600', bg: 'bg-blue-50' },
+  ]
+  const [chosenWidgets, setChosenWidgets] = useState(ALL_WIDGETS.map(w => w.key))
+  const hasInvite = !!(settings && settings.inviteCode)
+
+  const toggleWidget = (k) => setChosenWidgets(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
+
+  const tryCode = async (e) => {
+    e?.preventDefault()
+    if (!code.trim()) { toast.error('Enter the kitchen code'); return }
+    if (!hasInvite) { toast.error('No kitchen set up yet. Use the Email tab first.'); return }
+    setBusy(true)
+    try {
+      const res = await fetch('/api/auth/verify-code', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code.trim() })
+      })
+      if (!res.ok) { const d = await res.json().catch(() => ({})); toast.error(d.error || 'Invalid code'); return }
+      if (name.trim()) localStorage.setItem('shelfwise_user', name.trim())
+      toast.success(`Welcome${name ? ', ' + name : ''}! 🎉`)
+      onAuth()
+    } finally { setBusy(false) }
+  }
+
+  const signInEmail = async (e) => {
+    e?.preventDefault()
+    if (!email.trim()) { toast.error('Email required'); return }
+    if (hasInvite) {
+      // existing kitchen — just sign in
+      localStorage.setItem('shelfwise_user', name.trim() || email.trim())
+      toast.success(`Welcome${name ? ', ' + name : ''}! 🎉`)
+      onAuth()
+      return
+    }
+    // First time setup — pick kitchen type next
+    if (!kitchenName.trim()) { toast.error('Kitchen name required'); return }
+    setStep('type')
+  }
+
+  const finishSetup = async () => {
+    setBusy(true)
+    try {
+      const newCode = Math.floor(100000 + Math.random() * 900000).toString()
+      const next = {
+        ...settings,
+        kitchenName: kitchenName.trim(),
+        kitchenType,
+        alertEmail: email.trim(),
+        inviteCode: newCode,
+        onboarded: true,
+        dashboardWidgets: chosenWidgets,
+      }
+      await saveSettings(next)
+      setGeneratedCode(newCode)
+      setStep('code')
+      if (name.trim()) localStorage.setItem('shelfwise_user', name.trim())
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-gradient-to-br from-emerald-50 via-white to-amber-50 flex items-center justify-center p-4 overflow-y-auto">
+      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border p-8">
+        <div className="text-center mb-6">
+          <div className="h-14 w-14 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 mx-auto flex items-center justify-center mb-3 shadow-md">
+            <ChefHat className="h-7 w-7 text-white" />
+          </div>
+          <h1 className="text-2xl font-bold">ShelfWise</h1>
+          <p className="text-sm text-muted-foreground mt-1">From shelf to plate — never lose track.</p>
+        </div>
+
+        {step === 'code' && generatedCode && (
+          <div className="space-y-4">
+            <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 p-5 text-center">
+              <p className="text-xs font-semibold text-emerald-800 uppercase tracking-wider">Your kitchen code</p>
+              <p className="text-4xl font-bold tracking-[0.3em] text-emerald-700 my-3 font-mono">{generatedCode}</p>
+              <p className="text-xs text-emerald-700">Share this code with your team. They'll use it to log in.</p>
+            </div>
+            <Button className="w-full bg-emerald-600 hover:bg-emerald-700" onClick={onAuth}>
+              <Check className="h-4 w-4 mr-2" /> Enter ShelfWise
+            </Button>
+          </div>
+        )}
+
+        {step === 'type' && (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-bold">What type of kitchen?</h2>
+              <p className="text-xs text-muted-foreground mt-1">This helps us tailor your dashboard.</p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {KITCHEN_TYPES.map(t => (
+                <button key={t} type="button" onClick={() => setKitchenType(t)}
+                  className={`text-sm py-3 px-3 rounded-lg border-2 font-medium transition ${kitchenType === t ? 'bg-emerald-600 text-white border-emerald-600' : 'hover:border-emerald-300 border-slate-200 bg-white'}`}>
+                  {t}
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-between pt-2">
+              <Button variant="ghost" onClick={() => setStep('login')}>Back</Button>
+              <Button onClick={() => setStep('widgets')} className="bg-emerald-600 hover:bg-emerald-700">
+                Next <ArrowRight className="h-4 w-4 ml-2" />
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {step === 'widgets' && (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-bold">What do you want on your dashboard?</h2>
+              <p className="text-xs text-muted-foreground mt-1">Tap the cards you want. Pick at least one — you can change this anytime in Settings.</p>
+            </div>
+            <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
+              {ALL_WIDGETS.map(w => {
+                const Icon = w.icon
+                const active = chosenWidgets.includes(w.key)
+                return (
+                  <button
+                    key={w.key}
+                    type="button"
+                    onClick={() => toggleWidget(w.key)}
+                    className={`w-full text-left flex items-start gap-3 p-3 rounded-lg border-2 transition ${active ? 'border-emerald-500 bg-emerald-50/60 shadow-sm' : 'border-slate-200 hover:border-emerald-300 bg-white'}`}
+                  >
+                    <div className={`h-9 w-9 rounded-lg ${w.bg} flex items-center justify-center flex-shrink-0`}>
+                      <Icon className={`h-5 w-5 ${w.color}`} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold">{w.label}</p>
+                        {active && <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">{w.desc}</p>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+            <p className="text-[11px] text-muted-foreground">{chosenWidgets.length} selected</p>
+            <div className="flex justify-between">
+              <Button variant="ghost" onClick={() => setStep('type')}>Back</Button>
+              <Button onClick={finishSetup} disabled={busy || chosenWidgets.length === 0} className="bg-emerald-600 hover:bg-emerald-700">
+                {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />} Create Kitchen
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {step === 'login' && (
+          <>
+            <p className="text-center text-sm text-muted-foreground mb-4">Sign in with</p>
+            <div className="flex gap-2 mb-5 p-1 bg-slate-100 rounded-lg">
+              <button onClick={() => setMode('email')} className={`flex-1 py-2.5 text-sm font-semibold rounded-md transition flex items-center justify-center gap-1.5 ${mode === 'email' ? 'bg-white shadow text-slate-900' : 'text-slate-600 hover:text-slate-800'}`}>
+                📧 Email
+              </button>
+              <button onClick={() => setMode('code')} className={`flex-1 py-2.5 text-sm font-semibold rounded-md transition flex items-center justify-center gap-1.5 ${mode === 'code' ? 'bg-white shadow text-slate-900' : 'text-slate-600 hover:text-slate-800'}`}>
+                🔑 Code
+              </button>
+            </div>
+
+            {mode === 'code' && (
+              <form onSubmit={tryCode} className="space-y-4">
+                <p className="text-xs text-muted-foreground">{hasInvite ? 'Enter the 6-digit code your head chef shared.' : '⚠️ No kitchen set up yet. Use the Email tab first.'}</p>
+                <div>
+                  <Label>Your name <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                  <Input value={name} onChange={e => setName(e.target.value)} placeholder="Chef Anna" />
+                </div>
+                <div>
+                  <Label>Kitchen code</Label>
+                  <Input value={code} onChange={e => setCode(e.target.value)} placeholder="6-digit code" className="text-center text-2xl tracking-[0.3em] font-mono h-14" maxLength={10} />
+                </div>
+                <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700" disabled={busy || !hasInvite}>
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />} Enter Kitchen
+                </Button>
+              </form>
+            )}
+
+            {mode === 'email' && (
+              <form onSubmit={signInEmail} className="space-y-4">
+                <p className="text-xs text-muted-foreground">{hasInvite ? 'Sign in with your email.' : 'First time? Set up your new kitchen below.'}</p>
+                <div>
+                  <Label>Your name</Label>
+                  <Input value={name} onChange={e => setName(e.target.value)} placeholder="Head Chef" />
+                </div>
+                <div>
+                  <Label>Email <span className="text-muted-foreground font-normal">{!hasInvite && '(for alerts)'}</span></Label>
+                  <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="chef@kitchen.com" />
+                </div>
+                {!hasInvite && (
+                  <div>
+                    <Label>Kitchen name</Label>
+                    <Input value={kitchenName} onChange={e => setKitchenName(e.target.value)} placeholder="Bella Cucina" />
+                  </div>
+                )}
+                <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700" disabled={busy}>
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : (hasInvite ? <Check className="h-4 w-4 mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />)} {hasInvite ? 'Sign In' : 'Continue →'}
+                </Button>
+              </form>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 
 export default App
