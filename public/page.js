@@ -36,14 +36,10 @@ function getInitialFromURL() {
 function guessShelfLifeDays(category = '', storageType = '') {
   const c = String(category || '').toLowerCase()
   const s = String(storageType || '').toLowerCase()
-  if (s === 'freezer') return 90
-  if (s === 'dry' || s === 'ambient') {
-    if (c.includes('grain') || c.includes('rice') || c.includes('pasta') || c.includes('dry')) return 180
-    if (c.includes('can') || c.includes('tin')) return 365
-    if (c.includes('spice')) return 365
-    return 90
-  }
-  // Fridge defaults
+  if (s === 'freezer') return 60       // ~2 months for freezer items
+  if (s === 'dry') return 90           // ~3 months for dry storage
+  if (s === 'ambient') return 90       // ~3 months for ambient (similar to dry)
+  // Fridge defaults (category-specific)
   if (c.includes('fish') || c.includes('seafood')) return 2
   if (c.includes('meat') || c.includes('chicken') || c.includes('poultry')) return 3
   if (c.includes('dairy') || c.includes('milk') || c.includes('yogurt') || c.includes('cheese')) return 7
@@ -51,6 +47,13 @@ function guessShelfLifeDays(category = '', storageType = '') {
   if (c.includes('egg')) return 21
   if (c.includes('sauce') || c.includes('condiment')) return 30
   return 7 // safe fridge default
+}
+
+// Helper: get an ISO date N days from today (YYYY-MM-DD)
+function dateInDays(days) {
+  const d = new Date()
+  d.setDate(d.getDate() + days)
+  return d.toISOString().slice(0, 10)
 }
 
 function App() {
@@ -812,12 +815,21 @@ function App() {
             </div>
             <div>
               <Label htmlFor="storage">Storage</Label>
-              <Select value={form.storageType} onValueChange={v => setForm({ ...form, storageType: v })}>
+              <Select
+                value={form.storageType}
+                onValueChange={(v) => {
+                  // Smart auto-expiry: when chef picks storage, suggest expiry date.
+                  // Always update so user sees the helpful suggestion; they can edit if needed.
+                  const days = guessShelfLifeDays(form.category, v)
+                  setForm({ ...form, storageType: v, expiryDate: dateInDays(days) })
+                }}
+              >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {['Fridge', 'Freezer', 'Dry', 'Ambient'].map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
                 </SelectContent>
               </Select>
+              <p className="text-[10px] text-muted-foreground mt-0.5">💡 Expiry auto-set: Fridge ~7d, Freezer ~2 months, Dry/Ambient ~3 months</p>
             </div>
             <div>
               <Label htmlFor="loc">Shelf / Location</Label>
@@ -956,7 +968,13 @@ function App() {
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <Label className="text-xs">Storage</Label>
-                  <Select value={snapItem.storageType || 'Fridge'} onValueChange={v => setSnapItem({ ...snapItem, storageType: v })}>
+                  <Select
+                    value={snapItem.storageType || 'Fridge'}
+                    onValueChange={(v) => {
+                      const days = guessShelfLifeDays(snapItem.category || '', v)
+                      setSnapItem({ ...snapItem, storageType: v, expiryDate: dateInDays(days) })
+                    }}
+                  >
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="Fridge">Fridge</SelectItem>
