@@ -23,6 +23,7 @@ const STATUS_META = {
 const EMPTY_FORM = {
   name: '', quantity: '', unit: 'ea', expiryDate: '', category: '',
   storageType: 'Fridge', location: '', preparedBy: '', imageUrl: '',
+  dateReceived: '',
   customFields: {}
 }
 
@@ -267,7 +268,7 @@ function App() {
 
   const openAdd = () => {
     setEditing(null)
-    setForm(EMPTY_FORM)
+    setForm({ ...EMPTY_FORM, dateReceived: new Date().toISOString().slice(0, 10) })
     setDialogOpen(true)
   }
 
@@ -278,6 +279,7 @@ function App() {
       expiryDate: p.expiryDate || '', category: p.category || '',
       storageType: p.storageType || 'Fridge', location: p.location || '',
       preparedBy: p.preparedBy || '', imageUrl: p.imageUrl || '',
+      dateReceived: p.dateReceived || p.created_at?.slice(0, 10) || '',
       customFields: p.customFields || {}
     })
     setDialogOpen(true)
@@ -856,6 +858,11 @@ function App() {
               <Label htmlFor="loc">Shelf / Location</Label>
               <Input id="loc" value={form.location} onChange={e => setForm({ ...form, location: e.target.value })} placeholder="Shelf A1" />
             </div>
+            <div>
+              <Label htmlFor="dr">📅 Date Received</Label>
+              <Input id="dr" type="date" value={form.dateReceived || ''} onChange={e => setForm({ ...form, dateReceived: e.target.value })} />
+              <p className="text-[10px] text-muted-foreground mt-0.5">Auto-set to today — change if it arrived earlier</p>
+            </div>
             <div className="col-span-2">
               <Label htmlFor="prep">Prepared By</Label>
               <Input id="prep" value={form.preparedBy} onChange={e => setForm({ ...form, preparedBy: e.target.value })} placeholder="Chef name" />
@@ -983,8 +990,47 @@ function App() {
               </div>
               <div>
                 <Label className="text-xs">Expiry date *</Label>
-                <Input type="date" value={snapItem.expiryDate || ''} onChange={e => setSnapItem({ ...snapItem, expiryDate: e.target.value })} />
-                <p className="text-[10px] text-amber-700 mt-0.5">⚠️ Always check the printed date on the package — what you see here is just an estimate</p>
+                <div className="flex gap-2 items-stretch">
+                  <Input type="date" className="flex-1" value={snapItem.expiryDate || ''} onChange={e => setSnapItem({ ...snapItem, expiryDate: e.target.value })} />
+                  <label className="cursor-pointer">
+                    <input type="file" accept="image/*" capture="environment" className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0]
+                        if (!file) return
+                        try {
+                          const dataUrl = await resizeImage(file)
+                          setSnapLoading(true)
+                          const res = await fetch('/api/scan', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ image: dataUrl })
+                          })
+                          const data = await res.json()
+                          if (!res.ok) throw new Error(data.error || 'Scan failed')
+                          const item = (data.items || [])[0]
+                          if (item?.expiryDate) {
+                            setSnapItem(prev => ({ ...prev, expiryDate: item.expiryDate }))
+                            toast.success(`Expiry detected: ${item.expiryDate}`)
+                          } else {
+                            toast.warning('Date not detected — please type manually')
+                          }
+                        } catch (err) {
+                          toast.error('Could not read date. Please type manually.')
+                        } finally {
+                          setSnapLoading(false)
+                          e.target.value = ''
+                        }
+                      }} />
+                    <div className="h-10 px-3 rounded-md border border-emerald-300 bg-emerald-50 text-emerald-700 flex items-center gap-1 text-xs font-semibold hover:bg-emerald-100">
+                      {snapLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <>📸</>} Snap Date
+                    </div>
+                  </label>
+                </div>
+                <p className="text-[10px] text-amber-700 mt-0.5">⚠️ Always check the printed date on the package. Tap &quot;📸 Snap Date&quot; to scan it with AI, or type manually.</p>
+              </div>
+              <div>
+                <Label className="text-xs">Date received (today)</Label>
+                <Input type="date" value={snapItem.dateReceived || new Date().toISOString().slice(0,10)} onChange={e => setSnapItem({ ...snapItem, dateReceived: e.target.value })} />
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
@@ -1310,10 +1356,10 @@ function BarcodeScanDialog({ open, onClose, onFound, loading, onManual }) {
         <div className="py-2 space-y-3">
           {!showManual && (
             <div className="rounded-xl overflow-hidden bg-black relative" style={{ aspectRatio: '4/3' }}>
-              <div id="barcode-reader-region" className="absolute inset-0" />
+              <div id="barcode-reader-region" className="absolute inset-0 [&_video]:!w-full [&_video]:!h-full [&_video]:!object-cover" />
               {!scannerError && (
                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                  <div className="w-[85%] h-[47%] border-2 border-emerald-400 rounded-lg shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]"></div>
+                  <div className="w-[85%] h-[47%] border-[3px] border-emerald-400 rounded-lg"></div>
                 </div>
               )}
               {hasTorch && scanning && (
