@@ -56,6 +56,33 @@ function dateInDays(days) {
   return d.toISOString().slice(0, 10)
 }
 
+// Smart expiry SUGGESTION using calendar-correct math (months for long, days for short).
+// Returns YYYY-MM-DD string.
+function suggestExpiryDate(category = '', storageType = '') {
+  const c = String(category || '').toLowerCase()
+  const s = String(storageType || '').toLowerCase()
+  const d = new Date()
+  // Long-term storage uses calendar MONTHS (so Jun 14 + 2 mo = Aug 14 exactly)
+  if (s === 'freezer') {
+    d.setMonth(d.getMonth() + 2)
+    return d.toISOString().slice(0, 10)
+  }
+  if (s === 'dry' || s === 'ambient') {
+    d.setMonth(d.getMonth() + 3)
+    return d.toISOString().slice(0, 10)
+  }
+  // Fridge uses category-specific days
+  let days = 7
+  if (c.includes('fish') || c.includes('seafood')) days = 2
+  else if (c.includes('meat') || c.includes('chicken') || c.includes('poultry')) days = 3
+  else if (c.includes('dairy') || c.includes('milk') || c.includes('yogurt') || c.includes('cheese')) days = 7
+  else if (c.includes('veg') || c.includes('produce') || c.includes('fruit') || c.includes('herb')) days = 5
+  else if (c.includes('egg')) days = 21
+  else if (c.includes('sauce') || c.includes('condiment')) days = 30
+  d.setDate(d.getDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
 function App() {
   const [initial] = useState(getInitialFromURL)
   const [view, setView] = useState(initial.view) // dashboard | inventory | recipes
@@ -346,16 +373,13 @@ function App() {
           if (cat.includes('frozen')) detected.storageType = 'Freezer'
           else if (cat.includes('dry') || cat.includes('snack') || cat.includes('cereal') || cat.includes('pasta') || cat.includes('rice')) detected.storageType = 'Dry'
           else if (cat.includes('beverage') || cat.includes('drink')) detected.storageType = 'Ambient'
-          // Default expiry estimate
-          const days = guessShelfLifeDays(detected.category, detected.storageType)
-          const d = new Date(); d.setDate(d.getDate() + days)
-          detected.expiryDate = d.toISOString().slice(0, 10)
-          toast.success(`Found: ${detected.name || code}`)
+          // IMPORTANT: leave expiry EMPTY for barcoded products — chef must read actual printed date
+          detected.expiryDate = ''
+          toast.success(`Found: ${detected.name || code}. Please enter the expiry date from the package.`)
         } else {
           toast.info(`Barcode ${code} not in database. Fill details manually.`)
           detected.name = ''
-          const d = new Date(); d.setDate(d.getDate() + 7)
-          detected.expiryDate = d.toISOString().slice(0, 10)
+          detected.expiryDate = ''
         }
       } catch {
         toast.warning('Could not look up barcode. Fill details manually.')
@@ -416,9 +440,7 @@ function App() {
       } else {
         // Set sensible defaults if AI didn't return expiry
         if (!first.expiryDate) {
-          const days = guessShelfLifeDays(first.category, first.storageType)
-          const d = new Date(); d.setDate(d.getDate() + days)
-          first.expiryDate = d.toISOString().slice(0, 10)
+          first.expiryDate = suggestExpiryDate(first.category, first.storageType)
         }
         setSnapItem(first)
         toast.success(`Detected: ${first.name}`)
@@ -820,8 +842,7 @@ function App() {
                 onValueChange={(v) => {
                   // Smart auto-expiry: when chef picks storage, suggest expiry date.
                   // Always update so user sees the helpful suggestion; they can edit if needed.
-                  const days = guessShelfLifeDays(form.category, v)
-                  setForm({ ...form, storageType: v, expiryDate: dateInDays(days) })
+                  setForm({ ...form, storageType: v, expiryDate: suggestExpiryDate(form.category, v) })
                 }}
               >
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -961,9 +982,9 @@ function App() {
                 </div>
               </div>
               <div>
-                <Label className="text-xs">Expiry date</Label>
+                <Label className="text-xs">Expiry date *</Label>
                 <Input type="date" value={snapItem.expiryDate || ''} onChange={e => setSnapItem({ ...snapItem, expiryDate: e.target.value })} />
-                <p className="text-[10px] text-muted-foreground mt-0.5">{snapItem.expiryDate ? '✨ AI-estimated — adjust if package shows different date' : 'No date detected — please set'}</p>
+                <p className="text-[10px] text-amber-700 mt-0.5">⚠️ Always check the printed date on the package — what you see here is just an estimate</p>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div>
@@ -971,8 +992,7 @@ function App() {
                   <Select
                     value={snapItem.storageType || 'Fridge'}
                     onValueChange={(v) => {
-                      const days = guessShelfLifeDays(snapItem.category || '', v)
-                      setSnapItem({ ...snapItem, storageType: v, expiryDate: dateInDays(days) })
+                      setSnapItem({ ...snapItem, storageType: v, expiryDate: suggestExpiryDate(snapItem.category || '', v) })
                     }}
                   >
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -1178,6 +1198,9 @@ function BarcodeScanDialog({ open, onClose, onFound, loading, onManual }) {
   const [manualCode, setManualCode] = useState('')
   const [scannerError, setScannerError] = useState('')
   const [showManual, setShowManual] = useState(false)
+  const [torchOn, setTorchOn] = useState(false)
+  const [hasTorch, setHasTorch] = useState(false)
+  const [scanning, setScanning] = useState(false)
   const scannerRef = useRef(null)
 
   useEffect(() => {
@@ -1185,6 +1208,9 @@ function BarcodeScanDialog({ open, onClose, onFound, loading, onManual }) {
     setManualCode('')
     setScannerError('')
     setShowManual(false)
+    setTorchOn(false)
+    setHasTorch(false)
+    setScanning(false)
     let scanner
     let cancelled = false
     ;(async () => {
@@ -1201,13 +1227,32 @@ function BarcodeScanDialog({ open, onClose, onFound, loading, onManual }) {
             Html5QrcodeSupportedFormats.UPC_E,
             Html5QrcodeSupportedFormats.CODE_128,
             Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.CODE_93,
+            Html5QrcodeSupportedFormats.ITF,
             Html5QrcodeSupportedFormats.QR_CODE,
+            Html5QrcodeSupportedFormats.DATA_MATRIX,
           ],
+          verbose: false,
         })
         scannerRef.current = scanner
+        // Use a larger scan box and request higher resolution for better detection
         await scanner.start(
           { facingMode: 'environment' },
-          { fps: 10, qrbox: { width: 260, height: 160 } },
+          {
+            fps: 15,
+            qrbox: (vw, vh) => {
+              const min = Math.min(vw, vh)
+              const w = Math.floor(min * 0.85)
+              const h = Math.floor(w * 0.55)
+              return { width: w, height: h }
+            },
+            aspectRatio: 1.33,
+            videoConstraints: {
+              facingMode: 'environment',
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+          },
           (decoded) => {
             if (cancelled) return
             try { navigator.vibrate?.(60) } catch {}
@@ -1215,9 +1260,18 @@ function BarcodeScanDialog({ open, onClose, onFound, loading, onManual }) {
           },
           () => {}
         )
+        setScanning(true)
+        // Detect torch support
+        try {
+          const stream = scanner.getRunningTrackCameraCapabilities?.()
+          if (stream && typeof stream.torchFeature === 'function') {
+            const f = stream.torchFeature()
+            if (f?.isSupported && f.isSupported()) setHasTorch(true)
+          }
+        } catch {}
       } catch (e) {
         if (cancelled) return
-        setScannerError('Camera access blocked or unavailable. Please grant camera permission, or enter the barcode manually below.')
+        setScannerError('Camera access blocked or unavailable. Tap "Allow" when your phone asks, or enter the barcode manually below.')
         setShowManual(true)
       }
     })()
@@ -1225,11 +1279,23 @@ function BarcodeScanDialog({ open, onClose, onFound, loading, onManual }) {
       cancelled = true
       const s = scannerRef.current
       if (s) {
-        s.stop().then(() => s.clear()).catch(() => {})
+        try { s.stop().then(() => s.clear()).catch(() => {}) } catch {}
         scannerRef.current = null
       }
     }
   }, [open])
+
+  const toggleTorch = async () => {
+    try {
+      const s = scannerRef.current
+      if (!s) return
+      const caps = s.getRunningTrackCameraCapabilities?.()
+      if (caps?.torchFeature) {
+        await caps.torchFeature().apply(!torchOn)
+        setTorchOn(!torchOn)
+      }
+    } catch {}
+  }
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
@@ -1238,7 +1304,7 @@ function BarcodeScanDialog({ open, onClose, onFound, loading, onManual }) {
           <DialogTitle className="flex items-center gap-2">
             <ScanLine className="h-5 w-5 text-emerald-600" /> Scan Barcode
           </DialogTitle>
-          <p className="text-sm text-muted-foreground">Point your camera at any barcode (EAN, UPC, QR). We&apos;ll look it up and fill product details.</p>
+          <p className="text-sm text-muted-foreground">Hold steady, center the barcode in the green box. Works best with good lighting.</p>
         </DialogHeader>
 
         <div className="py-2 space-y-3">
@@ -1247,8 +1313,18 @@ function BarcodeScanDialog({ open, onClose, onFound, loading, onManual }) {
               <div id="barcode-reader-region" className="absolute inset-0" />
               {!scannerError && (
                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                  <div className="w-3/4 h-1/3 border-2 border-emerald-400 rounded-lg shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]"></div>
+                  <div className="w-[85%] h-[47%] border-2 border-emerald-400 rounded-lg shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]"></div>
                 </div>
+              )}
+              {hasTorch && scanning && (
+                <button
+                  type="button"
+                  onClick={toggleTorch}
+                  className={`absolute bottom-3 right-3 h-10 w-10 rounded-full flex items-center justify-center text-xl shadow-lg transition ${torchOn ? 'bg-amber-400 text-white' : 'bg-white/90 text-slate-800'}`}
+                  aria-label="Toggle torch"
+                >
+                  💡
+                </button>
               )}
               {loading && (
                 <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-sm font-medium gap-2">
@@ -1262,13 +1338,23 @@ function BarcodeScanDialog({ open, onClose, onFound, loading, onManual }) {
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">{scannerError}</p>
           )}
 
+          <div className="rounded-lg bg-blue-50 border border-blue-200 p-2.5 text-xs text-blue-900">
+            <p className="font-semibold mb-1">📷 Tips for better scanning:</p>
+            <ul className="list-disc pl-4 space-y-0.5 text-blue-800">
+              <li>Hold phone <strong>10-15 cm</strong> away from barcode</li>
+              <li>Make sure barcode is <strong>flat & well-lit</strong></li>
+              <li>Tap 💡 torch button (above) in dim lighting</li>
+              <li>If it fails after 5 sec → type the digits manually below</li>
+            </ul>
+          </div>
+
           <div className="space-y-2">
             <button type="button" className="text-xs text-emerald-700 underline" onClick={() => setShowManual(!showManual)}>
-              {showManual ? '← Use camera instead' : '⌨️ Type barcode manually'}
+              {showManual ? '← Use camera instead' : '⌨️ Type barcode digits manually'}
             </button>
             {showManual && (
               <form onSubmit={(e) => { e.preventDefault(); if (manualCode.trim()) onManual(manualCode.trim()) }} className="flex gap-2">
-                <Input value={manualCode} onChange={e => setManualCode(e.target.value.replace(/[^\d]/g, ''))} placeholder="Enter barcode digits (e.g. 5012345678900)" autoFocus />
+                <Input value={manualCode} onChange={e => setManualCode(e.target.value.replace(/[^\d]/g, ''))} placeholder="Enter barcode digits (e.g. 5012345678900)" autoFocus inputMode="numeric" />
                 <Button type="submit" disabled={!manualCode.trim() || loading} className="bg-emerald-600 hover:bg-emerald-700">
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Look up'}
                 </Button>
@@ -1276,7 +1362,7 @@ function BarcodeScanDialog({ open, onClose, onFound, loading, onManual }) {
             )}
           </div>
 
-          <p className="text-[11px] text-muted-foreground text-center">💡 Powered by Open Food Facts — 2.8M+ products in the free database</p>
+          <p className="text-[11px] text-muted-foreground text-center">💡 Powered by Open Food Facts (2.8M+ products) — some barcodes may not be in the free database</p>
         </div>
 
         <DialogFooter>
