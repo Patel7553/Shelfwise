@@ -114,7 +114,11 @@ function App() {
       const res = await fetch('/api/settings')
       const data = await res.json()
       setSettings(data)
-      if (data && data.onboarded === false) setWizardOpen(true)
+      // If kitchen isn't onboarded yet, force user back to LoginGate setup flow
+      if (data && data.onboarded === false) {
+        try { localStorage.removeItem('shelfwise_authed') } catch {}
+        setAuthed(false)
+      }
     } catch {}
   }
 
