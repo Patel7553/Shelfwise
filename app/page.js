@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -82,6 +82,11 @@ function App() {
   const [snapLoading, setSnapLoading] = useState(false)
   const [snapItem, setSnapItem] = useState(null)
   const [snapSaving, setSnapSaving] = useState(false)
+
+  // Barcode Scanner state
+  const [barcodeOpen, setBarcodeOpen] = useState(false)
+  const [barcodeLoading, setBarcodeLoading] = useState(false)
+  const [barcodeValue, setBarcodeValue] = useState('')
 
   // Recipe Scan state
   const [recipeOpen, setRecipeOpen] = useState(false)
@@ -294,6 +299,71 @@ function App() {
     setSnapImage(null)
     setSnapItem(null)
     setSnapOpen(true)
+  }
+
+  // Open Barcode scanner
+  const openBarcode = () => {
+    setBarcodeValue('')
+    setBarcodeOpen(true)
+  }
+
+  // Lookup barcode from Open Food Facts then open Snap form prefilled
+  const onBarcodeFound = async (code) => {
+    setBarcodeValue(code)
+    setBarcodeLoading(true)
+    try {
+      let detected = {
+        name: '',
+        quantity: 1,
+        unit: 'ea',
+        expiryDate: '',
+        category: '',
+        storageType: 'Fridge',
+        location: '',
+        barcode: code,
+      }
+      // Try Open Food Facts (free, public, no key)
+      try {
+        const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(code)}.json`)
+        const data = await res.json()
+        if (data?.status === 1 && data?.product) {
+          const p = data.product
+          detected.name = p.product_name || p.product_name_en || p.generic_name || ''
+          detected.category = (p.categories || '').split(',')[0]?.trim() || ''
+          if (p.quantity) {
+            const m = String(p.quantity).match(/([\d.]+)\s*(kg|g|L|ml|mL|cl)/i)
+            if (m) {
+              detected.quantity = Number(m[1])
+              const u = m[2].toLowerCase()
+              detected.unit = u === 'ml' ? 'mL' : (u === 'l' ? 'L' : u)
+            }
+          }
+          // Guess storage from category
+          const cat = detected.category.toLowerCase()
+          if (cat.includes('frozen')) detected.storageType = 'Freezer'
+          else if (cat.includes('dry') || cat.includes('snack') || cat.includes('cereal') || cat.includes('pasta') || cat.includes('rice')) detected.storageType = 'Dry'
+          else if (cat.includes('beverage') || cat.includes('drink')) detected.storageType = 'Ambient'
+          // Default expiry estimate
+          const days = guessShelfLifeDays(detected.category, detected.storageType)
+          const d = new Date(); d.setDate(d.getDate() + days)
+          detected.expiryDate = d.toISOString().slice(0, 10)
+          toast.success(`Found: ${detected.name || code}`)
+        } else {
+          toast.info(`Barcode ${code} not in database. Fill details manually.`)
+          detected.name = ''
+          const d = new Date(); d.setDate(d.getDate() + 7)
+          detected.expiryDate = d.toISOString().slice(0, 10)
+        }
+      } catch {
+        toast.warning('Could not look up barcode. Fill details manually.')
+      }
+      setBarcodeOpen(false)
+      setSnapItem(detected)
+      setSnapImage(null)
+      setSnapOpen(true)
+    } finally {
+      setBarcodeLoading(false)
+    }
   }
 
   const resizeImage = (file) => new Promise((resolve, reject) => {
@@ -673,7 +743,7 @@ function App() {
 
       <main className="container mx-auto px-4 py-8">
         {view === 'dashboard' && (
-          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} />
+          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -689,6 +759,7 @@ function App() {
             openAdd={openAdd}
             openScan={openScan}
             openSnap={openSnap}
+            openBarcode={openBarcode}
             openEdit={openEdit}
             deleteProduct={deleteProduct}
             exportCSV={exportCSV}
@@ -800,6 +871,15 @@ function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* Barcode Scanner Dialog */}
+      <BarcodeScanDialog
+        open={barcodeOpen}
+        onClose={() => setBarcodeOpen(false)}
+        onFound={onBarcodeFound}
+        loading={barcodeLoading}
+        onManual={(code) => onBarcodeFound(code)}
+      />
+
       {/* AI Snap Label Dialog — single product photo */}
       <Dialog open={snapOpen} onOpenChange={setSnapOpen}>
         <DialogContent className="sm:max-w-[520px] max-h-[92vh] overflow-y-auto">
@@ -1076,6 +1156,119 @@ function App() {
   )
 }
 
+function BarcodeScanDialog({ open, onClose, onFound, loading, onManual }) {
+  const [manualCode, setManualCode] = useState('')
+  const [scannerError, setScannerError] = useState('')
+  const [showManual, setShowManual] = useState(false)
+  const scannerRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    setManualCode('')
+    setScannerError('')
+    setShowManual(false)
+    let scanner
+    let cancelled = false
+    ;(async () => {
+      try {
+        const mod = await import('html5-qrcode')
+        if (cancelled) return
+        const { Html5Qrcode, Html5QrcodeSupportedFormats } = mod
+        const elId = 'barcode-reader-region'
+        scanner = new Html5Qrcode(elId, {
+          formatsToSupport: [
+            Html5QrcodeSupportedFormats.EAN_13,
+            Html5QrcodeSupportedFormats.EAN_8,
+            Html5QrcodeSupportedFormats.UPC_A,
+            Html5QrcodeSupportedFormats.UPC_E,
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.QR_CODE,
+          ],
+        })
+        scannerRef.current = scanner
+        await scanner.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: { width: 260, height: 160 } },
+          (decoded) => {
+            if (cancelled) return
+            try { navigator.vibrate?.(60) } catch {}
+            onFound(decoded)
+          },
+          () => {}
+        )
+      } catch (e) {
+        if (cancelled) return
+        setScannerError('Camera access blocked or unavailable. Please grant camera permission, or enter the barcode manually below.')
+        setShowManual(true)
+      }
+    })()
+    return () => {
+      cancelled = true
+      const s = scannerRef.current
+      if (s) {
+        s.stop().then(() => s.clear()).catch(() => {})
+        scannerRef.current = null
+      }
+    }
+  }, [open])
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-[520px] max-h-[92vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ScanLine className="h-5 w-5 text-emerald-600" /> Scan Barcode
+          </DialogTitle>
+          <p className="text-sm text-muted-foreground">Point your camera at any barcode (EAN, UPC, QR). We&apos;ll look it up and fill product details.</p>
+        </DialogHeader>
+
+        <div className="py-2 space-y-3">
+          {!showManual && (
+            <div className="rounded-xl overflow-hidden bg-black relative" style={{ aspectRatio: '4/3' }}>
+              <div id="barcode-reader-region" className="absolute inset-0" />
+              {!scannerError && (
+                <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                  <div className="w-3/4 h-1/3 border-2 border-emerald-400 rounded-lg shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]"></div>
+                </div>
+              )}
+              {loading && (
+                <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-sm font-medium gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Looking up product...
+                </div>
+              )}
+            </div>
+          )}
+
+          {scannerError && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">{scannerError}</p>
+          )}
+
+          <div className="space-y-2">
+            <button type="button" className="text-xs text-emerald-700 underline" onClick={() => setShowManual(!showManual)}>
+              {showManual ? '← Use camera instead' : '⌨️ Type barcode manually'}
+            </button>
+            {showManual && (
+              <form onSubmit={(e) => { e.preventDefault(); if (manualCode.trim()) onManual(manualCode.trim()) }} className="flex gap-2">
+                <Input value={manualCode} onChange={e => setManualCode(e.target.value.replace(/[^\d]/g, ''))} placeholder="Enter barcode digits (e.g. 5012345678900)" autoFocus />
+                <Button type="submit" disabled={!manualCode.trim() || loading} className="bg-emerald-600 hover:bg-emerald-700">
+                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Look up'}
+                </Button>
+              </form>
+            )}
+          </div>
+
+          <p className="text-[11px] text-muted-foreground text-center">💡 Powered by Open Food Facts — 2.8M+ products in the free database</p>
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function UseTodayPanel({ products, goToInventory, formatDate }) {
   // Items expiring today or tomorrow
   const today = new Date(); today.setHours(0,0,0,0)
@@ -1175,7 +1368,7 @@ function UseTodayPanel({ products, goToInventory, formatDate }) {
   )
 }
 
-function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openRecipe, onViewRecipe, widgets }) {
+function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openRecipe, onViewRecipe, widgets }) {
   const [quickSearch, setQuickSearch] = useState('')
   const [globalResults, setGlobalResults] = useState(null)
   const [globalLoading, setGlobalLoading] = useState(false)
@@ -1224,6 +1417,9 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
               <Sparkles className="h-4 w-4 mr-2" /> Load sample data
             </Button>
           )}
+          <Button variant="outline" onClick={openBarcode} className="border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold">
+            <ScanLine className="h-4 w-4 mr-2" /> 🔢 Barcode
+          </Button>
           <Button variant="outline" onClick={openSnap} className="border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-semibold">
             <Sparkles className="h-4 w-4 mr-2" /> 📸 Snap Label
           </Button>
@@ -1663,7 +1859,7 @@ function ViewRecipeDialog({ recipe, onClose, onDelete }) {
   )
 }
 
-function InventoryView({ products, loading, statusFilter, setStatusFilter, search, setSearch, sort, setSort, categoryFilter, setCategoryFilter, storageFilter, setStorageFilter, facets, openAdd, openScan, openSnap, openEdit, deleteProduct, exportCSV, formatDate }) {
+function InventoryView({ products, loading, statusFilter, setStatusFilter, search, setSearch, sort, setSort, categoryFilter, setCategoryFilter, storageFilter, setStorageFilter, facets, openAdd, openScan, openSnap, openBarcode, openEdit, deleteProduct, exportCSV, formatDate }) {
   const activeFilters = [statusFilter !== 'All', categoryFilter !== 'All', storageFilter !== 'All', !!search].filter(Boolean).length
   return (
     <div className="space-y-6">
@@ -1674,6 +1870,7 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
         </div>
         <div className="flex gap-2 flex-wrap">
           <Button variant="outline" onClick={exportCSV}><Download className="h-4 w-4 mr-2" /> Export CSV</Button>
+          <Button variant="outline" onClick={openBarcode} className="border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold"><ScanLine className="h-4 w-4 mr-2" /> 🔢 Barcode</Button>
           <Button variant="outline" onClick={openSnap} className="border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-semibold"><Sparkles className="h-4 w-4 mr-2" /> 📸 Snap Label</Button>
           <Button variant="outline" onClick={openScan} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"><ScanLine className="h-4 w-4 mr-2" /> Scan Logbook</Button>
           <Button onClick={openAdd} className="bg-emerald-600 hover:bg-emerald-700"><Plus className="h-4 w-4 mr-2" /> Add Product</Button>
