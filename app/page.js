@@ -119,6 +119,9 @@ function App() {
   const [barcodeLoading, setBarcodeLoading] = useState(false)
   const [barcodeValue, setBarcodeValue] = useState('')
 
+  // Expiry Date Scanner state (live camera, single-tap capture)
+  const [expiryScanOpen, setExpiryScanOpen] = useState(false)
+
   // Recipe Scan state
   const [recipeOpen, setRecipeOpen] = useState(false)
   const [recipeMode, setRecipeMode] = useState('text')
@@ -911,6 +914,17 @@ function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* Expiry Date Live Scanner Dialog */}
+      <ExpiryScanDialog
+        open={expiryScanOpen}
+        onClose={() => setExpiryScanOpen(false)}
+        onDateFound={(date) => {
+          setSnapItem(prev => ({ ...(prev || {}), expiryDate: date }))
+          setExpiryScanOpen(false)
+          toast.success(`Expiry detected: ${date}`)
+        }}
+      />
+
       {/* Barcode Scanner Dialog */}
       <BarcodeScanDialog
         open={barcodeOpen}
@@ -992,41 +1006,15 @@ function App() {
                 <Label className="text-xs">Expiry date *</Label>
                 <div className="flex gap-2 items-stretch">
                   <Input type="date" className="flex-1" value={snapItem.expiryDate || ''} onChange={e => setSnapItem({ ...snapItem, expiryDate: e.target.value })} />
-                  <label className="cursor-pointer">
-                    <input type="file" accept="image/*" capture="environment" className="hidden"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0]
-                        if (!file) return
-                        try {
-                          const dataUrl = await resizeImage(file)
-                          setSnapLoading(true)
-                          const res = await fetch('/api/scan', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ image: dataUrl })
-                          })
-                          const data = await res.json()
-                          if (!res.ok) throw new Error(data.error || 'Scan failed')
-                          const item = (data.items || [])[0]
-                          if (item?.expiryDate) {
-                            setSnapItem(prev => ({ ...prev, expiryDate: item.expiryDate }))
-                            toast.success(`Expiry detected: ${item.expiryDate}`)
-                          } else {
-                            toast.warning('Date not detected — please type manually')
-                          }
-                        } catch (err) {
-                          toast.error('Could not read date. Please type manually.')
-                        } finally {
-                          setSnapLoading(false)
-                          e.target.value = ''
-                        }
-                      }} />
-                    <div className="h-10 px-3 rounded-md border border-emerald-300 bg-emerald-50 text-emerald-700 flex items-center gap-1 text-xs font-semibold hover:bg-emerald-100">
-                      {snapLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <>📸</>} Snap Date
-                    </div>
-                  </label>
+                  <Button
+                    type="button"
+                    onClick={() => setExpiryScanOpen(true)}
+                    className="h-10 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs"
+                  >
+                    📸 Snap Date
+                  </Button>
                 </div>
-                <p className="text-[10px] text-amber-700 mt-0.5">⚠️ Always check the printed date on the package. Tap &quot;📸 Snap Date&quot; to scan it with AI, or type manually.</p>
+                <p className="text-[10px] text-amber-700 mt-0.5">⚠️ Always check the printed date on the package. Tap &quot;📸 Snap Date&quot; for live AI scan, or type manually.</p>
               </div>
               <div>
                 <Label className="text-xs">Date received (today)</Label>
@@ -1237,6 +1225,154 @@ function App() {
         openWizard={() => { setSettingsOpen(false); setWizardOpen(true) }}
       />
     </div>
+  )
+}
+
+function ExpiryScanDialog({ open, onClose, onDateFound }) {
+  const videoRef = useRef(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const streamRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    setError('')
+    setBusy(false)
+    let cancelled = false
+    ;(async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        })
+        if (cancelled) {
+          stream.getTracks().forEach(t => t.stop())
+          return
+        }
+        streamRef.current = stream
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+          await videoRef.current.play().catch(() => {})
+        }
+      } catch (e) {
+        if (!cancelled) setError('Camera blocked. Allow camera permission and try again.')
+      }
+    })()
+    return () => {
+      cancelled = true
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop())
+        streamRef.current = null
+      }
+    }
+  }, [open])
+
+  const captureAndScan = async () => {
+    const video = videoRef.current
+    if (!video || !video.videoWidth) {
+      toast.error('Camera not ready yet — wait a moment.')
+      return
+    }
+    setBusy(true)
+    try {
+      // Capture current frame to a canvas
+      const maxDim = 1400
+      let w = video.videoWidth
+      let h = video.videoHeight
+      if (w > maxDim || h > maxDim) {
+        const scale = Math.min(maxDim / w, maxDim / h)
+        w = Math.round(w * scale)
+        h = Math.round(h * scale)
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = w
+      canvas.height = h
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(video, 0, 0, w, h)
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
+      // Send to AI for date extraction
+      const res = await fetch('/api/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: dataUrl }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Scan failed')
+      const item = (data.items || []).find(it => it.expiryDate) || (data.items || [])[0]
+      if (item?.expiryDate) {
+        try { navigator.vibrate?.(60) } catch {}
+        onDateFound(item.expiryDate)
+      } else {
+        toast.warning('Date not detected — try a clearer angle or type manually.')
+      }
+    } catch (e) {
+      toast.error('Could not read date. Try again or type manually.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-[520px] max-h-[92vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            📅 Scan Expiry Date
+          </DialogTitle>
+          <p className="text-sm text-muted-foreground">Point camera at the printed expiry date and tap the green button to capture.</p>
+        </DialogHeader>
+
+        <div className="py-2 space-y-3">
+          <div className="rounded-xl overflow-hidden bg-black relative w-full" style={{ aspectRatio: '4/3', minHeight: '280px' }}>
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="absolute inset-0 w-full h-full object-cover"
+            />
+            {!error && (
+              <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-10">
+                <div className="w-[80%] h-[30%] border-[3px] border-amber-400 rounded-lg shadow-lg flex items-center justify-center">
+                  <span className="text-amber-300 text-xs font-bold bg-black/50 px-2 py-0.5 rounded">EXPIRY DATE</span>
+                </div>
+              </div>
+            )}
+            {busy && (
+              <div className="absolute inset-0 bg-black/60 flex items-center justify-center text-white text-sm font-medium gap-2 z-20">
+                <Loader2 className="h-5 w-5 animate-spin" /> AI reading date...
+              </div>
+            )}
+          </div>
+
+          {error && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">{error}</p>
+          )}
+
+          <Button
+            type="button"
+            onClick={captureAndScan}
+            disabled={busy || !!error}
+            className="w-full h-14 text-base bg-emerald-600 hover:bg-emerald-700 font-bold shadow-lg"
+          >
+            {busy ? <><Loader2 className="h-5 w-5 animate-spin mr-2" /> Reading...</> : <>📸 Capture Date</>}
+          </Button>
+
+          <div className="rounded-lg bg-blue-50 border border-blue-200 p-2.5 text-xs text-blue-900">
+            <p className="font-semibold mb-1">💡 Tips:</p>
+            <ul className="list-disc pl-4 space-y-0.5 text-blue-800">
+              <li>Point at the <strong>printed expiry date</strong> (BB / EXP / Use By)</li>
+              <li>Hold steady, good lighting helps</li>
+              <li>Single tap to capture — no &quot;Use Photo&quot; step!</li>
+            </ul>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
