@@ -32,6 +32,27 @@ function getInitialFromURL() {
   return { view: 'dashboard', status: 'All' }
 }
 
+// Estimate shelf life (days from today) based on category + storage type
+function guessShelfLifeDays(category = '', storageType = '') {
+  const c = String(category || '').toLowerCase()
+  const s = String(storageType || '').toLowerCase()
+  if (s === 'freezer') return 90
+  if (s === 'dry' || s === 'ambient') {
+    if (c.includes('grain') || c.includes('rice') || c.includes('pasta') || c.includes('dry')) return 180
+    if (c.includes('can') || c.includes('tin')) return 365
+    if (c.includes('spice')) return 365
+    return 90
+  }
+  // Fridge defaults
+  if (c.includes('fish') || c.includes('seafood')) return 2
+  if (c.includes('meat') || c.includes('chicken') || c.includes('poultry')) return 3
+  if (c.includes('dairy') || c.includes('milk') || c.includes('yogurt') || c.includes('cheese')) return 7
+  if (c.includes('veg') || c.includes('produce') || c.includes('fruit') || c.includes('herb')) return 5
+  if (c.includes('egg')) return 21
+  if (c.includes('sauce') || c.includes('condiment')) return 30
+  return 7 // safe fridge default
+}
+
 function App() {
   const [initial] = useState(getInitialFromURL)
   const [view, setView] = useState(initial.view) // dashboard | inventory | recipes
@@ -54,6 +75,13 @@ function App() {
   const [scanLoading, setScanLoading] = useState(false)
   const [scanItems, setScanItems] = useState([])
   const [scanSaving, setScanSaving] = useState(false)
+
+  // Quick Snap Label state (single product)
+  const [snapOpen, setSnapOpen] = useState(false)
+  const [snapImage, setSnapImage] = useState(null)
+  const [snapLoading, setSnapLoading] = useState(false)
+  const [snapItem, setSnapItem] = useState(null)
+  const [snapSaving, setSnapSaving] = useState(false)
 
   // Recipe Scan state
   const [recipeOpen, setRecipeOpen] = useState(false)
@@ -259,6 +287,97 @@ function App() {
     setScanImage(null)
     setScanItems([])
     setScanOpen(true)
+  }
+
+  // Quick Snap Label — single product photo → AI extracts → confirm → save
+  const openSnap = () => {
+    setSnapImage(null)
+    setSnapItem(null)
+    setSnapOpen(true)
+  }
+
+  const resizeImage = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const img = new Image()
+      img.onload = () => {
+        const maxDim = 1400
+        let { width, height } = img
+        if (width > maxDim || height > maxDim) {
+          const scale = Math.min(maxDim / width, maxDim / height)
+          width = Math.round(width * scale)
+          height = Math.round(height * scale)
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(img, 0, 0, width, height)
+        resolve(canvas.toDataURL('image/jpeg', 0.85))
+      }
+      img.onerror = reject
+      img.src = reader.result
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+
+  const onSnapFile = async (file) => {
+    if (!file) return
+    const dataUrl = await resizeImage(file)
+    setSnapImage(dataUrl)
+    // Auto-run scan immediately
+    setSnapLoading(true)
+    try {
+      const res = await fetch('/api/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: dataUrl })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Scan failed')
+      const first = (data.items || [])[0]
+      if (!first) {
+        toast.warning('No product detected. Try a clearer photo or fill manually.')
+        setSnapItem({ name: '', quantity: 1, unit: 'ea', expiryDate: '', category: '', storageType: 'Fridge', location: '' })
+      } else {
+        // Set sensible defaults if AI didn't return expiry
+        if (!first.expiryDate) {
+          const days = guessShelfLifeDays(first.category, first.storageType)
+          const d = new Date(); d.setDate(d.getDate() + days)
+          first.expiryDate = d.toISOString().slice(0, 10)
+        }
+        setSnapItem(first)
+        toast.success(`Detected: ${first.name}`)
+      }
+    } catch (e) {
+      toast.error(e.message || 'Scan failed')
+    } finally {
+      setSnapLoading(false)
+    }
+  }
+
+  const saveSnapItem = async () => {
+    if (!snapItem?.name?.trim()) { toast.error('Product name is required'); return }
+    setSnapSaving(true)
+    try {
+      const res = await fetch('/api/products', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(snapItem)
+      })
+      if (!res.ok) throw new Error()
+      toast.success(`${snapItem.name} added to inventory`)
+      setSnapOpen(false)
+      setSnapImage(null)
+      setSnapItem(null)
+      fetchProducts()
+      fetchStats()
+    } catch {
+      toast.error('Failed to save product')
+    } finally {
+      setSnapSaving(false)
+    }
   }
 
   const onScanFile = async (file) => {
@@ -554,7 +673,7 @@ function App() {
 
       <main className="container mx-auto px-4 py-8">
         {view === 'dashboard' && (
-          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} />
+          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -569,6 +688,7 @@ function App() {
             facets={facets}
             openAdd={openAdd}
             openScan={openScan}
+            openSnap={openSnap}
             openEdit={openEdit}
             deleteProduct={deleteProduct}
             exportCSV={exportCSV}
@@ -680,6 +800,115 @@ function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* AI Snap Label Dialog — single product photo */}
+      <Dialog open={snapOpen} onOpenChange={setSnapOpen}>
+        <DialogContent className="sm:max-w-[520px] max-h-[92vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-emerald-600" /> Snap Product Label
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground">Take ONE photo of a product label, package, or sticker. AI fills the details for you.</p>
+          </DialogHeader>
+
+          {!snapItem && (
+            <div className="space-y-3 py-2">
+              <label className="block">
+                <input type="file" accept="image/*" capture="environment" className="hidden"
+                  onChange={e => onSnapFile(e.target.files?.[0])} />
+                <div className="border-2 border-dashed border-emerald-300 rounded-xl p-8 hover:border-emerald-500 hover:bg-emerald-50/50 transition cursor-pointer text-center">
+                  {snapImage ? (
+                    <div className="space-y-3">
+                      <img src={snapImage} alt="preview" className="max-h-60 mx-auto rounded-lg shadow-sm" />
+                      {snapLoading && <div className="flex items-center justify-center gap-2 text-emerald-700 text-sm"><Loader2 className="h-4 w-4 animate-spin" /> AI reading label...</div>}
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="h-16 w-16 mx-auto rounded-full bg-emerald-100 flex items-center justify-center">
+                        <ScanLine className="h-8 w-8 text-emerald-600" />
+                      </div>
+                      <div>
+                        <p className="text-base font-semibold">📸 Tap to take photo</p>
+                        <p className="text-xs text-muted-foreground mt-1">Or upload from gallery — works with handwritten labels too</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </label>
+              <p className="text-[11px] text-center text-muted-foreground">💡 Tip: For multiple items at once, use the &quot;Scan Logbook&quot; option instead</p>
+            </div>
+          )}
+
+          {snapItem && (
+            <div className="space-y-3 py-2">
+              {snapImage && (
+                <div className="flex items-center gap-3 bg-emerald-50/60 rounded-lg p-3 border border-emerald-100">
+                  <img src={snapImage} alt="" className="h-16 w-16 rounded object-cover" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-emerald-700 font-semibold">✨ AI detected — confirm details below</p>
+                    <Button variant="ghost" size="sm" className="h-6 px-1 text-xs mt-0.5" onClick={() => { setSnapItem(null); setSnapImage(null) }}>📸 Retake photo</Button>
+                  </div>
+                </div>
+              )}
+              <div>
+                <Label className="text-xs">Product name *</Label>
+                <Input value={snapItem.name || ''} onChange={e => setSnapItem({ ...snapItem, name: e.target.value })} placeholder="e.g. Whole Milk" autoFocus />
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <Label className="text-xs">Qty</Label>
+                  <Input type="number" min="0" step="0.1" value={snapItem.quantity || 1} onChange={e => setSnapItem({ ...snapItem, quantity: Number(e.target.value) })} />
+                </div>
+                <div className="col-span-2">
+                  <Label className="text-xs">Unit</Label>
+                  <Select value={snapItem.unit || 'ea'} onValueChange={v => setSnapItem({ ...snapItem, unit: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {['ea', 'kg', 'g', 'L', 'mL', 'bunch', 'pack', 'box'].map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs">Expiry date</Label>
+                <Input type="date" value={snapItem.expiryDate || ''} onChange={e => setSnapItem({ ...snapItem, expiryDate: e.target.value })} />
+                <p className="text-[10px] text-muted-foreground mt-0.5">{snapItem.expiryDate ? '✨ AI-estimated — adjust if package shows different date' : 'No date detected — please set'}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-xs">Storage</Label>
+                  <Select value={snapItem.storageType || 'Fridge'} onValueChange={v => setSnapItem({ ...snapItem, storageType: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Fridge">Fridge</SelectItem>
+                      <SelectItem value="Freezer">Freezer</SelectItem>
+                      <SelectItem value="Dry">Dry storage</SelectItem>
+                      <SelectItem value="Ambient">Ambient</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">Location/Shelf</Label>
+                  <Input value={snapItem.location || ''} onChange={e => setSnapItem({ ...snapItem, location: e.target.value })} placeholder="Shelf 2" />
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs">Category</Label>
+                <Input value={snapItem.category || ''} onChange={e => setSnapItem({ ...snapItem, category: e.target.value })} placeholder="Dairy" />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button variant="ghost" onClick={() => setSnapOpen(false)}>Cancel</Button>
+            {snapItem && (
+              <Button onClick={saveSnapItem} disabled={snapSaving || !snapItem?.name?.trim()} className="bg-emerald-600 hover:bg-emerald-700">
+                {snapSaving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />} Add to Inventory
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* AI Scan Dialog */}
       <Dialog open={scanOpen} onOpenChange={setScanOpen}>
         <DialogContent className="sm:max-w-[860px] max-h-[90vh] overflow-y-auto">
@@ -847,7 +1076,106 @@ function App() {
   )
 }
 
-function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openRecipe, onViewRecipe, widgets }) {
+function UseTodayPanel({ products, goToInventory, formatDate }) {
+  // Items expiring today or tomorrow
+  const today = new Date(); today.setHours(0,0,0,0)
+  const tomorrowEnd = new Date(today); tomorrowEnd.setDate(today.getDate() + 1); tomorrowEnd.setHours(23,59,59,999)
+  const urgent = (products || []).filter(p => {
+    if (!p.expiryDate) return false
+    const d = new Date(p.expiryDate)
+    return d <= tomorrowEnd && p._status !== 'Expired'
+  }).sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate))
+
+  const [marking, setMarking] = useState(null)
+
+  const markUsed = async (id) => {
+    if (!confirm('Mark this item as used up? It will be removed from inventory.')) return
+    setMarking(id)
+    try {
+      const res = await fetch(`/api/products/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error()
+      toast.success('Marked as used ✅')
+      window.location.reload()
+    } catch {
+      toast.error('Failed to update')
+    } finally {
+      setMarking(null)
+    }
+  }
+
+  if (!urgent.length) {
+    return (
+      <div className="rounded-2xl border-2 border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-5">
+        <div className="flex items-center gap-3">
+          <div className="h-12 w-12 rounded-full bg-emerald-100 flex items-center justify-center">
+            <Check className="h-6 w-6 text-emerald-700" />
+          </div>
+          <div>
+            <p className="font-bold text-emerald-900">All clear — nothing expiring today or tomorrow! 🎉</p>
+            <p className="text-sm text-emerald-700">Keep up the great work, Chef.</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const isToday = (d) => {
+    const dt = new Date(d); dt.setHours(0,0,0,0)
+    return dt.getTime() === today.getTime()
+  }
+
+  return (
+    <div className="rounded-2xl border-2 border-red-300 bg-gradient-to-br from-red-50 via-orange-50 to-amber-50 p-4 sm:p-5 shadow-sm">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <div className="flex items-center gap-3">
+          <div className="h-11 w-11 rounded-full bg-red-100 flex items-center justify-center animate-pulse">
+            <AlertCircle className="h-6 w-6 text-red-600" />
+          </div>
+          <div>
+            <p className="font-bold text-red-900 text-lg leading-tight">🚨 Use today or tomorrow</p>
+            <p className="text-xs text-red-700">{urgent.length} item{urgent.length !== 1 ? 's' : ''} — use them before they expire!</p>
+          </div>
+        </div>
+        <Button size="sm" variant="ghost" onClick={() => goToInventory('Expiring')} className="text-red-700 hover:bg-red-100">
+          View all <ArrowRight className="h-3.5 w-3.5 ml-1" />
+        </Button>
+      </div>
+      <div className="space-y-2">
+        {urgent.slice(0, 5).map(p => (
+          <div key={p.id} className="flex items-center justify-between gap-3 bg-white rounded-xl p-3 border border-red-100 shadow-sm">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="font-semibold text-slate-900 truncate">{p.name}</p>
+                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${isToday(p.expiryDate) ? 'bg-red-600 text-white' : 'bg-amber-500 text-white'}`}>
+                  {isToday(p.expiryDate) ? 'TODAY' : 'TOMORROW'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-600 mt-0.5">
+                {p.quantity} {p.unit}
+                {p.location ? ` • 📍 ${p.location}` : ''}
+                {p.storageType ? ` • ${p.storageType}` : ''}
+              </p>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-emerald-300 text-emerald-700 hover:bg-emerald-50 shrink-0"
+              onClick={() => markUsed(p.id)}
+              disabled={marking === p.id}
+            >
+              {marking === p.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Check className="h-3.5 w-3.5 mr-1" /> Used</>}
+            </Button>
+          </div>
+        ))}
+        {urgent.length > 5 && (
+          <p className="text-xs text-center text-red-700 font-medium pt-1">+ {urgent.length - 5} more — tap &quot;View all&quot;</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openRecipe, onViewRecipe, widgets }) {
   const [quickSearch, setQuickSearch] = useState('')
   const [globalResults, setGlobalResults] = useState(null)
   const [globalLoading, setGlobalLoading] = useState(false)
@@ -890,20 +1218,25 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
           <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
           <p className="text-muted-foreground mt-1">A glance at what needs your attention today.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {isEmpty && (
             <Button variant="outline" onClick={seedData}>
               <Sparkles className="h-4 w-4 mr-2" /> Load sample data
             </Button>
           )}
+          <Button variant="outline" onClick={openSnap} className="border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-semibold">
+            <Sparkles className="h-4 w-4 mr-2" /> 📸 Snap Label
+          </Button>
           <Button variant="outline" onClick={openScan} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50">
-            <ScanLine className="h-4 w-4 mr-2" /> Scan with AI
+            <ScanLine className="h-4 w-4 mr-2" /> Scan Logbook
           </Button>
           <Button onClick={openAdd} className="bg-emerald-600 hover:bg-emerald-700">
             <Plus className="h-4 w-4 mr-2" /> Add Product
           </Button>
         </div>
       </div>
+
+      <UseTodayPanel products={products} goToInventory={goToInventory} formatDate={(d) => new Date(d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} />
 
       {show('expiry_alerts') && <ExpiryAlertBanner stats={stats} goToInventory={goToInventory} />}
 
@@ -1330,7 +1663,7 @@ function ViewRecipeDialog({ recipe, onClose, onDelete }) {
   )
 }
 
-function InventoryView({ products, loading, statusFilter, setStatusFilter, search, setSearch, sort, setSort, categoryFilter, setCategoryFilter, storageFilter, setStorageFilter, facets, openAdd, openScan, openEdit, deleteProduct, exportCSV, formatDate }) {
+function InventoryView({ products, loading, statusFilter, setStatusFilter, search, setSearch, sort, setSort, categoryFilter, setCategoryFilter, storageFilter, setStorageFilter, facets, openAdd, openScan, openSnap, openEdit, deleteProduct, exportCSV, formatDate }) {
   const activeFilters = [statusFilter !== 'All', categoryFilter !== 'All', storageFilter !== 'All', !!search].filter(Boolean).length
   return (
     <div className="space-y-6">
@@ -1339,9 +1672,10 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
           <h2 className="text-3xl font-bold tracking-tight">Inventory</h2>
           <p className="text-muted-foreground mt-1">Showing {products.length} item{products.length !== 1 ? 's' : ''}{statusFilter !== 'All' ? ` · filtered by ${STATUS_META[statusFilter]?.label || statusFilter}` : ''}</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <Button variant="outline" onClick={exportCSV}><Download className="h-4 w-4 mr-2" /> Export CSV</Button>
-          <Button variant="outline" onClick={openScan} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"><ScanLine className="h-4 w-4 mr-2" /> Scan with AI</Button>
+          <Button variant="outline" onClick={openSnap} className="border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-semibold"><Sparkles className="h-4 w-4 mr-2" /> 📸 Snap Label</Button>
+          <Button variant="outline" onClick={openScan} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"><ScanLine className="h-4 w-4 mr-2" /> Scan Logbook</Button>
           <Button onClick={openAdd} className="bg-emerald-600 hover:bg-emerald-700"><Plus className="h-4 w-4 mr-2" /> Add Product</Button>
         </div>
       </div>
