@@ -14,6 +14,7 @@ function escapeLike(s) {
 
 function fromDb(row) {
   if (!row) return row
+  const cf = row.custom_fields || {}
   return {
     id: row.id,
     name: row.name || '',
@@ -25,13 +26,17 @@ function fromDb(row) {
     location: row.location || row.shelf || '',
     preparedBy: row.prepared_by || '',
     imageUrl: row.image_url || '',
-    customFields: row.custom_fields || {},
+    dateReceived: cf._dateReceived || row.created_at?.slice(0, 10) || null,
+    customFields: cf,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
 }
 
 function toDb(body) {
+  // Stash dateReceived inside customFields so we don't need a schema migration.
+  const cf = body.customFields && typeof body.customFields === 'object' ? { ...body.customFields } : {}
+  if (body.dateReceived) cf._dateReceived = body.dateReceived
   return {
     name: body.name || '',
     quantity: Number(body.quantity) || 0,
@@ -42,7 +47,7 @@ function toDb(body) {
     location: body.location || '',
     prepared_by: body.preparedBy || '',
     image_url: body.imageUrl || '',
-    custom_fields: body.customFields && typeof body.customFields === 'object' ? body.customFields : {},
+    custom_fields: cf,
     updated_at: new Date().toISOString(),
   }
 }
