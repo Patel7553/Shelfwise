@@ -825,12 +825,36 @@ function App() {
             </div>
             <div>
               <Label htmlFor="unit">Unit</Label>
-              <Select value={form.unit} onValueChange={v => setForm({ ...form, unit: v })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {['ea', 'kg', 'g', 'L', 'mL', 'bunch', 'pack', 'box'].map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              {(() => {
+                const STANDARD_UNITS = ['ea', 'kg', 'g', 'L', 'mL', 'bunch', 'pack', 'box']
+                const isCustom = form.unit && !STANDARD_UNITS.includes(form.unit)
+                return (
+                  <div className="space-y-1.5">
+                    <Select
+                      value={isCustom ? '__other__' : form.unit}
+                      onValueChange={v => {
+                        if (v === '__other__') setForm({ ...form, unit: '' })
+                        else setForm({ ...form, unit: v })
+                      }}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {STANDARD_UNITS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+                        <SelectItem value="__other__">✏️ Other (type your own)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {isCustom || form.unit === '' ? (
+                      <Input
+                        value={form.unit}
+                        onChange={e => setForm({ ...form, unit: e.target.value })}
+                        placeholder="e.g. tray, bottle, can, slice..."
+                        maxLength={20}
+                        autoFocus={form.unit === ''}
+                      />
+                    ) : null}
+                  </div>
+                )
+              })()}
             </div>
             <div>
               <Label htmlFor="expiry">Expiry Date</Label>
@@ -994,12 +1018,36 @@ function App() {
                 </div>
                 <div className="col-span-2">
                   <Label className="text-xs">Unit</Label>
-                  <Select value={snapItem.unit || 'ea'} onValueChange={v => setSnapItem({ ...snapItem, unit: v })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {['ea', 'kg', 'g', 'L', 'mL', 'bunch', 'pack', 'box'].map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  {(() => {
+                    const STANDARD_UNITS = ['ea', 'kg', 'g', 'L', 'mL', 'bunch', 'pack', 'box']
+                    const isCustom = snapItem.unit && !STANDARD_UNITS.includes(snapItem.unit)
+                    return (
+                      <div className="space-y-1.5">
+                        <Select
+                          value={isCustom ? '__other__' : (snapItem.unit || 'ea')}
+                          onValueChange={v => {
+                            if (v === '__other__') setSnapItem({ ...snapItem, unit: '' })
+                            else setSnapItem({ ...snapItem, unit: v })
+                          }}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {STANDARD_UNITS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+                            <SelectItem value="__other__">✏️ Other (type your own)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        {isCustom || snapItem.unit === '' ? (
+                          <Input
+                            value={snapItem.unit || ''}
+                            onChange={e => setSnapItem({ ...snapItem, unit: e.target.value })}
+                            placeholder="e.g. tray, bottle, can..."
+                            maxLength={20}
+                            autoFocus={snapItem.unit === ''}
+                          />
+                        ) : null}
+                      </div>
+                    )
+                  })()}
                 </div>
               </div>
               <div>
