@@ -1281,18 +1281,13 @@ function BarcodeScanDialog({ open, onClose, onFound, loading, onManual }) {
           verbose: false,
         })
         scannerRef.current = scanner
-        // Use a larger scan box and request higher resolution for better detection
+        // Use full video frame for scanning (no qrbox restriction)
+        // My custom green box (above) serves as the visual aim indicator.
         await scanner.start(
           { facingMode: 'environment' },
           {
             fps: 15,
-            qrbox: (vw, vh) => {
-              const min = Math.min(vw, vh)
-              const w = Math.floor(min * 0.85)
-              const h = Math.floor(w * 0.55)
-              return { width: w, height: h }
-            },
-            aspectRatio: 1.33,
+            aspectRatio: 1.333,
             videoConstraints: {
               facingMode: 'environment',
               width: { ideal: 1280 },
@@ -1355,11 +1350,14 @@ function BarcodeScanDialog({ open, onClose, onFound, loading, onManual }) {
 
         <div className="py-2 space-y-3">
           {!showManual && (
-            <div className="rounded-xl overflow-hidden bg-black relative" style={{ aspectRatio: '4/3' }}>
-              <div id="barcode-reader-region" className="absolute inset-0 [&_video]:!w-full [&_video]:!h-full [&_video]:!object-cover" />
-              {!scannerError && (
-                <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                  <div className="w-[85%] h-[47%] border-[3px] border-emerald-400 rounded-lg"></div>
+            <div
+              className="rounded-xl overflow-hidden bg-black relative w-full"
+              style={{ aspectRatio: '4/3', minHeight: '280px' }}
+            >
+              <div id="barcode-reader-region" />
+              {!scannerError && !loading && (
+                <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-10">
+                  <div className="w-[80%] h-[40%] border-[3px] border-emerald-400 rounded-lg shadow-lg"></div>
                 </div>
               )}
               {hasTorch && scanning && (

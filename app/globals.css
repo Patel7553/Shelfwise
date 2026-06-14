@@ -2,6 +2,28 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Force html5-qrcode video to fill its container properly */
+#barcode-reader-region {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+#barcode-reader-region > div {
+    width: 100% !important;
+    height: 100% !important;
+    border: 0 !important;
+    padding: 0 !important;
+}
+#barcode-reader-region video {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover !important;
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+}
+
 body {
     margin: 0;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
