@@ -832,7 +832,13 @@ function App() {
       <SetupWizard open={wizardOpen} onClose={() => setWizardOpen(false)} settings={settings} saveSettings={saveSettings} />
 
       {/* Settings Dialog */}
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} settings={settings} saveSettings={saveSettings} />
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        settings={settings}
+        saveSettings={saveSettings}
+        openWizard={() => { setSettingsOpen(false); setWizardOpen(true) }}
+      />
     </div>
   )
 }
@@ -1455,6 +1461,16 @@ function SetupWizard({ open, onClose, settings, saveSettings }) {
   const [name, setName] = useState('')
   const [type, setType] = useState('Restaurant')
   const [fields, setFields] = useState([])
+  const [widgets, setWidgets] = useState([])
+
+  const WIDGET_SUGGESTIONS = [
+    { key: 'all_items', label: 'All Items', desc: 'Total count of products in your stock', icon: Boxes, color: 'text-slate-600', bg: 'bg-slate-50' },
+    { key: 'expiring', label: 'Expiring Soon', desc: 'Items expiring within 7 days', icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
+    { key: 'expired', label: 'Expired', desc: 'Items already past their expiry date', icon: PackageX, color: 'text-red-600', bg: 'bg-red-50' },
+    { key: 'critical', label: 'Critical Stock', desc: 'Products running low on quantity', icon: AlertTriangle, color: 'text-orange-600', bg: 'bg-orange-50' },
+    { key: 'expiry_alerts', label: 'Expiry Alert Banner', desc: 'Big alert when items are expiring', icon: AlertCircle, color: 'text-rose-600', bg: 'bg-rose-50' },
+    { key: 'search', label: 'Global Search', desc: 'Quick search box on dashboard', icon: Search, color: 'text-blue-600', bg: 'bg-blue-50' },
+  ]
 
   useEffect(() => {
     if (open) {
@@ -1462,8 +1478,14 @@ function SetupWizard({ open, onClose, settings, saveSettings }) {
       setName(settings.kitchenName || '')
       setType(settings.kitchenType || 'Restaurant')
       setFields(settings.customFields?.length ? [...settings.customFields] : [])
+      const existing = Array.isArray(settings.dashboardWidgets) && settings.dashboardWidgets.length
+        ? settings.dashboardWidgets
+        : WIDGET_SUGGESTIONS.map(w => w.key)
+      setWidgets(existing)
     }
   }, [open])
+
+  const toggleWidget = (k) => setWidgets(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
 
   const addField = () => setFields([...fields, { key: `field_${fields.length + 1}`, label: '', type: 'text' }])
   const updateField = (i, patch) => setFields(fields.map((f, idx) => idx === i ? { ...f, ...patch } : f))
@@ -1477,27 +1499,35 @@ function SetupWizard({ open, onClose, settings, saveSettings }) {
         label: f.label.trim(),
         type: f.type || 'text'
       }))
-    await saveSettings({ kitchenName: name.trim() || 'My Kitchen', kitchenType: type, customFields: cleanFields, onboarded: true })
+    await saveSettings({
+      kitchenName: name.trim() || 'My Kitchen',
+      kitchenType: type,
+      customFields: cleanFields,
+      dashboardWidgets: widgets,
+      onboarded: true
+    })
     onClose()
     toast.success('Welcome to ShelfWise! 🎉')
   }
 
   if (!open) return null
   const kitchenTypes = ['Restaurant', 'Cafe', 'Hotel', 'School', 'Hospital', 'Catering', 'Bakery', 'Other']
+  const totalSteps = 4
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
       <DialogContent className="sm:max-w-[640px] max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            {[0, 1, 2].map(i => (
+            {Array.from({ length: totalSteps }).map((_, i) => (
               <div key={i} className={`h-1.5 rounded-full flex-1 transition ${i <= step ? 'bg-emerald-500' : 'bg-slate-200'}`} />
             ))}
           </div>
           <DialogTitle className="pt-3 text-2xl">
             {step === 0 && 'Welcome to ShelfWise 👋'}
             {step === 1 && 'Set up your kitchen'}
-            {step === 2 && 'Add custom fields (optional)'}
+            {step === 2 && 'What do you want on your dashboard?'}
+            {step === 3 && 'Add custom fields (optional)'}
           </DialogTitle>
         </DialogHeader>
 
@@ -1546,6 +1576,38 @@ function SetupWizard({ open, onClose, settings, saveSettings }) {
 
         {step === 2 && (
           <div className="py-4 space-y-3">
+            <p className="text-sm text-muted-foreground">Tap the cards you want to see on your dashboard. Pick at least one — you can change this later in Settings.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {WIDGET_SUGGESTIONS.map(w => {
+                const Icon = w.icon
+                const active = widgets.includes(w.key)
+                return (
+                  <button
+                    key={w.key}
+                    type="button"
+                    onClick={() => toggleWidget(w.key)}
+                    className={`text-left flex items-start gap-3 p-3 rounded-lg border-2 transition ${active ? 'border-emerald-500 bg-emerald-50/60 shadow-sm' : 'border-slate-200 hover:border-emerald-300 bg-white'}`}
+                  >
+                    <div className={`h-9 w-9 rounded-lg ${w.bg} flex items-center justify-center flex-shrink-0`}>
+                      <Icon className={`h-5 w-5 ${w.color}`} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold">{w.label}</p>
+                        {active && <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">{w.desc}</p>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+            <p className="text-[11px] text-muted-foreground pt-1">{widgets.length} selected</p>
+          </div>
+        )}
+
+        {step === 3 && (
+          <div className="py-4 space-y-3">
             <p className="text-sm text-muted-foreground">Add any extra fields your kitchen tracks — supplier, cost, batch number, etc. Skip if you don't need them.</p>
             <div className="space-y-2">
               {fields.map((f, i) => (
@@ -1575,8 +1637,12 @@ function SetupWizard({ open, onClose, settings, saveSettings }) {
 
         <DialogFooter className="flex justify-between sm:justify-between">
           <Button variant="ghost" onClick={() => step > 0 ? setStep(step - 1) : onClose()}>{step === 0 ? 'Skip' : 'Back'}</Button>
-          {step < 2 ? (
-            <Button onClick={() => setStep(step + 1)} className="bg-emerald-600 hover:bg-emerald-700">
+          {step < totalSteps - 1 ? (
+            <Button
+              onClick={() => setStep(step + 1)}
+              disabled={step === 2 && widgets.length === 0}
+              className="bg-emerald-600 hover:bg-emerald-700"
+            >
               Next <ArrowRight className="h-4 w-4 ml-2" />
             </Button>
           ) : (
@@ -1590,7 +1656,7 @@ function SetupWizard({ open, onClose, settings, saveSettings }) {
   )
 }
 
-function SettingsDialog({ open, onClose, settings, saveSettings }) {
+function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
   const [tab, setTab] = useState('profile') // 'profile' | 'login' | 'dashboard' | 'fields'
   const [name, setName] = useState('')
   const [type, setType] = useState('Restaurant')
@@ -1706,6 +1772,16 @@ function SettingsDialog({ open, onClose, settings, saveSettings }) {
                 </Select>
               </div>
               <p className="text-xs text-muted-foreground">These appear in the header and your email alerts.</p>
+
+              {openWizard && (
+                <div className="pt-4 mt-2 border-t">
+                  <Label className="text-sm font-semibold">Setup Wizard</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5 mb-2">Re-run the setup wizard to revisit kitchen type, dashboard widgets, and custom fields.</p>
+                  <Button variant="outline" size="sm" onClick={openWizard}>
+                    <Sparkles className="h-4 w-4 mr-2" /> Re-run setup wizard
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 
@@ -1805,17 +1881,18 @@ function LoginGate({ settings, onAuth, saveSettings }) {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [kitchenName, setKitchenName] = useState('')
+  const [kitchenType, setKitchenType] = useState('Restaurant')
   const [generatedCode, setGeneratedCode] = useState('')
   const [busy, setBusy] = useState(false)
-  const [step, setStep] = useState('login') // 'login' | 'widgets' | 'code'
+  const [step, setStep] = useState('login') // 'login' | 'type' | 'widgets' | 'code'
+  const KITCHEN_TYPES = ['Restaurant', 'Cafe', 'Hotel', 'School', 'Hospital', 'Catering', 'Bakery', 'Other']
   const ALL_WIDGETS = [
-    { key: 'all_items', label: 'All Items count' },
-    { key: 'expiring', label: 'Expiring Soon' },
-    { key: 'expired', label: 'Expired items' },
-    { key: 'critical', label: 'Critical Stock level' },
-    { key: 'expiry_alerts', label: 'Expiry alert banner' },
-    { key: 'urgent_list', label: 'Urgent items list' },
-    { key: 'search', label: 'Global search box' },
+    { key: 'all_items', label: 'All Items', desc: 'Total products in stock', icon: Boxes, color: 'text-slate-600', bg: 'bg-slate-50' },
+    { key: 'expiring', label: 'Expiring Soon', desc: 'Items expiring within 7 days', icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
+    { key: 'expired', label: 'Expired', desc: 'Items already past expiry', icon: PackageX, color: 'text-red-600', bg: 'bg-red-50' },
+    { key: 'critical', label: 'Critical Stock', desc: 'Products running low', icon: AlertTriangle, color: 'text-orange-600', bg: 'bg-orange-50' },
+    { key: 'expiry_alerts', label: 'Expiry Alert Banner', desc: 'Big alert when items expire', icon: AlertCircle, color: 'text-rose-600', bg: 'bg-rose-50' },
+    { key: 'search', label: 'Global Search', desc: 'Quick search box on dashboard', icon: Search, color: 'text-blue-600', bg: 'bg-blue-50' },
   ]
   const [chosenWidgets, setChosenWidgets] = useState(ALL_WIDGETS.map(w => w.key))
   const hasInvite = !!(settings && settings.inviteCode)
@@ -1849,9 +1926,9 @@ function LoginGate({ settings, onAuth, saveSettings }) {
       onAuth()
       return
     }
-    // First time setup — go to widget picker
+    // First time setup — pick kitchen type next
     if (!kitchenName.trim()) { toast.error('Kitchen name required'); return }
-    setStep('widgets')
+    setStep('type')
   }
 
   const finishSetup = async () => {
@@ -1861,6 +1938,7 @@ function LoginGate({ settings, onAuth, saveSettings }) {
       const next = {
         ...settings,
         kitchenName: kitchenName.trim(),
+        kitchenType,
         alertEmail: email.trim(),
         inviteCode: newCode,
         onboarded: true,
@@ -1897,23 +1975,64 @@ function LoginGate({ settings, onAuth, saveSettings }) {
           </div>
         )}
 
+        {step === 'type' && (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-bold">What type of kitchen?</h2>
+              <p className="text-xs text-muted-foreground mt-1">This helps us tailor your dashboard.</p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {KITCHEN_TYPES.map(t => (
+                <button key={t} type="button" onClick={() => setKitchenType(t)}
+                  className={`text-sm py-3 px-3 rounded-lg border-2 font-medium transition ${kitchenType === t ? 'bg-emerald-600 text-white border-emerald-600' : 'hover:border-emerald-300 border-slate-200 bg-white'}`}>
+                  {t}
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-between pt-2">
+              <Button variant="ghost" onClick={() => setStep('login')}>Back</Button>
+              <Button onClick={() => setStep('widgets')} className="bg-emerald-600 hover:bg-emerald-700">
+                Next <ArrowRight className="h-4 w-4 ml-2" />
+              </Button>
+            </div>
+          </div>
+        )}
+
         {step === 'widgets' && (
           <div className="space-y-4">
             <div>
-              <h2 className="text-lg font-bold">Choose your dashboard</h2>
-              <p className="text-xs text-muted-foreground mt-1">Pick what you want to see on your home screen. You can change this anytime in Settings.</p>
+              <h2 className="text-lg font-bold">What do you want on your dashboard?</h2>
+              <p className="text-xs text-muted-foreground mt-1">Tap the cards you want. Pick at least one — you can change this anytime in Settings.</p>
             </div>
-            <div className="space-y-2 max-h-[300px] overflow-y-auto">
-              {ALL_WIDGETS.map(w => (
-                <label key={w.key} className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition ${chosenWidgets.includes(w.key) ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-emerald-300'}`}>
-                  <input type="checkbox" checked={chosenWidgets.includes(w.key)} onChange={() => toggleWidget(w.key)} className="h-4 w-4 accent-emerald-600" />
-                  <span className="text-sm font-medium">{w.label}</span>
-                </label>
-              ))}
+            <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
+              {ALL_WIDGETS.map(w => {
+                const Icon = w.icon
+                const active = chosenWidgets.includes(w.key)
+                return (
+                  <button
+                    key={w.key}
+                    type="button"
+                    onClick={() => toggleWidget(w.key)}
+                    className={`w-full text-left flex items-start gap-3 p-3 rounded-lg border-2 transition ${active ? 'border-emerald-500 bg-emerald-50/60 shadow-sm' : 'border-slate-200 hover:border-emerald-300 bg-white'}`}
+                  >
+                    <div className={`h-9 w-9 rounded-lg ${w.bg} flex items-center justify-center flex-shrink-0`}>
+                      <Icon className={`h-5 w-5 ${w.color}`} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold">{w.label}</p>
+                        {active && <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">{w.desc}</p>
+                    </div>
+                  </button>
+                )
+              })}
             </div>
+            <p className="text-[11px] text-muted-foreground">{chosenWidgets.length} selected</p>
             <div className="flex justify-between">
-              <Button variant="ghost" onClick={() => setStep('login')}>Back</Button>
-              <Button onClick={finishSetup} disabled={busy} className="bg-emerald-600 hover:bg-emerald-700">
+              <Button variant="ghost" onClick={() => setStep('type')}>Back</Button>
+              <Button onClick={finishSetup} disabled={busy || chosenWidgets.length === 0} className="bg-emerald-600 hover:bg-emerald-700">
                 {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />} Create Kitchen
               </Button>
             </div>
