@@ -76,6 +76,16 @@ function App() {
   const [authed, setAuthed] = useState(false)
   const [mobileNav, setMobileNav] = useState(false)
 
+  // Chef's personal widget preference (overrides kitchen-wide settings, per device)
+  const [myWidgets, setMyWidgets] = useState(null)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const saved = JSON.parse(localStorage.getItem('shelfwise_my_widgets') || 'null')
+      if (Array.isArray(saved) && saved.length) setMyWidgets(saved)
+    } catch {}
+  }, [authed])
+
   // Check localStorage for previous login
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -550,7 +560,7 @@ function App() {
 
       <main className="container mx-auto px-4 py-8">
         {view === 'dashboard' && (
-          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} />
+          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={myWidgets || settings.dashboardWidgets} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -1911,9 +1921,22 @@ function LoginGate({ settings, onAuth, saveSettings }) {
       })
       if (!res.ok) { const d = await res.json().catch(() => ({})); toast.error(d.error || 'Invalid code'); return }
       if (name.trim()) localStorage.setItem('shelfwise_user', name.trim())
-      toast.success(`Welcome${name ? ', ' + name : ''}! 🎉`)
-      onAuth()
+      // Pre-load chef's saved widgets if they've picked before
+      try {
+        const saved = JSON.parse(localStorage.getItem('shelfwise_my_widgets') || 'null')
+        if (Array.isArray(saved) && saved.length) setChosenWidgets(saved)
+      } catch {}
+      // Always show the widget picker for chefs entering the code
+      setStep('chef-widgets')
     } finally { setBusy(false) }
+  }
+
+  const finishChefSetup = () => {
+    try {
+      localStorage.setItem('shelfwise_my_widgets', JSON.stringify(chosenWidgets))
+    } catch {}
+    toast.success(`Welcome${name ? ', ' + name : ''}! 🎉`)
+    onAuth()
   }
 
   const signInEmail = async (e) => {
@@ -1972,6 +1995,47 @@ function LoginGate({ settings, onAuth, saveSettings }) {
             <Button className="w-full bg-emerald-600 hover:bg-emerald-700" onClick={onAuth}>
               <Check className="h-4 w-4 mr-2" /> Enter ShelfWise
             </Button>
+          </div>
+        )}
+
+        {step === 'chef-widgets' && (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-bold">Welcome{name ? ', ' + name : ''}! 👋</h2>
+              <p className="text-xs text-muted-foreground mt-1">Choose what you want on your dashboard. We'll remember your pick on this phone.</p>
+            </div>
+            <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
+              {ALL_WIDGETS.map(w => {
+                const Icon = w.icon
+                const active = chosenWidgets.includes(w.key)
+                return (
+                  <button
+                    key={w.key}
+                    type="button"
+                    onClick={() => toggleWidget(w.key)}
+                    className={`w-full text-left flex items-start gap-3 p-3 rounded-lg border-2 transition ${active ? 'border-emerald-500 bg-emerald-50/60 shadow-sm' : 'border-slate-200 hover:border-emerald-300 bg-white'}`}
+                  >
+                    <div className={`h-9 w-9 rounded-lg ${w.bg} flex items-center justify-center flex-shrink-0`}>
+                      <Icon className={`h-5 w-5 ${w.color}`} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold">{w.label}</p>
+                        {active && <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">{w.desc}</p>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+            <p className="text-[11px] text-muted-foreground">{chosenWidgets.length} selected</p>
+            <div className="flex justify-between gap-2">
+              <Button variant="ghost" onClick={() => { try { localStorage.removeItem('shelfwise_my_widgets') } catch {} ; onAuth() }}>Skip — show all</Button>
+              <Button onClick={finishChefSetup} disabled={chosenWidgets.length === 0} className="bg-emerald-600 hover:bg-emerald-700">
+                <Check className="h-4 w-4 mr-2" /> Enter Kitchen
+              </Button>
+            </div>
           </div>
         )}
 
@@ -2044,10 +2108,10 @@ function LoginGate({ settings, onAuth, saveSettings }) {
             <p className="text-center text-sm text-muted-foreground mb-4">Sign in with</p>
             <div className="flex gap-2 mb-5 p-1 bg-slate-100 rounded-lg">
               <button onClick={() => setMode('email')} className={`flex-1 py-2.5 text-sm font-semibold rounded-md transition flex items-center justify-center gap-1.5 ${mode === 'email' ? 'bg-white shadow text-slate-900' : 'text-slate-600 hover:text-slate-800'}`}>
-                📧 Email
+                👑 Owner
               </button>
               <button onClick={() => setMode('code')} className={`flex-1 py-2.5 text-sm font-semibold rounded-md transition flex items-center justify-center gap-1.5 ${mode === 'code' ? 'bg-white shadow text-slate-900' : 'text-slate-600 hover:text-slate-800'}`}>
-                🔑 Code
+                👨‍🍳 Chef
               </button>
             </div>
 
