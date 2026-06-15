@@ -357,6 +357,64 @@ export async function POST(request, { params }) {
       return json({ items })
     }
 
+    if (path === 'recipe-instructions') {
+      const body = await request.json()
+      const title = String(body.title || '').trim()
+      const ingredients = Array.isArray(body.ingredients) ? body.ingredients.filter(Boolean) : []
+      const servings = String(body.servings || '').trim()
+      if (!ingredients.length && !title) return json({ error: 'title or ingredients required' }, 400)
+
+      const key = process.env.EMERGENT_LLM_KEY
+      if (!key) return json({ error: 'EMERGENT_LLM_KEY not set' }, 500)
+
+      const systemPrompt = `You are a professional chef. Generate clear, step-by-step COOKING INSTRUCTIONS for the recipe below.
+Use techniques and sequencing typical of trusted recipe sources (BBC Good Food, Serious Eats, Bon Appétit, Epicurious, NYT Cooking).
+
+Rules:
+- Return ONLY valid JSON: {"instructions":["step 1...","step 2..."], "source":"e.g. BBC Good Food style"}
+- 6 to 12 numbered steps
+- Each step is one clear sentence, 12-30 words
+- Mention temperatures (°C and °F), times, and technique cues (e.g. "until golden")
+- Be safe: cooking temperatures for chicken/pork/seafood, allergen handling
+- Use ONLY the ingredients listed (no new ones)
+- Output strict JSON only.`
+
+      const userPrompt = `Recipe title: ${title || '(unknown - infer from ingredients)'}\nServings: ${servings || 'unspecified'}\nIngredients:\n${ingredients.map(i => '- ' + i).join('\n')}\n\nGenerate the cooking method.`
+
+      try {
+        const apiRes = await fetch(EMERGENT_URL, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'gpt-4o',
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt }
+            ],
+            temperature: 0.4,
+            response_format: { type: 'json_object' },
+          }),
+        })
+        if (!apiRes.ok) {
+          const t = await apiRes.text()
+          return json({ error: `LLM ${apiRes.status}: ${t.slice(0,200)}` }, 502)
+        }
+        const data = await apiRes.json()
+        const content = data?.choices?.[0]?.message?.content || '{}'
+        let parsed
+        try { parsed = JSON.parse(content) }
+        catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : {} }
+        const instructions = Array.isArray(parsed.instructions)
+          ? parsed.instructions.map(s => String(s).trim()).filter(Boolean)
+          : []
+        const source = String(parsed.source || 'AI Generated (BBC Good Food / Serious Eats style)')
+        if (!instructions.length) return json({ error: 'Could not generate instructions' }, 502)
+        return json({ instructions, source })
+      } catch (e) {
+        return json({ error: e?.message || 'AI error' }, 502)
+      }
+    }
+
     if (path === 'recipe') {
       const body = await request.json()
       const image = body.image, text = body.text
