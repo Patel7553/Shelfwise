@@ -127,6 +127,61 @@ Output strictly valid JSON.`
   })).filter(it => it.name)
 }
 
+// Parse free-form voice transcript into one or more inventory items
+async function parseTextForItems(text) {
+  const key = process.env.EMERGENT_LLM_KEY
+  if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+  const today = new Date().toISOString().slice(0, 10)
+  const systemPrompt = `You are a kitchen voice-command parser. The chef speaks naturally about inventory items. Convert spoken text to structured JSON.
+
+Return ONLY a valid JSON object: {"items":[ ... ]}. Each item:
+- "name": product name (e.g. "Chicken Breast")
+- "quantity": a number (default 1 if unclear)
+- "unit": one of "ea","kg","g","L","mL","bunch","pack","box" (best guess from speech)
+- "expiryDate": "YYYY-MM-DD" if a date is mentioned (resolve relative dates like "tomorrow", "next Friday", "in 3 days"). Today is ${today}. Use null if not mentioned.
+- "category": broad category
+- "storageType": "Fridge","Freezer","Dry", or "Ambient"
+- "location": shelf if mentioned, else ""
+
+Examples:
+- "Add 5 kg chicken expires Friday" → name="Chicken", quantity=5, unit="kg", expiryDate=<this Friday>, storageType="Fridge"
+- "Two cartons of milk in fridge two" → name="Milk", quantity=2, unit="ea", location="Fridge 2", storageType="Fridge"
+- "10 trays of croissants for tomorrow" → name="Croissants", quantity=10, unit="ea", expiryDate=<tomorrow>
+
+Output strictly valid JSON.`
+  const body = {
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: `Parse this kitchen voice command:\n\n"${text}"` },
+    ],
+    temperature: 0,
+    response_format: { type: 'json_object' },
+  }
+  const res = await fetch(EMERGENT_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`LLM API ${res.status}: ${(await res.text()).slice(0, 300)}`)
+  const data = await res.json()
+  const content = data?.choices?.[0]?.message?.content || '{}'
+  let parsed
+  try { parsed = JSON.parse(content) }
+  catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : { items: [] } }
+  const items = Array.isArray(parsed) ? parsed : (parsed.items || [])
+  return items.map(it => ({
+    name: String(it.name || '').trim(),
+    quantity: Number(it.quantity) || 1,
+    unit: String(it.unit || 'ea').trim(),
+    expiryDate: it.expiryDate || null,
+    category: String(it.category || '').trim(),
+    storageType: String(it.storageType || 'Fridge').trim(),
+    location: String(it.location || '').trim(),
+    preparedBy: '',
+  })).filter(it => it.name)
+}
+
 async function scanRecipe({ image, text }) {
   const key = process.env.EMERGENT_LLM_KEY
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
@@ -290,6 +345,15 @@ export async function POST(request, { params }) {
       const image = body.image
       if (!image || !image.startsWith('data:image/')) return json({ error: 'Invalid or missing image' }, 400)
       const items = await scanImageForItems(image)
+      return json({ items })
+    }
+
+    if (path === 'parse-voice') {
+      const body = await request.json()
+      const text = String(body.text || '').trim()
+      if (!text) return json({ error: 'text required' }, 400)
+      if (text.length > 800) return json({ error: 'text too long' }, 400)
+      const items = await parseTextForItems(text)
       return json({ items })
     }
 

@@ -122,6 +122,14 @@ function App() {
   // Expiry Date Scanner state (live camera, single-tap capture)
   const [expiryScanOpen, setExpiryScanOpen] = useState(false)
 
+  // Voice Input state
+  const [voiceOpen, setVoiceOpen] = useState(false)
+  const [voiceTranscript, setVoiceTranscript] = useState('')
+  const [voiceListening, setVoiceListening] = useState(false)
+  const [voiceParsing, setVoiceParsing] = useState(false)
+  const [voiceItems, setVoiceItems] = useState([])
+  const voiceRecognitionRef = useRef(null)
+
   // Recipe Scan state
   const [recipeOpen, setRecipeOpen] = useState(false)
   const [recipeMode, setRecipeMode] = useState('text')
@@ -340,6 +348,185 @@ function App() {
   const openBarcode = () => {
     setBarcodeValue('')
     setBarcodeOpen(true)
+  }
+
+  // Open Voice command dialog
+  const openVoice = () => {
+    setVoiceTranscript('')
+    setVoiceItems([])
+    setVoiceListening(false)
+    setVoiceParsing(false)
+    setVoiceOpen(true)
+  }
+
+  // Start/stop voice recognition (Web Speech API)
+  const startVoiceListening = () => {
+    if (typeof window === 'undefined') return
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SR) {
+      toast.error('Voice not supported on this browser. Try Chrome or Safari on iOS 14.5+.')
+      return
+    }
+    try {
+      const rec = new SR()
+      rec.lang = navigator.language || 'en-US'
+      rec.interimResults = true
+      rec.continuous = false
+      rec.maxAlternatives = 1
+      let finalText = ''
+      rec.onresult = (e) => {
+        let interim = ''
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const r = e.results[i]
+          if (r.isFinal) finalText += r[0].transcript + ' '
+          else interim += r[0].transcript
+        }
+        setVoiceTranscript((finalText + interim).trim())
+      }
+      rec.onerror = (e) => {
+        setVoiceListening(false)
+        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+          toast.error('Microphone blocked. Allow microphone permission in browser settings.')
+        } else if (e.error === 'no-speech') {
+          toast.warning('No speech detected. Try again.')
+        }
+      }
+      rec.onend = () => setVoiceListening(false)
+      voiceRecognitionRef.current = rec
+      setVoiceTranscript('')
+      setVoiceListening(true)
+      rec.start()
+    } catch (e) {
+      toast.error('Could not start voice recognition.')
+      setVoiceListening(false)
+    }
+  }
+
+  const stopVoiceListening = () => {
+    try { voiceRecognitionRef.current?.stop() } catch {}
+    setVoiceListening(false)
+  }
+
+  const parseVoiceCommand = async () => {
+    const text = voiceTranscript.trim()
+    if (!text) { toast.error('Speak first, then tap parse.'); return }
+    setVoiceParsing(true)
+    try {
+      const res = await fetch('/api/parse-voice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Parse failed')
+      if (!data.items?.length) {
+        toast.warning('Could not extract any items. Try rephrasing.')
+        return
+      }
+      setVoiceItems(data.items)
+      toast.success(`Detected ${data.items.length} item${data.items.length !== 1 ? 's' : ''}`)
+    } catch (e) {
+      toast.error(e.message || 'Could not parse speech')
+    } finally {
+      setVoiceParsing(false)
+    }
+  }
+
+  const saveVoiceItems = async () => {
+    setVoiceParsing(true)
+    try {
+      for (const item of voiceItems) {
+        if (!item.name) continue
+        await fetch('/api/products', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(item),
+        })
+      }
+      toast.success(`Added ${voiceItems.length} item${voiceItems.length !== 1 ? 's' : ''} from voice ✅`)
+      setVoiceOpen(false)
+      fetchProducts()
+      fetchStats()
+    } catch (e) {
+      toast.error('Failed to save items')
+    } finally {
+      setVoiceParsing(false)
+    }
+  }
+
+  // Print a logbook template (chefs fill it on shift, then scan with AI later)
+  const printLogbook = () => {
+    if (typeof window === 'undefined') return
+    const kitchen = settings.kitchenName || 'My Kitchen'
+    const kType = settings.kitchenType || ''
+    const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+    const rows = Array.from({ length: 25 }).map((_, i) => `
+      <tr>
+        <td style="width:24px;text-align:center;color:#94a3b8">${i + 1}</td>
+        <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+      </tr>`).join('')
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${kitchen} — Daily Logbook</title>
+<style>
+  @page { size: A4; margin: 14mm; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; color: #0f172a; }
+  .header { display:flex; align-items:center; justify-content:space-between; border-bottom: 3px solid #10b981; padding-bottom: 10px; margin-bottom: 12px; }
+  .brand { font-size: 22px; font-weight: 800; color: #047857; }
+  .brand small { font-weight:500; color:#64748b; font-size:11px; display:block; }
+  .meta { text-align:right; font-size: 12px; color: #475569; }
+  .meta strong { display:block; font-size:14px; color:#0f172a; }
+  .row { display:flex; gap:10px; font-size:12px; margin-bottom:10px; }
+  .row .box { border: 1px solid #cbd5e1; padding: 5px 10px; border-radius: 6px; flex:1; }
+  .row .box b { color:#64748b; font-weight:500; display:block; font-size:10px; text-transform:uppercase; }
+  .tip { background:#ecfdf5; border:1px solid #a7f3d0; border-radius: 8px; padding: 8px 12px; font-size: 11px; color:#065f46; margin-bottom:12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  th, td { border: 1px solid #94a3b8; padding: 6px 6px; text-align: left; height: 26px; vertical-align: top; }
+  th { background: #f1f5f9; font-size: 11px; color:#334155; }
+  thead th:first-child { width: 24px; }
+  tfoot td { border: none; padding-top: 8px; font-size: 10px; color: #94a3b8; text-align: center; }
+  @media print { .noprint { display: none } }
+  .noprint { margin-top: 14px; text-align: center; }
+  .noprint button { background:#10b981; color:white; padding: 10px 20px; border: 0; border-radius: 8px; font-size:14px; cursor:pointer; }
+</style></head><body>
+  <div class="header">
+    <div>
+      <div class="brand">🍳 ${kitchen}</div>
+      <small>${kType ? kType + ' • ' : ''}Daily Inventory Logbook — powered by ShelfWise</small>
+    </div>
+    <div class="meta">
+      <strong>${today}</strong>
+      Shift: ___________________<br/>
+      Logged by: _______________
+    </div>
+  </div>
+  <div class="tip">📸 <b>End of shift:</b> Snap a photo of this completed sheet using ShelfWise → "Scan Logbook" and all items get added automatically. Write clearly!</div>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th style="width:24%">Product</th>
+        <th style="width:8%">Qty</th>
+        <th style="width:9%">Unit</th>
+        <th style="width:13%">Expiry (DD/MM/YY)</th>
+        <th style="width:11%">Storage</th>
+        <th style="width:14%">Shelf / Loc.</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr><td colspan="8">Units: ea / kg / g / L / mL / pack / bunch / box • Storage: Fridge (F) / Freezer (Fr) / Dry (D) / Ambient (A)</td></tr></tfoot>
+  </table>
+  <div class="noprint"><button onclick="window.print()">🖨️ Print this logbook</button></div>
+  <script>setTimeout(() => window.print(), 400)<\/script>
+</body></html>`
+    const w = window.open('', '_blank')
+    if (!w) {
+      toast.error('Pop-up blocked. Please allow pop-ups and try again.')
+      return
+    }
+    w.document.open()
+    w.document.write(html)
+    w.document.close()
+    toast.success('Logbook ready — print it or save as PDF!')
   }
 
   // Lookup barcode from Open Food Facts then open Snap form prefilled
@@ -773,7 +960,7 @@ function App() {
 
       <main className="container mx-auto px-4 py-8">
         {view === 'dashboard' && (
-          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} />
+          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} printLogbook={printLogbook} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -790,6 +977,8 @@ function App() {
             openScan={openScan}
             openSnap={openSnap}
             openBarcode={openBarcode}
+            openVoice={openVoice}
+            printLogbook={printLogbook}
             openEdit={openEdit}
             deleteProduct={deleteProduct}
             exportCSV={exportCSV}
@@ -938,6 +1127,67 @@ function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* Voice Input Dialog */}
+      <Dialog open={voiceOpen} onOpenChange={(v) => { if (!v) { stopVoiceListening(); setVoiceOpen(false) } }}>
+        <DialogContent className="sm:max-w-[500px] max-h-[92vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">🎤 Voice Add Items</DialogTitle>
+            <p className="text-sm text-muted-foreground">Tap the mic and speak. e.g. <em>&quot;Add 5 kg chicken expires Friday and 2 bottles milk in fridge two&quot;</em></p>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2">
+            <div className="flex flex-col items-center gap-3 py-2">
+              <button
+                type="button"
+                onClick={voiceListening ? stopVoiceListening : startVoiceListening}
+                className={`h-24 w-24 rounded-full flex items-center justify-center shadow-lg text-white transition ${voiceListening ? 'bg-red-500 animate-pulse' : 'bg-emerald-600 hover:bg-emerald-700'}`}
+              >
+                <span className="text-4xl">{voiceListening ? '⏹️' : '🎤'}</span>
+              </button>
+              <p className="text-sm font-medium">{voiceListening ? 'Listening… tap to stop' : 'Tap mic to start'}</p>
+            </div>
+
+            {voiceTranscript && (
+              <div className="rounded-lg bg-slate-50 border p-3">
+                <p className="text-xs text-muted-foreground mb-1">You said:</p>
+                <p className="text-sm">{voiceTranscript}</p>
+              </div>
+            )}
+
+            {voiceTranscript && !voiceItems.length && (
+              <Button onClick={parseVoiceCommand} disabled={voiceParsing} className="w-full bg-emerald-600 hover:bg-emerald-700">
+                {voiceParsing ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Parsing...</> : <><Sparkles className="h-4 w-4 mr-2" /> Convert to items</>}
+              </Button>
+            )}
+
+            {voiceItems.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-emerald-700">✨ Detected {voiceItems.length} item{voiceItems.length !== 1 ? 's' : ''}:</p>
+                {voiceItems.map((it, i) => (
+                  <div key={i} className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-3 text-sm space-y-1">
+                    <p className="font-semibold">{it.name}</p>
+                    <p className="text-xs text-slate-600">
+                      {it.quantity} {it.unit} • {it.storageType}
+                      {it.expiryDate ? ` • exp ${it.expiryDate}` : ''}
+                      {it.location ? ` • 📍 ${it.location}` : ''}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="ghost" onClick={() => { stopVoiceListening(); setVoiceOpen(false) }}>Cancel</Button>
+            {voiceItems.length > 0 && (
+              <Button onClick={saveVoiceItems} disabled={voiceParsing} className="bg-emerald-600 hover:bg-emerald-700">
+                {voiceParsing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />} Save All
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Expiry Date Live Scanner Dialog */}
       <ExpiryScanDialog
         open={expiryScanOpen}
@@ -1700,7 +1950,7 @@ function UseTodayPanel({ products, goToInventory, formatDate }) {
   )
 }
 
-function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openRecipe, onViewRecipe, widgets }) {
+function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, printLogbook, openRecipe, onViewRecipe, widgets }) {
   const [quickSearch, setQuickSearch] = useState('')
   const [globalResults, setGlobalResults] = useState(null)
   const [globalLoading, setGlobalLoading] = useState(false)
@@ -1749,6 +1999,9 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
               <Sparkles className="h-4 w-4 mr-2" /> Load sample data
             </Button>
           )}
+          <Button variant="outline" onClick={openVoice} className="border-purple-300 bg-purple-50 text-purple-700 hover:bg-purple-100 font-semibold">
+            🎤 Voice
+          </Button>
           <Button variant="outline" onClick={openBarcode} className="border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold">
             <ScanLine className="h-4 w-4 mr-2" /> 🔢 Barcode
           </Button>
@@ -1757,6 +2010,9 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
           </Button>
           <Button variant="outline" onClick={openScan} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50">
             <ScanLine className="h-4 w-4 mr-2" /> Scan Logbook
+          </Button>
+          <Button variant="outline" onClick={printLogbook} className="border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100">
+            📒 Print Logbook
           </Button>
           <Button onClick={openAdd} className="bg-emerald-600 hover:bg-emerald-700">
             <Plus className="h-4 w-4 mr-2" /> Add Product
@@ -2191,7 +2447,7 @@ function ViewRecipeDialog({ recipe, onClose, onDelete }) {
   )
 }
 
-function InventoryView({ products, loading, statusFilter, setStatusFilter, search, setSearch, sort, setSort, categoryFilter, setCategoryFilter, storageFilter, setStorageFilter, facets, openAdd, openScan, openSnap, openBarcode, openEdit, deleteProduct, exportCSV, formatDate }) {
+function InventoryView({ products, loading, statusFilter, setStatusFilter, search, setSearch, sort, setSort, categoryFilter, setCategoryFilter, storageFilter, setStorageFilter, facets, openAdd, openScan, openSnap, openBarcode, openVoice, printLogbook, openEdit, deleteProduct, exportCSV, formatDate }) {
   const activeFilters = [statusFilter !== 'All', categoryFilter !== 'All', storageFilter !== 'All', !!search].filter(Boolean).length
   return (
     <div className="space-y-6">
@@ -2202,9 +2458,11 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
         </div>
         <div className="flex gap-2 flex-wrap">
           <Button variant="outline" onClick={exportCSV}><Download className="h-4 w-4 mr-2" /> Export CSV</Button>
+          <Button variant="outline" onClick={openVoice} className="border-purple-300 bg-purple-50 text-purple-700 hover:bg-purple-100 font-semibold">🎤 Voice</Button>
           <Button variant="outline" onClick={openBarcode} className="border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold"><ScanLine className="h-4 w-4 mr-2" /> 🔢 Barcode</Button>
           <Button variant="outline" onClick={openSnap} className="border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-semibold"><Sparkles className="h-4 w-4 mr-2" /> 📸 Snap Label</Button>
           <Button variant="outline" onClick={openScan} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"><ScanLine className="h-4 w-4 mr-2" /> Scan Logbook</Button>
+          <Button variant="outline" onClick={printLogbook} className="border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100">📒 Print Logbook</Button>
           <Button onClick={openAdd} className="bg-emerald-600 hover:bg-emerald-700"><Plus className="h-4 w-4 mr-2" /> Add Product</Button>
         </div>
       </div>
@@ -2596,35 +2854,41 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
   const kitchenTypes = ['Restaurant', 'Cafe', 'Hotel', 'School', 'Hospital', 'Catering', 'Bakery', 'Other']
 
   const tabs = [
-    { key: 'profile', label: 'Kitchen Profile', icon: ChefHat },
-    { key: 'login', label: 'Login & Alerts', icon: Settings },
-    { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { key: 'fields', label: 'Custom Fields', icon: Package },
+    { key: 'profile', label: 'Kitchen', longLabel: 'Kitchen Profile', icon: ChefHat },
+    { key: 'login', label: 'Login', longLabel: 'Login & Alerts', icon: Settings },
+    { key: 'dashboard', label: 'Dashboard', longLabel: 'Dashboard', icon: LayoutDashboard },
+    { key: 'fields', label: 'Fields', longLabel: 'Custom Fields', icon: Package },
   ]
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
       <DialogContent className="sm:max-w-[680px] max-h-[92vh] overflow-hidden flex flex-col p-0">
-        <DialogHeader className="px-6 pt-6 pb-3 border-b">
+        <DialogHeader className="px-4 sm:px-6 pt-5 pb-3 border-b">
           <DialogTitle className="flex items-center gap-2"><Settings className="h-5 w-5" /> Kitchen Settings</DialogTitle>
         </DialogHeader>
 
-        {/* Tabs */}
-        <div className="px-6 pt-3 border-b bg-slate-50/60">
-          <div className="flex gap-1">
+        {/* Tabs — horizontally scrollable on mobile, equal-width on desktop */}
+        <div className="border-b bg-slate-50/60">
+          <div className="flex overflow-x-auto no-scrollbar px-2 sm:px-4 gap-0.5">
             {tabs.map(t => {
               const Icon = t.icon
+              const active = tab === t.key
               return (
-                <button key={t.key} onClick={() => setTab(t.key)}
-                  className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition ${tab === t.key ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-slate-600 hover:text-slate-900'}`}>
-                  <Icon className="h-4 w-4" /> {t.label}
+                <button
+                  key={t.key}
+                  onClick={() => setTab(t.key)}
+                  className={`flex items-center gap-1.5 px-3 sm:px-4 py-3 text-xs sm:text-sm font-medium border-b-2 transition whitespace-nowrap flex-shrink-0 ${active ? 'border-emerald-600 text-emerald-700 bg-white/60' : 'border-transparent text-slate-600 hover:text-slate-900'}`}
+                >
+                  <Icon className="h-4 w-4 flex-shrink-0" />
+                  <span className="sm:hidden">{t.label}</span>
+                  <span className="hidden sm:inline">{t.longLabel}</span>
                 </button>
               )
             })}
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-6 py-5">
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5">
           {tab === 'profile' && (
             <div className="space-y-4">
               <div>
