@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { toast, Toaster } from 'sonner'
-import { Loader2, ShieldCheck, LogOut, RefreshCw } from 'lucide-react'
+import { Loader2, ShieldCheck, LogOut, RefreshCw, Mail } from 'lucide-react'
 
 export default function AdminPage() {
   const router = useRouter()
@@ -55,6 +55,24 @@ export default function AdminPage() {
     }
   }
 
+  async function testEmail() {
+    const to = window.prompt('Send test email to:', me?.userEmail || '')
+    if (!to) return
+    setLoading(true)
+    try {
+      const res = await apiJson('/api/admin/test-email', {
+        method: 'POST',
+        body: JSON.stringify({ to }),
+      })
+      if (res.ok) toast.success(`Test email sent to ${res.sentTo}. Check inbox / spam.`)
+      else toast.error(`Failed: ${res.error || res.resendResponse || 'unknown'}`)
+    } catch (err) {
+      toast.error(err.message || 'Test failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-slate-50">
       <Toaster position="top-right" richColors />
@@ -68,6 +86,7 @@ export default function AdminPage() {
             </div>
           </div>
           <div className="flex gap-2">
+            <Button variant="ghost" size="sm" onClick={testEmail}><Mail className="h-4 w-4 mr-1" />Test email</Button>
             <Button variant="ghost" size="sm" onClick={load}><RefreshCw className="h-4 w-4 mr-1" />Refresh</Button>
             <Button variant="outline" size="sm" onClick={async () => { await signOutAll(); router.replace('/login') }}><LogOut className="h-4 w-4 mr-1" />Sign out</Button>
           </div>

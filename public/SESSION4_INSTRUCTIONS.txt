@@ -1,0 +1,73 @@
+════════════════════════════════════════════════════════
+  ShelfWise — Session 4 update (paste these 3 files)
+════════════════════════════════════════════════════════
+
+WHAT'S FIXED / ADDED IN THIS ZIP
+────────────────────────────────
+1) 📇 BARCODE — SCANNER NOW LEARNS
+   • Barcodes are now stored inside customFields.barcode when you save a product
+     (previously they were being dropped, so history matching never worked).
+   • Whenever the same barcode is scanned again, it pulls all details from your
+     history (name, unit, category, storage, location) — just enter fresh expiry.
+   • Databases queried in order:
+       1. Your own kitchen history (learned barcodes)
+       2. Open Food Facts (food products)
+       3. UPCitemDB (general retail)
+       4. Open Beauty Facts (cleaning/cosmetics)
+   • If none match, a friendly toast tells you it'll be remembered next time.
+
+2) 🖨️ PRINT LOGBOOK — iOS-FRIENDLY
+   • Replaced the pop-up window (which iPhones can't close) with a full-screen
+     in-app modal.
+   • You now have a big "← Close" button top-left AND at the bottom.
+   • A green "🖨️ Print / Save PDF" button top-right prints the same beautifully
+     formatted A4 sheet.
+   • Uses @media print CSS to hide UI chrome — only the sheet is printed.
+
+3) 🎤 VOICE — EMERGENCY CLOSE
+   • Added a red X "Force close" button in the top-right of the Voice dialog.
+   • Cancel button now does a hard reset (aborts recognition + clears all state)
+     so you can never get stuck again.
+
+4) 📧 EMAIL NOTIFICATIONS — SIGN-UP + APPROVAL
+   • You now get a "🎉 Your kitchen is approved!" email when the admin approves
+     you (this was missing before — the reason you didn't get a notification).
+   • Better error logging on the admin sign-up email (check Vercel logs if
+     something looks off).
+   • NEW: Admin panel has a "📧 Test email" button (top right) — clicking it
+     sends a test email to any address to verify Resend + your env vars are
+     wired up correctly.
+
+═══════════════════════════════════════════════════
+  HOW TO PASTE (in VS Code)
+═══════════════════════════════════════════════════
+Extract shelfwise-session4.zip locally. You'll get:
+    app/page.js
+    app/admin/page.js
+    app/api/[[...path]]/route.js
+
+In VS Code:
+1) Copy each file into the SAME folder path inside your project.
+   Say "Replace" when prompted.
+2) Source Control panel → commit → sync/push.
+3) Vercel auto-deploys.
+
+═══════════════════════════════════════════════════
+  IMPORTANT — WHY YOU DIDN'T GET APPROVAL EMAILS
+═══════════════════════════════════════════════════
+Two things to verify in Vercel → Settings → Environment Variables:
+
+  ✔ RESEND_API_KEY          (must be set, prod env)
+  ✔ SHELFWISE_ADMIN_EMAIL   (your patel.parth1966@gmail.com)
+
+Also — Resend's default sender `onboarding@resend.dev` has a strict rule:
+   In sandbox / free mode it can ONLY send to the email that owns the
+   Resend account. If your owner_email OR the admin_email is different
+   from that, emails silently disappear.
+
+To confirm: log into the admin panel → click "📧 Test email" → enter
+patel.parth1966@gmail.com. If it says "sent" but you don't get the mail,
+your Resend account needs domain verification (or add all recipients as
+verified sandbox contacts in Resend dashboard).
+
+═══════════════════════════════════════════════════

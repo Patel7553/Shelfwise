@@ -486,7 +486,7 @@ export async function POST(request, { params }) {
                 <a href="https://shelfwise-beige.vercel.app/admin" style="display:inline-block;background:#10b981;color:white;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600">Open admin panel to approve →</a>
               </div>
             </div></body></html>`
-          await fetch('https://api.resend.com/emails', {
+          const r = await fetch('https://api.resend.com/emails', {
             method: 'POST',
             headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -496,9 +496,17 @@ export async function POST(request, { params }) {
               html,
             }),
           })
+          if (!r.ok) {
+            const txt = await r.text().catch(() => '')
+            console.warn('Admin signup email non-2xx:', r.status, txt)
+          } else {
+            console.log('Admin signup email sent to', adminEmail)
+          }
         } catch (e) {
           console.warn('Admin notify email failed:', e.message)
         }
+      } else {
+        console.warn('Admin notify skipped — SHELFWISE_ADMIN_EMAIL or RESEND_API_KEY missing')
       }
 
       return json({ ok: true, status: 'pending', message: 'Account created. Awaiting admin approval.' }, 201)
@@ -540,6 +548,43 @@ export async function POST(request, { params }) {
         .eq('id', id).select().single()
       if (e2) throw e2
       await sb.from('admin_approvals').insert({ kitchen_id: id, action: 'approved', admin_email: ctx.userEmail })
+
+      // Notify the OWNER that their kitchen was approved (best-effort — don't fail approve on email issues).
+      const resendKey = process.env.RESEND_API_KEY
+      if (resendKey && data?.owner_email) {
+        try {
+          const html = `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#f9fafb;padding:24px;color:#111">
+            <div style="max-width:560px;margin:auto;background:white;border-radius:16px;padding:32px;box-shadow:0 2px 8px rgba(0,0,0,0.05)">
+              <div style="font-size:28px;margin-bottom:8px">🎉</div>
+              <h1 style="font-size:22px;margin:0 0 8px;color:#064e3b">Your kitchen is approved!</h1>
+              <p style="color:#374151;font-size:14px;line-height:1.6;margin:0 0 20px">
+                Great news — <b>${data.kitchen_name || 'your kitchen'}</b> has been approved by the ShelfWise admin.
+                You can now log in and start setting things up.
+              </p>
+              <div style="margin-top:24px">
+                <a href="https://shelfwise-beige.vercel.app/login" style="display:inline-block;background:#10b981;color:white;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600">Log in to ShelfWise →</a>
+              </div>
+              <p style="color:#9ca3af;font-size:11px;margin-top:24px">You'll be walked through a quick setup wizard on first login (pick your modules, widgets, etc.).</p>
+            </div></body></html>`
+          const r = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              from: 'ShelfWise <onboarding@resend.dev>',
+              to: [data.owner_email],
+              subject: `✅ Your kitchen "${data.kitchen_name || 'ShelfWise'}" is approved`,
+              html,
+            }),
+          })
+          if (!r.ok) {
+            const txt = await r.text().catch(() => '')
+            console.warn('Owner approval email non-2xx:', r.status, txt)
+          }
+        } catch (e) {
+          console.warn('Owner approval email failed:', e.message)
+        }
+      }
+
       return json({ ok: true, kitchen: kitchenToApi(data) })
     }
     if (path === 'admin/reject' || path === 'admin/suspend') {
@@ -553,6 +598,35 @@ export async function POST(request, { params }) {
       if (e2) throw e2
       await sb.from('admin_approvals').insert({ kitchen_id: id, action: newStatus, reason, admin_email: ctx.userEmail })
       return json({ ok: true, kitchen: kitchenToApi(data) })
+    }
+
+    // Diagnostic endpoint — admin can POST a test email to any recipient
+    // to verify Resend + env config are actually working end-to-end.
+    if (path === 'admin/test-email') {
+      const { ctx, error } = await requireAdmin(request)
+      if (error) return error
+      const body = await request.json().catch(() => ({}))
+      const to = String(body.to || ctx.userEmail || process.env.SHELFWISE_ADMIN_EMAIL || '').trim()
+      const resendKey = process.env.RESEND_API_KEY
+      if (!resendKey) return json({ ok: false, error: 'RESEND_API_KEY not set on server' }, 500)
+      if (!to) return json({ ok: false, error: 'No recipient email — set SHELFWISE_ADMIN_EMAIL or pass `to`' }, 400)
+      try {
+        const r = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            from: 'ShelfWise <onboarding@resend.dev>',
+            to: [to],
+            subject: '✅ ShelfWise test email',
+            html: `<p>This is a test email from ShelfWise. If you see this, Resend + your env vars are configured correctly.</p><p>Sent at ${new Date().toISOString()}</p>`,
+          }),
+        })
+        const txt = await r.text().catch(() => '')
+        if (!r.ok) return json({ ok: false, status: r.status, resendResponse: txt, adminEmailConfigured: !!process.env.SHELFWISE_ADMIN_EMAIL, sentTo: to }, 500)
+        return json({ ok: true, sentTo: to, resendResponse: txt })
+      } catch (e) {
+        return json({ ok: false, error: e.message }, 500)
+      }
     }
 
     // -------- OWNER endpoints --------

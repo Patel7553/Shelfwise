@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, Settings, ArrowRight, Copy, RefreshCw, LogOut } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
@@ -126,6 +126,9 @@ function App() {
 
   // Expiry Date Scanner state (live camera, single-tap capture)
   const [expiryScanOpen, setExpiryScanOpen] = useState(false)
+
+  // Print Logbook modal state (in-app so iOS users can close it)
+  const [printOpen, setPrintOpen] = useState(false)
 
   // Voice Input state
   const [voiceOpen, setVoiceOpen] = useState(false)
@@ -432,7 +435,20 @@ function App() {
 
   const stopVoiceListening = () => {
     try { voiceRecognitionRef.current?.stop() } catch {}
+    try { voiceRecognitionRef.current?.abort() } catch {}
     setVoiceListening(false)
+  }
+
+  // Emergency: hard-reset everything if the voice dialog gets stuck.
+  const forceCloseVoice = () => {
+    try { voiceRecognitionRef.current?.abort() } catch {}
+    try { voiceRecognitionRef.current?.stop() } catch {}
+    voiceRecognitionRef.current = null
+    setVoiceListening(false)
+    setVoiceParsing(false)
+    setVoiceTranscript('')
+    setVoiceItems([])
+    setVoiceOpen(false)
   }
 
   const parseVoiceCommand = async () => {
@@ -483,85 +499,18 @@ function App() {
   }
 
   // Print a logbook template (chefs fill it on shift, then scan with AI later)
+  // Open the in-app Print Logbook modal (iOS-safe — no window.open, so users can just tap Close)
   const printLogbook = () => {
-    if (typeof window === 'undefined') return
-    const kitchen = settings.kitchenName || 'My Kitchen'
-    const kType = settings.kitchenType || ''
-    const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
-    const rows = Array.from({ length: 25 }).map((_, i) => `
-      <tr>
-        <td style="width:24px;text-align:center;color:#94a3b8">${i + 1}</td>
-        <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
-      </tr>`).join('')
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${kitchen} — Daily Logbook</title>
-<style>
-  @page { size: A4; margin: 14mm; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; color: #0f172a; }
-  .header { display:flex; align-items:center; justify-content:space-between; border-bottom: 3px solid #10b981; padding-bottom: 10px; margin-bottom: 12px; }
-  .brand { font-size: 22px; font-weight: 800; color: #047857; }
-  .brand small { font-weight:500; color:#64748b; font-size:11px; display:block; }
-  .meta { text-align:right; font-size: 12px; color: #475569; }
-  .meta strong { display:block; font-size:14px; color:#0f172a; }
-  .row { display:flex; gap:10px; font-size:12px; margin-bottom:10px; }
-  .row .box { border: 1px solid #cbd5e1; padding: 5px 10px; border-radius: 6px; flex:1; }
-  .row .box b { color:#64748b; font-weight:500; display:block; font-size:10px; text-transform:uppercase; }
-  .tip { background:#ecfdf5; border:1px solid #a7f3d0; border-radius: 8px; padding: 8px 12px; font-size: 11px; color:#065f46; margin-bottom:12px; }
-  table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-  th, td { border: 1px solid #94a3b8; padding: 6px 6px; text-align: left; height: 26px; vertical-align: top; }
-  th { background: #f1f5f9; font-size: 11px; color:#334155; }
-  thead th:first-child { width: 24px; }
-  tfoot td { border: none; padding-top: 8px; font-size: 10px; color: #94a3b8; text-align: center; }
-  @media print { .noprint { display: none } }
-  .noprint { margin-top: 14px; text-align: center; }
-  .noprint button { background:#10b981; color:white; padding: 10px 20px; border: 0; border-radius: 8px; font-size:14px; cursor:pointer; }
-</style></head><body>
-  <div class="header">
-    <div>
-      <div class="brand">🍳 ${kitchen}</div>
-      <small>${kType ? kType + ' • ' : ''}Daily Inventory Logbook — powered by ShelfWise</small>
-    </div>
-    <div class="meta">
-      <strong>${today}</strong>
-      Shift: ___________________<br/>
-      Logged by: _______________
-    </div>
-  </div>
-  <div class="tip">📸 <b>End of shift:</b> Snap a photo of this completed sheet using ShelfWise → "Scan Logbook" and all items get added automatically. Write clearly!</div>
-  <table>
-    <thead>
-      <tr>
-        <th>#</th>
-        <th style="width:24%">Product</th>
-        <th style="width:8%">Qty</th>
-        <th style="width:9%">Unit</th>
-        <th style="width:13%">Expiry (DD/MM/YY)</th>
-        <th style="width:11%">Storage</th>
-        <th style="width:14%">Shelf / Loc.</th>
-        <th>Notes</th>
-      </tr>
-    </thead>
-    <tbody>${rows}</tbody>
-    <tfoot><tr><td colspan="8">Units: ea / kg / g / L / mL / pack / bunch / box • Storage: Fridge (F) / Freezer (Fr) / Dry (D) / Ambient (A)</td></tr></tfoot>
-  </table>
-  <div class="noprint"><button onclick="window.print()">🖨️ Print this logbook</button></div>
-  <script>setTimeout(() => window.print(), 400)<\/script>
-</body></html>`
-    const w = window.open('', '_blank')
-    if (!w) {
-      toast.error('Pop-up blocked. Please allow pop-ups and try again.')
-      return
-    }
-    w.document.open()
-    w.document.write(html)
-    w.document.close()
-    toast.success('Logbook ready — print it or save as PDF!')
+    setPrintOpen(true)
   }
 
-  // Lookup barcode from Open Food Facts then open Snap form prefilled
+  // Lookup barcode from multiple databases + user's own history
   const onBarcodeFound = async (code) => {
     setBarcodeValue(code)
     setBarcodeLoading(true)
     try {
+      // IMPORTANT: barcode must live in customFields (top-level `barcode` is dropped by the API).
+      // This is what makes the scanner "learn" — future scans of the same code will find it in history.
       let detected = {
         name: '',
         quantity: 1,
@@ -570,40 +519,96 @@ function App() {
         category: '',
         storageType: 'Fridge',
         location: '',
-        barcode: code,
+        customFields: { barcode: code },
       }
-      // Try Open Food Facts (free, public, no key)
+      let found = false
+
+      // 1) Check user's OWN inventory — if they've scanned this barcode before, prefill from their history
       try {
-        const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(code)}.json`)
-        const data = await res.json()
-        if (data?.status === 1 && data?.product) {
-          const p = data.product
-          detected.name = p.product_name || p.product_name_en || p.generic_name || ''
-          detected.category = (p.categories || '').split(',')[0]?.trim() || ''
-          if (p.quantity) {
-            const m = String(p.quantity).match(/([\d.]+)\s*(kg|g|L|ml|mL|cl)/i)
-            if (m) {
-              detected.quantity = Number(m[1])
-              const u = m[2].toLowerCase()
-              detected.unit = u === 'ml' ? 'mL' : (u === 'l' ? 'L' : u)
+        const ownRes = await fetch(`/api/products?search=${encodeURIComponent(code)}`)
+        if (ownRes.ok) {
+          const own = await ownRes.json()
+          const match = Array.isArray(own) ? own.find(p => p.customFields?.barcode === code) : null
+          if (match) {
+            detected.name = match.name
+            detected.category = match.category || ''
+            detected.unit = match.unit || 'ea'
+            detected.storageType = match.storageType || 'Fridge'
+            detected.location = match.location || ''
+            detected.expiryDate = ''
+            // Preserve prior custom fields (barcode + any user-added metadata)
+            detected.customFields = { ...(match.customFields || {}), barcode: code }
+            toast.success(`Found in your history: ${match.name}. Please enter fresh expiry date.`)
+            found = true
+          }
+        }
+      } catch {}
+
+      // 2) Try Open Food Facts (2.8M products - free, public)
+      if (!found) {
+        try {
+          const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(code)}.json`)
+          const data = await res.json()
+          if (data?.status === 1 && data?.product) {
+            const p = data.product
+            detected.name = p.product_name || p.product_name_en || p.generic_name || ''
+            detected.category = (p.categories || '').split(',')[0]?.trim() || ''
+            if (p.quantity) {
+              const m = String(p.quantity).match(/([\d.]+)\s*(kg|g|L|ml|mL|cl)/i)
+              if (m) {
+                detected.quantity = Number(m[1])
+                const u = m[2].toLowerCase()
+                detected.unit = u === 'ml' ? 'mL' : (u === 'l' ? 'L' : u)
+              }
+            }
+            const cat = detected.category.toLowerCase()
+            if (cat.includes('frozen')) detected.storageType = 'Freezer'
+            else if (cat.includes('dry') || cat.includes('snack') || cat.includes('cereal') || cat.includes('pasta') || cat.includes('rice')) detected.storageType = 'Dry'
+            else if (cat.includes('beverage') || cat.includes('drink')) detected.storageType = 'Ambient'
+            detected.expiryDate = ''
+            toast.success(`Found: ${detected.name || code}. Please enter the expiry date from the package.`)
+            found = true
+          }
+        } catch {}
+      }
+
+      // 3) Try UPCitemdb (free tier — global product database, retail/US products)
+      if (!found) {
+        try {
+          const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(code)}`)
+          if (res.ok) {
+            const data = await res.json()
+            const item = data?.items?.[0]
+            if (item?.title) {
+              detected.name = item.title
+              detected.category = item.category || ''
+              detected.expiryDate = ''
+              toast.success(`Found: ${item.title}. Please enter the expiry date from the package.`)
+              found = true
             }
           }
-          // Guess storage from category
-          const cat = detected.category.toLowerCase()
-          if (cat.includes('frozen')) detected.storageType = 'Freezer'
-          else if (cat.includes('dry') || cat.includes('snack') || cat.includes('cereal') || cat.includes('pasta') || cat.includes('rice')) detected.storageType = 'Dry'
-          else if (cat.includes('beverage') || cat.includes('drink')) detected.storageType = 'Ambient'
-          // IMPORTANT: leave expiry EMPTY for barcoded products — chef must read actual printed date
-          detected.expiryDate = ''
-          toast.success(`Found: ${detected.name || code}. Please enter the expiry date from the package.`)
-        } else {
-          toast.info(`Barcode ${code} not in database. Fill details manually.`)
-          detected.name = ''
-          detected.expiryDate = ''
-        }
-      } catch {
-        toast.warning("This product isn't in our barcode database. No worries — just fill in the details manually below.", { duration: 6000 })
+        } catch {}
       }
+
+      // 4) Try Open Beauty Facts (for cosmetics/cleaning products)
+      if (!found) {
+        try {
+          const res = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${encodeURIComponent(code)}.json`)
+          const data = await res.json()
+          if (data?.status === 1 && data?.product?.product_name) {
+            detected.name = data.product.product_name
+            detected.category = 'Cleaning/Beauty'
+            detected.expiryDate = ''
+            toast.success(`Found: ${data.product.product_name}. Please enter the expiry date.`)
+            found = true
+          }
+        } catch {}
+      }
+
+      if (!found) {
+        toast.warning("This product isn't in our barcode databases. Please fill in details manually — we'll remember it for next time!", { duration: 7000 })
+      }
+
       setBarcodeOpen(false)
       setSnapItem(detected)
       setSnapImage(null)
@@ -1223,10 +1228,20 @@ function App() {
         </DialogContent>
       </Dialog>
       {/* Voice Input Dialog */}
-      <Dialog open={voiceOpen} onOpenChange={(v) => { if (!v) { stopVoiceListening(); setVoiceOpen(false) } }}>
+      <Dialog open={voiceOpen} onOpenChange={(v) => { if (!v) forceCloseVoice() }}>
         <DialogContent className="sm:max-w-[500px] max-h-[92vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">🎤 Voice Add Items</DialogTitle>
+            <DialogTitle className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2">🎤 Voice Add Items</span>
+              <button
+                type="button"
+                onClick={forceCloseVoice}
+                title="Force close"
+                className="h-8 w-8 flex items-center justify-center rounded-full bg-red-50 hover:bg-red-100 text-red-600 border border-red-200"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </DialogTitle>
             <p className="text-sm text-muted-foreground">Tap the mic and speak. e.g. <em>&quot;Add 5 kg chicken expires Friday and 2 bottles milk in fridge two&quot;</em></p>
           </DialogHeader>
 
@@ -1273,7 +1288,7 @@ function App() {
           </div>
 
           <DialogFooter className="gap-2">
-            <Button variant="ghost" onClick={() => { stopVoiceListening(); setVoiceOpen(false) }}>Cancel</Button>
+            <Button variant="ghost" onClick={forceCloseVoice}>Cancel</Button>
             {voiceItems.length > 0 && (
               <Button onClick={saveVoiceItems} disabled={voiceParsing} className="bg-emerald-600 hover:bg-emerald-700">
                 {voiceParsing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />} Save All
@@ -1292,6 +1307,14 @@ function App() {
           setExpiryScanOpen(false)
           toast.success(`Expiry detected: ${date}`)
         }}
+      />
+
+      {/* Print Logbook Modal — in-app so iOS users can easily tap Close */}
+      <PrintLogbookDialog
+        open={printOpen}
+        onClose={() => setPrintOpen(false)}
+        kitchenName={settings.kitchenName || 'My Kitchen'}
+        kitchenType={settings.kitchenType || ''}
       />
 
       {/* Barcode Scanner Dialog */}
@@ -1618,6 +1641,118 @@ function App() {
         openWizard={() => { setSettingsOpen(false); setWizardOpen(true) }}
       />
     </div>
+  )
+}
+
+// In-app Print Logbook — iOS-safe (no window.open) so users can tap Close to return.
+// Uses @media print rules to hide everything except the printable sheet during printing.
+function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
+  const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+  const rows = Array.from({ length: 25 })
+
+  const handlePrint = () => {
+    // Give the browser a tick to apply layout before printing
+    setTimeout(() => window.print(), 100)
+  }
+
+  if (!open) return null
+
+  return (
+    <>
+      {/* Print-only CSS: hide everything except .print-logbook-sheet when printing */}
+      <style dangerouslySetInnerHTML={{ __html: `
+        @media print {
+          body * { visibility: hidden !important; }
+          .print-logbook-sheet, .print-logbook-sheet * { visibility: visible !important; }
+          .print-logbook-sheet { position: absolute; left: 0; top: 0; width: 100%; padding: 0 !important; }
+          .print-hide { display: none !important; }
+          @page { size: A4; margin: 14mm; }
+        }
+      `}} />
+      <div className="fixed inset-0 z-[100] bg-slate-50 overflow-y-auto">
+        {/* Top bar with Close + Print (hidden when printing) */}
+        <div className="print-hide sticky top-0 z-10 bg-white border-b shadow-sm px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg"
+            >
+              <X className="h-4 w-4" /> Close
+            </button>
+          </div>
+          <div className="text-sm font-semibold text-slate-700">📋 Daily Logbook</div>
+          <button
+            onClick={handlePrint}
+            className="flex items-center gap-1 px-4 py-2 text-sm font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+          >
+            <Printer className="h-4 w-4" /> Print / Save PDF
+          </button>
+        </div>
+
+        {/* The printable sheet */}
+        <div className="print-logbook-sheet max-w-[820px] mx-auto bg-white p-6 md:p-10 my-4 shadow print:shadow-none print:my-0 print:max-w-none">
+          <div className="flex items-start justify-between border-b-[3px] border-emerald-500 pb-3 mb-3">
+            <div>
+              <div className="text-[22px] font-extrabold text-emerald-800">🍳 {kitchenName}</div>
+              <div className="text-[11px] text-slate-500">
+                {kitchenType ? `${kitchenType} • ` : ''}Daily Inventory Logbook — powered by ShelfWise
+              </div>
+            </div>
+            <div className="text-right text-xs text-slate-600">
+              <div className="text-sm font-semibold text-slate-900">{today}</div>
+              <div>Shift: ___________________</div>
+              <div>Logged by: _______________</div>
+            </div>
+          </div>
+
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-[11px] text-emerald-800 mb-3">
+            📸 <b>End of shift:</b> Snap a photo of this completed sheet using ShelfWise → "Scan Logbook" and all items get added automatically. Write clearly!
+          </div>
+
+          <table className="w-full border-collapse text-[11.5px]">
+            <thead>
+              <tr>
+                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px] w-6">#</th>
+                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '24%' }}>Product</th>
+                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '8%' }}>Qty</th>
+                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '9%' }}>Unit</th>
+                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '13%' }}>Expiry (DD/MM/YY)</th>
+                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '11%' }}>Storage</th>
+                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '14%' }}>Shelf / Loc.</th>
+                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((_, i) => (
+                <tr key={i}>
+                  <td className="border border-slate-400 px-1.5 py-2 text-center text-slate-400">{i + 1}</td>
+                  <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
+                  <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
+                  <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
+                  <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
+                  <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
+                  <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
+                  <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="text-[10px] text-slate-400 text-center mt-2">
+            Units: ea / kg / g / L / mL / pack / bunch / box • Storage: Fridge (F) / Freezer (Fr) / Dry (D) / Ambient (A)
+          </div>
+        </div>
+
+        {/* Bottom close button (mobile-friendly) */}
+        <div className="print-hide max-w-[820px] mx-auto px-6 pb-8">
+          <button
+            onClick={onClose}
+            className="w-full py-3 bg-white border border-slate-300 rounded-lg text-slate-700 font-medium hover:bg-slate-50"
+          >
+            ← Close and return to ShelfWise
+          </button>
+        </div>
+      </div>
+    </>
   )
 }
 
