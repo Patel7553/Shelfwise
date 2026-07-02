@@ -462,9 +462,21 @@ Rules:
 
     if (path === 'products') {
       const body = await request.json()
-      const doc = { id: uuidv4(), ...toDb(body) }
-      const { data, error } = await sb.from('products').insert(doc).select().single()
-      if (error) throw error
+      let doc = { id: uuidv4(), ...toDb(body) }
+      // Try full insert first; if the schema is missing custom_fields / updated_at
+      // (i.e. the migration hasn't been run), automatically retry without them.
+      let { data, error } = await sb.from('products').insert(doc).select().single()
+      if (error && /column .* does not exist|schema cache/i.test(error.message || '')) {
+        console.warn('products insert: schema missing optional column, retrying without custom_fields/updated_at:', error.message)
+        const { custom_fields, updated_at, ...core } = doc
+        const retry = await sb.from('products').insert(core).select().single()
+        data = retry.data
+        error = retry.error
+      }
+      if (error) {
+        console.error('products insert failed:', error)
+        throw new Error(error.message || 'Insert failed')
+      }
       return json(enrich(fromDb(data)), 201)
     }
 
@@ -473,8 +485,18 @@ Rules:
       const itemsIn = Array.isArray(body.items) ? body.items : []
       const docs = itemsIn.filter(i => i.name).map(b => ({ id: uuidv4(), ...toDb(b) }))
       if (!docs.length) return json({ inserted: 0, items: [] }, 201)
-      const { data, error } = await sb.from('products').insert(docs).select()
-      if (error) throw error
+      let { data, error } = await sb.from('products').insert(docs).select()
+      if (error && /column .* does not exist|schema cache/i.test(error.message || '')) {
+        console.warn('products bulk insert: schema missing optional column, retrying without custom_fields/updated_at')
+        const coreDocs = docs.map(({ custom_fields, updated_at, ...core }) => core)
+        const retry = await sb.from('products').insert(coreDocs).select()
+        data = retry.data
+        error = retry.error
+      }
+      if (error) {
+        console.error('products bulk insert failed:', error)
+        throw new Error(error.message || 'Insert failed')
+      }
       return json({ inserted: data.length, items: data.map(fromDb).map(enrich) }, 201)
     }
 

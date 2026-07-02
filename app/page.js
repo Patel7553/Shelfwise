@@ -921,7 +921,7 @@ function App() {
       <header className="border-b bg-white/90 backdrop-blur-md sticky top-0 z-30">
         <div className="container mx-auto px-4 py-3 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
-            <img src="/logo.png" alt="ShelfWise" className="h-10 w-10 rounded-lg object-contain bg-white shadow-sm shrink-0" />
+            <img src="/logo-icon.png?v=3" alt="ShelfWise" className="h-10 w-10 rounded-lg object-contain bg-white shadow-sm shrink-0" />
             <div className="min-w-0">
               <h1 className="text-lg font-bold tracking-tight truncate">{settings.kitchenName || 'ShelfWise'}</h1>
               <p className="text-xs text-muted-foreground -mt-0.5 truncate hidden sm:block">{settings.tagline || 'From shelf to plate — never lose track.'}{settings.kitchenType ? ' · ' + settings.kitchenType : ''}</p>

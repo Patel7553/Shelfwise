@@ -13,12 +13,12 @@ export const metadata = {
   },
   icons: {
     icon: [
-      { url: '/favicon-32.png', sizes: '32x32', type: 'image/png' },
-      { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
-      { url: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+      { url: '/favicon-32-v3.png', sizes: '32x32', type: 'image/png' },
+      { url: '/icon-192-v3.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icon-512-v3.png', sizes: '512x512', type: 'image/png' },
     ],
     apple: [
-      { url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' },
+      { url: '/apple-touch-icon-v3.png', sizes: '180x180', type: 'image/png' },
     ],
   },
   formatDetection: { telephone: false },
@@ -40,6 +40,7 @@ export default function RootLayout({ children }) {
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="ShelfWise" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon-v3.png" />
       </head>
       <body className="min-h-screen bg-background font-sans antialiased">
         {children}
