@@ -1055,7 +1055,7 @@ function App() {
 
       <main className="container mx-auto px-4 py-8">
         {view === 'dashboard' && (
-          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} printLogbook={printLogbook} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} />
+          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} printLogbook={printLogbook} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -2045,7 +2045,7 @@ function UseTodayPanel({ products, goToInventory, formatDate }) {
   )
 }
 
-function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, printLogbook, openRecipe, onViewRecipe, widgets }) {
+function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes }) {
   const [quickSearch, setQuickSearch] = useState('')
   const [globalResults, setGlobalResults] = useState(null)
   const [globalLoading, setGlobalLoading] = useState(false)
@@ -2080,6 +2080,8 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
     { key: 'expired', label: 'Expired', value: stats.expired, icon: PackageX, color: 'from-red-500 to-rose-600', accent: 'text-red-600', bg: 'bg-red-50', filterKey: 'Expired' },
     { key: 'critical', label: 'Critical Stock', value: stats.critical, icon: AlertTriangle, color: 'from-orange-500 to-red-500', accent: 'text-orange-600', bg: 'bg-orange-50', filterKey: 'Critical' },
     { key: 'in_date', label: 'In Date', value: stats.inDate || 0, icon: Check, color: 'from-emerald-500 to-teal-600', accent: 'text-emerald-600', bg: 'bg-emerald-50', filterKey: 'Ok' },
+    { key: 'recipes', label: 'Recipes', value: recipesCount ?? '—', icon: BookOpen, color: 'from-purple-500 to-fuchsia-600', accent: 'text-purple-600', bg: 'bg-purple-50', onClick: gotoRecipes },
+    { key: 'rota', label: 'Rota', value: 'Soon', icon: ChefHat, color: 'from-slate-400 to-slate-500', accent: 'text-slate-500', bg: 'bg-slate-50', disabled: true },
   ]
   const cards = cardsAll.filter(c => show(c.key))
   const isEmpty = stats.total === 0
@@ -2192,9 +2194,10 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {cards.map(c => {
           const Icon = c.icon
+          const handleClick = c.disabled ? undefined : (c.onClick || (() => goToInventory(c.filterKey)))
           return (
-            <button key={c.key} onClick={() => goToInventory(c.filterKey)} className="text-left">
-              <Card className="transition-all hover:shadow-lg hover:-translate-y-0.5 cursor-pointer border-0 shadow-sm overflow-hidden group">
+            <button key={c.key} onClick={handleClick} disabled={c.disabled} className={`text-left ${c.disabled ? 'opacity-60 cursor-not-allowed' : ''}`}>
+              <Card className={`transition-all border-0 shadow-sm overflow-hidden group ${c.disabled ? '' : 'hover:shadow-lg hover:-translate-y-0.5 cursor-pointer'}`}>
                 <CardHeader className="pb-3">
                   <div className="flex items-center justify-between">
                     <CardDescription className="font-medium text-xs uppercase tracking-wider">{c.label}</CardDescription>
@@ -2208,7 +2211,7 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
                     <div className="text-4xl font-bold tracking-tight">{c.value}</div>
                     <div className={`h-1 w-12 rounded-full bg-gradient-to-r ${c.color} opacity-80 group-hover:w-20 transition-all`} />
                   </div>
-                  <div className="text-xs text-muted-foreground mt-2">Click to view</div>
+                  <div className="text-xs text-muted-foreground mt-2">{c.disabled ? 'Coming soon' : 'Click to view'}</div>
                 </CardContent>
               </Card>
             </button>
@@ -2799,25 +2802,33 @@ function SetupWizardV2({ settings, onComplete }) {
   const [busy, setBusy] = useState(false)
 
   const MODULES = [
-    { id: 'stock',   title: 'Stock Monitoring', desc: 'Track expiries, low stock and inventory alerts.', icon: Package, color: 'emerald', ready: true },
-    { id: 'recipes', title: 'Recipes',          desc: 'Scan recipes & check ingredient availability.', icon: BookOpen, color: 'purple',  ready: true },
-    { id: 'rota',    title: 'Rota (Staff Scheduling)', desc: 'Manage shifts & staff rosters. Coming soon!', icon: ChefHat,  color: 'slate',   ready: false },
+    { id: 'stock',   title: 'Stock Monitoring', desc: 'Track expiries, low stock and inventory alerts.', icon: Package, ready: true },
+    { id: 'recipes', title: 'Recipes',          desc: 'Scan recipes & check ingredient availability.', icon: BookOpen, ready: true },
+    { id: 'rota',    title: 'Rota (Staff Scheduling)', desc: 'Manage shifts & staff rosters. Coming soon!', icon: ChefHat,  ready: false },
   ]
 
-  const STOCK_WIDGETS = [
-    { id: 'all_items', title: 'All Items',       desc: 'Total count of everything in stock.' },
-    { id: 'critical',  title: 'Critical Stock',  desc: 'Items with very low quantity.' },
-    { id: 'expired',   title: 'Expired',         desc: 'Items past their expiry date.' },
-    { id: 'expiring',  title: 'Expiring Soon',   desc: 'Items expiring within 7 days.' },
-    { id: 'in_date',   title: 'In Date',         desc: 'Items with valid future expiry dates.' },
-    { id: 'use_today', title: 'Use Today',       desc: 'Urgent items expiring today or tomorrow.' },
-  ]
+  // Widgets grouped by the module they belong to.
+  // Step 2 only shows the groups whose module the user picked in Step 1.
+  const WIDGETS_BY_MODULE = {
+    stock: [
+      { id: 'all_items', title: 'All Items',       desc: 'Total items count.' },
+      { id: 'critical',  title: 'Critical Stock',  desc: 'Very low quantity items.' },
+      { id: 'expired',   title: 'Expired',         desc: 'Items past expiry date.' },
+      { id: 'expiring',  title: 'Expiring Soon',   desc: 'Expiring within 7 days.' },
+      { id: 'in_date',   title: 'In Date',         desc: 'Items with valid future dates.' },
+      { id: 'use_today', title: 'Use Today',       desc: 'Urgent — use today or tomorrow.' },
+    ],
+    recipes: [
+      { id: 'recipes',   title: 'Recipes',         desc: 'Shortcut card to your saved recipes.' },
+    ],
+    rota: [
+      { id: 'rota',      title: 'Rota',            desc: 'Placeholder — full feature coming soon.' },
+    ],
+  }
 
   const toggle = (list, setter, id) => {
     setter(list.includes(id) ? list.filter(x => x !== id) : [...list, id])
   }
-
-  const showStockStep = modules.includes('stock')
 
   async function finish() {
     if (busy) return
@@ -2825,20 +2836,24 @@ function SetupWizardV2({ settings, onComplete }) {
     try {
       await onComplete({
         modulesEnabled: modules,
-        dashboardWidgets: showStockStep ? widgets : [],
+        dashboardWidgets: widgets,
       })
     } finally {
       setBusy(false)
     }
   }
 
-  // If Stock isn't chosen, there's nothing else to configure — skip step 2 entirely.
+  // Widget groups that are visible in step 2 (based on modules picked)
+  const visibleGroups = modules
+    .filter(m => WIDGETS_BY_MODULE[m])
+    .map(m => ({ module: m, widgets: WIDGETS_BY_MODULE[m], title: MODULES.find(x => x.id === m)?.title }))
+
+  // If no module has any picker widgets, skip step 2
+  const canSkipStep2 = visibleGroups.every(g => g.widgets.length === 0)
+
   const handleNext = () => {
-    if (showStockStep) {
-      setStep(2)
-    } else {
-      finish()
-    }
+    if (canSkipStep2) finish()
+    else setStep(2)
   }
 
   return (
@@ -2853,7 +2868,7 @@ function SetupWizardV2({ settings, onComplete }) {
         {/* Progress bar */}
         <div className="flex items-center gap-2 mb-6 max-w-md mx-auto">
           <div className={`flex-1 h-1.5 rounded-full ${step >= 1 ? 'bg-emerald-500' : 'bg-slate-200'}`} />
-          {showStockStep && <div className={`flex-1 h-1.5 rounded-full ${step >= 2 ? 'bg-emerald-500' : 'bg-slate-200'}`} />}
+          {!canSkipStep2 && <div className={`flex-1 h-1.5 rounded-full ${step >= 2 ? 'bg-emerald-500' : 'bg-slate-200'}`} />}
         </div>
 
         {step === 1 && (
@@ -2861,7 +2876,7 @@ function SetupWizardV2({ settings, onComplete }) {
             <CardContent className="p-6 space-y-4">
               <div>
                 <h2 className="font-bold text-lg text-emerald-900">Step 1 · What do you want to track?</h2>
-                <p className="text-sm text-muted-foreground">Pick the tools your kitchen needs. You can add more later.</p>
+                <p className="text-sm text-muted-foreground">Pick the tools your kitchen needs. You can add more later in Settings.</p>
               </div>
               <div className="space-y-2">
                 {MODULES.map(m => {
@@ -2904,50 +2919,62 @@ function SetupWizardV2({ settings, onComplete }) {
                   className="bg-emerald-600 hover:bg-emerald-700"
                 >
                   {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                  {showStockStep ? 'Next' : 'Finish Setup'} <ArrowRight className="h-4 w-4 ml-2" />
+                  {canSkipStep2 ? 'Finish Setup' : 'Next'} <ArrowRight className="h-4 w-4 ml-2" />
                 </Button>
               </div>
             </CardContent>
           </Card>
         )}
 
-        {step === 2 && showStockStep && (
+        {step === 2 && !canSkipStep2 && (
           <Card className="shadow-lg border-emerald-100">
             <CardContent className="p-6 space-y-4">
               <div>
-                <h2 className="font-bold text-lg text-emerald-900">Step 2 · Which dashboard cards do you want?</h2>
-                <p className="text-sm text-muted-foreground">Pick the alert cards you want to see on your dashboard. You can add more later.</p>
+                <h2 className="font-bold text-lg text-emerald-900">Step 2 · Pick your dashboard cards</h2>
+                <p className="text-sm text-muted-foreground">Choose which cards appear on your dashboard. You can change these later in Settings.</p>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {STOCK_WIDGETS.map(w => {
-                  const active = widgets.includes(w.id)
-                  return (
-                    <button
-                      key={w.id}
-                      type="button"
-                      onClick={() => toggle(widgets, setWidgets, w.id)}
-                      className={`text-left p-3 rounded-lg border-2 transition ${active ? 'bg-emerald-50 border-emerald-500' : 'bg-white border-slate-200 hover:border-emerald-300'}`}
-                    >
-                      <div className="flex items-start gap-2">
-                        <div className={`mt-0.5 h-5 w-5 rounded-md border-2 flex items-center justify-center ${active ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300 bg-white'}`}>
-                          {active && <Check className="h-3.5 w-3.5 text-white" />}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="font-semibold text-sm">{w.title}</div>
-                          <div className="text-[11px] text-muted-foreground">{w.desc}</div>
-                        </div>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
+
+              {visibleGroups.map(group => (
+                <div key={group.module} className="space-y-2">
+                  <div className="text-xs font-semibold text-emerald-800 uppercase tracking-wider">{group.title}</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {group.widgets.map(w => {
+                      const active = widgets.includes(w.id)
+                      return (
+                        <button
+                          key={w.id}
+                          type="button"
+                          onClick={() => toggle(widgets, setWidgets, w.id)}
+                          className={`text-left p-3 rounded-lg border-2 transition ${active ? 'bg-emerald-50 border-emerald-500' : 'bg-white border-slate-200 hover:border-emerald-300'}`}
+                        >
+                          <div className="flex items-start gap-2">
+                            <div className={`mt-0.5 h-5 w-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 ${active ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300 bg-white'}`}>
+                              {active && <Check className="h-3.5 w-3.5 text-white" />}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold text-sm">{w.title}</div>
+                              <div className="text-[11px] text-muted-foreground">{w.desc}</div>
+                            </div>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+
               <div className="flex justify-between pt-2">
                 <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
-                <Button onClick={finish} disabled={busy || widgets.length === 0} className="bg-emerald-600 hover:bg-emerald-700">
+                <Button onClick={finish} disabled={busy} className="bg-emerald-600 hover:bg-emerald-700">
                   {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />}
                   Finish Setup
                 </Button>
               </div>
+              {widgets.length === 0 && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2">
+                  Tip: You haven't picked any cards. Your dashboard will show quick actions only. You can add cards later from Settings → Dashboard.
+                </p>
+              )}
             </CardContent>
           </Card>
         )}
@@ -3246,6 +3273,8 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
     { key: 'critical',  label: 'Critical Stock level' },
     { key: 'in_date',   label: 'In Date items' },
     { key: 'use_today', label: 'Use Today (urgent)' },
+    { key: 'recipes',   label: 'Recipes shortcut' },
+    { key: 'rota',      label: 'Rota (coming soon)' },
     { key: 'expiry_alerts', label: 'Expiry alert banner' },
     { key: 'urgent_list',   label: 'Urgent items list' },
     { key: 'search',        label: 'Global search box' },
