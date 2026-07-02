@@ -309,13 +309,21 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form)
       })
-      if (!res.ok) throw new Error('Save failed')
+      if (!res.ok) {
+        let msg = `Save failed (${res.status})`
+        try {
+          const errBody = await res.json()
+          if (errBody?.error) msg = errBody.error
+        } catch {}
+        throw new Error(msg)
+      }
       toast.success(editing ? 'Product updated' : 'Product added')
       setDialogOpen(false)
       fetchProducts()
       fetchStats()
     } catch (e) {
-      toast.error('Could not save product')
+      toast.error(`Could not save product: ${e.message || 'unknown error'}`, { duration: 10000 })
+      console.error('saveProduct error:', e)
     }
   }
 
@@ -653,15 +661,23 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(snapItem)
       })
-      if (!res.ok) throw new Error()
+      if (!res.ok) {
+        let msg = `Save failed (${res.status})`
+        try {
+          const errBody = await res.json()
+          if (errBody?.error) msg = errBody.error
+        } catch {}
+        throw new Error(msg)
+      }
       toast.success(`${snapItem.name} added to inventory`)
       setSnapOpen(false)
       setSnapImage(null)
       setSnapItem(null)
       fetchProducts()
       fetchStats()
-    } catch {
-      toast.error('Failed to save product')
+    } catch (e) {
+      toast.error(`Failed to save product: ${e.message || 'unknown error'}`, { duration: 10000 })
+      console.error('saveSnapItem error:', e)
     } finally {
       setSnapSaving(false)
     }
