@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
@@ -1101,6 +1101,17 @@ function App() {
                 <BarChart3 className="h-4 w-4 mr-2" /> Waste
               </Button>
             )}
+            {me?.isAdmin && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => router.push('/admin')}
+                className="border-emerald-500 text-emerald-700 hover:bg-emerald-50 font-semibold"
+                title="Open admin panel"
+              >
+                <ShieldCheck className="h-4 w-4 mr-1" /> Admin
+              </Button>
+            )}
             <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title="Settings">
               <Settings className="h-4 w-4" />
             </Button>
@@ -1139,6 +1150,15 @@ function App() {
             {hasAnalytics && (
               <Button variant={view === 'analytics' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('analytics'); setMobileNav(false) }}>
                 <BarChart3 className="h-4 w-4 mr-2" /> Waste
+              </Button>
+            )}
+            {me?.isAdmin && (
+              <Button
+                variant="outline"
+                className="w-full justify-start border-emerald-500 text-emerald-700 hover:bg-emerald-50 font-semibold"
+                onClick={() => { setMobileNav(false); router.push('/admin') }}
+              >
+                <ShieldCheck className="h-4 w-4 mr-2" /> Admin Panel
               </Button>
             )}
             <Button variant="ghost" className="w-full justify-start" onClick={() => { setSettingsOpen(true); setMobileNav(false) }}>

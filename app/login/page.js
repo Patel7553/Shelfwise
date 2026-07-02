@@ -27,7 +27,7 @@ export default function LoginPage() {
   const [code, setCode] = useState('')
   const [chefBusy, setChefBusy] = useState(false)
 
-  // If already signed-in, bounce to home.
+  // If already signed-in, bounce to home (or admin panel if user is admin).
   useEffect(() => {
     let mounted = true
     ;(async () => {
@@ -35,7 +35,13 @@ export default function LoginPage() {
         const sb = getBrowserSupabase()
         const { data } = await sb.auth.getSession()
         if (mounted && data?.session?.access_token) {
-          router.replace('/')
+          // Check if this session is an admin — if so, send them to /admin.
+          try {
+            const me = await apiJson('/api/auth/me')
+            router.replace(me?.isAdmin ? '/admin' : '/')
+          } catch {
+            router.replace('/')
+          }
         }
       } catch {}
     })()

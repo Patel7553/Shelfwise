@@ -1,0 +1,91 @@
+════════════════════════════════════════════════════════
+  ShelfWise — Session 5d (Admin routing fix)
+════════════════════════════════════════════════════════
+
+WHAT'S FIXED
+────────────
+1) 🔧 Admin login bug — when you were already signed in as admin and
+   visited /login, it bounced you to /dashboard instead of /admin.
+   Now it correctly detects admin and sends you to /admin.
+
+2) 🆕 "Admin" button in the top nav bar (only visible to admins)
+   Now you can jump to admin panel from anywhere with one click.
+   Both desktop (top-right, green outline) and mobile (in menu drawer).
+
+3) 🔧 "Env check" button now works (was 404-ing — my mistake, wrong HTTP method)
+
+4) 🆕 MAIL_FROM env var support — once you verify a Resend domain
+   later, just add MAIL_FROM=noreply@yourdomain.com in Vercel and
+   ALL emails will start working with no code change.
+
+FILES IN THIS ZIP
+─────────────────
+    app/page.js
+    app/login/page.js
+    app/admin/page.js
+    app/api/[[...path]]/route.js
+
+INSTALL
+───────
+1) Extract → drag all 4 files onto their existing counterparts in VS Code (Replace)
+2) Source Control → commit ("fix: admin routing + email debug") → Sync
+3) Wait ~1 min for Vercel to deploy
+
+═══════════════════════════════════════════════════
+  ⚠️  BUT — YOU MUST STILL UPDATE VERCEL ENV VARS
+═══════════════════════════════════════════════════
+
+Since Resend only lets you send to parthp772000@gmail.com (the account
+owner), you need to switch your admin identity to that email:
+
+STEP 1 — Change env var in Vercel
+──────────────────────────────────
+   1) https://vercel.com → shelfwise-beige → Settings
+   2) Environment Variables
+   3) Find SHELFWISE_ADMIN_EMAIL → click ⋮ → Edit
+   4) Change value from: patel.parth1966@gmail.com
+      to:                  parthp772000@gmail.com
+   5) Click Save
+   6) Deployments tab → click ⋮ on top deployment → Redeploy
+
+STEP 2 — Make sure a Supabase auth user exists for parthp772000
+────────────────────────────────────────────────────────────────
+   If you've never logged into ShelfWise with parthp772000@gmail.com,
+   you need to create that account first:
+
+   Option A — sign up through the app:
+      Go to https://shelfwise-beige.vercel.app/signup
+      → email: parthp772000@gmail.com
+      → password: (pick one)
+      → Sign Up (it will say "pending approval" — that's fine, admin
+        auto-bypasses the approval check once env var is updated)
+
+   Option B — reset password if account already exists:
+      Sign in with that email at /login
+      Use "Forgot password" if you don't remember
+
+STEP 3 — Sign in as admin
+──────────────────────────
+   1) Log out if currently signed in
+   2) Sign in with parthp772000@gmail.com
+   3) You should now see the ADMIN dashboard AND a green "Admin"
+      button in the top nav
+   4) Click 📧 Test email → send to parthp772000@gmail.com
+      → ✅ should arrive in your inbox now!
+
+═══════════════════════════════════════════════════
+  💡 BONUS TIP — Gmail alias trick
+═══════════════════════════════════════════════════
+Both patel.parth1966@gmail.com and parthp772000@gmail.com are Gmail
+addresses that YOU own. So all Session emails going to parthp772000
+still land in YOUR inbox — you just log into that specific address
+in Gmail (add as second account) to read them.
+
+Alternatively, set up Gmail forwarding:
+   Log into parthp772000 Gmail → Settings → See all settings →
+   Forwarding tab → Add forwarding address → patel.parth1966@gmail.com
+   → verify → "Forward a copy to..."
+
+That way you get admin emails delivered to your main inbox too.
+
+═══════════════════════════════════════════════════
