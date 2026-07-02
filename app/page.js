@@ -602,7 +602,7 @@ function App() {
           detected.expiryDate = ''
         }
       } catch {
-        toast.warning('Could not look up barcode. Fill details manually.')
+        toast.warning("This product isn't in our barcode database. No worries — just fill in the details manually below.", { duration: 6000 })
       }
       setBarcodeOpen(false)
       setSnapItem(detected)
