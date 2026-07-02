@@ -75,6 +75,54 @@ function addDays(n) {
   return d.toISOString().slice(0, 10)
 }
 
+// Rota row → API shape
+function rotaFromDb(r) {
+  if (!r) return null
+  return {
+    id: r.id,
+    shiftDate: r.shift_date,
+    shiftSlot: r.shift_slot,
+    chefName: r.chef_name || '',
+    role: r.role || '',
+    startTime: r.start_time || '',
+    endTime: r.end_time || '',
+    notes: r.notes || '',
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  }
+}
+
+// Waste row → API shape
+function wasteFromDb(w) {
+  if (!w) return null
+  return {
+    id: w.id,
+    productId: w.product_id,
+    productName: w.product_name,
+    category: w.category || '',
+    quantity: Number(w.quantity) || 0,
+    unit: w.unit || 'ea',
+    unitCost: w.unit_cost != null ? Number(w.unit_cost) : null,
+    reason: w.reason || 'expired',
+    disposedAt: w.disposed_at,
+    disposedBy: w.disposed_by || '',
+    notes: w.notes || '',
+  }
+}
+
+// ISO week key like "2026-W27" — used to bucket waste-by-week analytics.
+function weekKey(dateIso) {
+  const d = new Date(dateIso)
+  if (isNaN(d)) return 'unknown'
+  const tmp = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
+  const dayNum = tmp.getUTCDay() || 7
+  tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNum)
+  const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1))
+  const weekNo = Math.ceil((((tmp - yearStart) / 86400000) + 1) / 7)
+  return `${tmp.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`
+}
+
+
 // ----- Kitchen row → API shape ----------------------------------------------
 function kitchenToApi(k) {
   if (!k) return null
@@ -306,7 +354,7 @@ export async function GET(request, { params }) {
     }
 
     // ----- OWNER / CHEF endpoints (kitchen-scoped) -----
-    const ownerOrChef = ['products','settings','facets','stats','recipes'].some(p => path === p || path.startsWith(p + '/'))
+    const ownerOrChef = ['products','settings','facets','stats','recipes','rota','waste'].some(p => path === p || path.startsWith(p + '/'))
     if (ownerOrChef) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
@@ -389,6 +437,51 @@ export async function GET(request, { params }) {
         if (error && !/column .* does not exist/i.test(error.message || '')) throw error
         if (!data) return json({ error: 'Not found' }, 404)
         return json(data)
+      }
+
+      if (path === 'rota') {
+        // List shifts. Filter by ?from=YYYY-MM-DD&to=YYYY-MM-DD (defaults: current week ±).
+        const url = new URL(request.url)
+        const from = url.searchParams.get('from')
+        const to = url.searchParams.get('to')
+        let q = sb.from('rota_shifts').select('*').eq('kitchen_id', kid).order('shift_date', { ascending: true }).limit(2000)
+        if (from) q = q.gte('shift_date', from)
+        if (to) q = q.lte('shift_date', to)
+        const { data, error } = await q
+        if (error) {
+          if (/relation .* does not exist/i.test(error.message || '')) return json([])
+          throw error
+        }
+        return json((data || []).map(rotaFromDb))
+      }
+
+      if (path === 'waste') {
+        // List waste entries. Filter by ?from=YYYY-MM-DD&to=YYYY-MM-DD.
+        const url = new URL(request.url)
+        const from = url.searchParams.get('from')
+        const to = url.searchParams.get('to')
+        let q = sb.from('waste_log').select('*').eq('kitchen_id', kid).order('disposed_at', { ascending: false }).limit(2000)
+        if (from) q = q.gte('disposed_at', from)
+        if (to) q = q.lte('disposed_at', to + 'T23:59:59Z')
+        const { data, error } = await q
+        if (error) {
+          if (/relation .* does not exist/i.test(error.message || '')) return json({ entries: [], summary: null })
+          throw error
+        }
+        const entries = (data || []).map(wasteFromDb)
+        // Aggregate summary
+        const totals = { count: entries.length, quantity: 0, cost: 0, byReason: {}, byCategory: {}, byWeek: {} }
+        for (const e of entries) {
+          totals.quantity += Number(e.quantity) || 0
+          const cost = (Number(e.unitCost) || 0) * (Number(e.quantity) || 0)
+          totals.cost += cost
+          totals.byReason[e.reason] = (totals.byReason[e.reason] || 0) + 1
+          const catKey = e.category || '(uncategorised)'
+          totals.byCategory[catKey] = (totals.byCategory[catKey] || 0) + 1
+          const wk = weekKey(e.disposedAt)
+          totals.byWeek[wk] = (totals.byWeek[wk] || 0) + 1
+        }
+        return json({ entries, summary: totals })
       }
     }
 
@@ -704,11 +797,61 @@ Output strictly valid JSON with no other text.`
     }
 
     // -------- Kitchen-scoped mutations --------
-    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring'].some(p => path === p)
+    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','rota','waste'].some(p => path === p)
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
       const kid = ctx.kitchenId
+
+      // ------- Rota shifts (create OR upsert) -------
+      if (path === 'rota') {
+        const body = await request.json()
+        const row = {
+          kitchen_id: kid,
+          shift_date: String(body.shiftDate || '').slice(0, 10),
+          shift_slot: String(body.shiftSlot || '').trim(),
+          chef_name: String(body.chefName || '').trim(),
+          role: String(body.role || '').trim(),
+          start_time: String(body.startTime || '').trim(),
+          end_time: String(body.endTime || '').trim(),
+          notes: String(body.notes || '').trim(),
+          updated_at: new Date().toISOString(),
+        }
+        if (!row.shift_date || !row.shift_slot) return json({ error: 'shiftDate and shiftSlot required' }, 400)
+        // Upsert semantics: if id supplied, update; else insert new.
+        if (body.id) {
+          const { data, error: e2 } = await sb.from('rota_shifts')
+            .update(row).eq('id', body.id).eq('kitchen_id', kid).select().single()
+          if (e2) throw e2
+          return json(rotaFromDb(data))
+        }
+        const { data, error: e2 } = await sb.from('rota_shifts').insert({ id: uuidv4(), ...row }).select().single()
+        if (e2) throw e2
+        return json(rotaFromDb(data), 201)
+      }
+
+      // ------- Waste log (record disposal of a product) -------
+      if (path === 'waste') {
+        const body = await request.json()
+        const row = {
+          id: uuidv4(),
+          kitchen_id: kid,
+          product_id: body.productId || null,
+          product_name: String(body.productName || '').trim(),
+          category: String(body.category || '').trim(),
+          quantity: Number(body.quantity) || 0,
+          unit: String(body.unit || 'ea'),
+          unit_cost: body.unitCost != null && body.unitCost !== '' ? Number(body.unitCost) : null,
+          reason: String(body.reason || 'expired'),
+          disposed_at: new Date().toISOString(),
+          disposed_by: ctx.userEmail || (ctx.role === 'chef' ? 'chef' : ''),
+          notes: String(body.notes || '').trim(),
+        }
+        if (!row.product_name) return json({ error: 'productName required' }, 400)
+        const { data, error: e2 } = await sb.from('waste_log').insert(row).select().single()
+        if (e2) throw e2
+        return json(wasteFromDb(data), 201)
+      }
 
       if (path === 'products') {
         const body = await request.json()
@@ -925,6 +1068,16 @@ export async function DELETE(request, { params }) {
     }
     if (segs[0] === 'recipes' && segs[1]) {
       const { error } = await sb.from('recipes').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
+      if (error) throw error
+      return json({ ok: true })
+    }
+    if (segs[0] === 'rota' && segs[1]) {
+      const { error } = await sb.from('rota_shifts').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
+      if (error) throw error
+      return json({ ok: true })
+    }
+    if (segs[0] === 'waste' && segs[1]) {
+      const { error } = await sb.from('waste_log').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
       return json({ ok: true })
     }

@@ -1,0 +1,95 @@
+════════════════════════════════════════════════════════
+  ShelfWise — Session 5 (Rota + Waste + Notifications)
+════════════════════════════════════════════════════════
+
+WHAT'S NEW IN THIS ZIP
+──────────────────────
+
+1) 📅 ROTA MODULE — Weekly staff scheduling
+   • New "Rota" tab in top nav (auto-enabled once you enable the module).
+   • Weekly grid: 7 days × 3 slots (Morning / Afternoon / Evening).
+   • Click any + to add a shift: chef name, role, start/end time, notes.
+   • Type "OFF" in the chef name to mark a day off (visually greyed out).
+   • ← Prev / Today / Next → to navigate weeks.
+   • Shifts store per kitchen, isolated by kitchen_id.
+
+2) 📊 WASTE ANALYTICS — Track disposals + cost
+   • New "Waste" tab in top nav.
+   • KPI cards: items disposed, total quantity, estimated cost of waste.
+   • Breakdown by reason (Expired / Spoiled / Damaged / Overstock / Other)
+     as a horizontal bar chart with percentages.
+   • Top 6 categories with waste counts.
+   • Recent disposals list with dates, reasons, notes, cost.
+   • Filter: Last 7 days / Last 30 days / All time.
+   • ⚠️  Deleting a product now opens a "Reason" dialog instead of just
+     confirming. Pick "Used up" for normal consumption (NOT logged as
+     waste), or one of the waste reasons. Optionally add unit cost + notes.
+
+3) 🔔 BROWSER NOTIFICATIONS — Expiry alerts on your device
+   • Settings → Login & Alerts → "🔔 Browser Notifications" card.
+   • Opt-in with "Enable notifications" button (browser will prompt).
+   • Once enabled, ShelfWise sends ONE grouped notification per day
+     summarising items expired + expiring in the next 3 days.
+   • "Send test" button to verify it works.
+   • Works on Chrome/Edge/Firefox on desktop; Safari on iOS 16.4+ once
+     the PWA is installed to the home screen.
+
+4) 🔧 PREVIOUS FIXES INCLUDED (Session 4)
+   • Barcode scanner now saves & re-uses learned barcodes
+   • Print Logbook is a proper in-app modal (iPhone can close!)
+   • Voice modal has emergency X close button
+   • Approval email sent to owner on admin approve
+   • Admin panel has "📧 Test email" button
+
+════════════════════════════════════════════════════════
+  ⚠️  MANDATORY: RUN THE DATABASE MIGRATION FIRST
+════════════════════════════════════════════════════════
+Before you deploy, open Supabase → SQL Editor → New query,
+paste the contents of `supabase/migration-7-rota-waste.sql`
+and click Run.
+
+This creates two new tables:
+   • rota_shifts   — one row per (kitchen, date, slot)
+   • waste_log     — one row per disposed item
+
+Without this migration:
+   • Rota screen will show "Could not load rota" toast.
+   • Waste screen will show "Could not load waste data" toast.
+   • Existing inventory / recipes / auth continue to work fine.
+
+═══════════════════════════════════════════════════
+  HOW TO PASTE (in VS Code)
+═══════════════════════════════════════════════════
+Extract shelfwise-session5.zip locally. You'll get:
+    app/page.js
+    app/admin/page.js
+    app/api/[[...path]]/route.js
+    supabase/migration-7-rota-waste.sql
+    public/SESSION5_INSTRUCTIONS.txt  (this file)
+
+In VS Code:
+1) Copy the app/ + supabase/ folders into your project (Replace on prompt).
+2) Run the SQL migration in Supabase (see above).
+3) Source Control → commit → sync/push.
+4) Vercel auto-deploys.
+
+═══════════════════════════════════════════════════
+  NEW USER FLOWS TO TRY
+═══════════════════════════════════════════════════
+
+■ Enable Rota + Waste modules:
+   Settings → Dashboard → tick "Rota" and "Waste Analytics" → Save.
+   Refresh → new tabs appear in top nav.
+
+■ Add a rota shift:
+   Rota tab → + button in any cell → fill chef name + role → Save.
+
+■ Dispose a product & log waste:
+   Inventory → 🗑️ on any product → pick "Expired" → optionally add
+   cost per unit → Dispose & Log. Then check Waste tab.
+
+■ Enable browser notifications:
+   Settings → Login & Alerts → 🔔 Enable notifications → allow.
+   Send test to verify it works.
+
+═══════════════════════════════════════════════════

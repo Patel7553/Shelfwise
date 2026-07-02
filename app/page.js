@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useCallback, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
@@ -129,6 +129,10 @@ function App() {
 
   // Print Logbook modal state (in-app so iOS users can close it)
   const [printOpen, setPrintOpen] = useState(false)
+
+  // Dispose (waste log) dialog state
+  const [disposeTarget, setDisposeTarget] = useState(null)  // product being disposed
+  const openDispose = (product) => setDisposeTarget(product)
 
   // Voice Input state
   const [voiceOpen, setVoiceOpen] = useState(false)
@@ -249,6 +253,44 @@ function App() {
   useEffect(() => { fetchSettings() }, [])
   useEffect(() => { if (view === 'recipes') fetchRecipes() }, [view, recipesSearch])
 
+  // Browser expiry notifications — fires once per day when app is opened.
+  // Requires user to opt-in via Settings → Login & Alerts → Enable notifications.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!('Notification' in window)) return
+    if (localStorage.getItem('sw_notifications_enabled') !== '1') return
+    if (Notification.permission !== 'granted') return
+    if (!products || !products.length) return
+
+    const todayKey = new Date().toISOString().slice(0, 10)
+    if (localStorage.getItem('sw_last_notify') === todayKey) return
+
+    const now = new Date()
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const in3 = new Date(today.getTime() + 3 * 86400000)
+    const urgent = products.filter(p => {
+      if (!p.expiryDate) return false
+      const d = new Date(p.expiryDate)
+      return d <= in3
+    })
+    if (!urgent.length) return
+
+    try {
+      const expired = urgent.filter(p => new Date(p.expiryDate) < today)
+      const expiring = urgent.filter(p => new Date(p.expiryDate) >= today)
+      const parts = []
+      if (expired.length) parts.push(`${expired.length} expired`)
+      if (expiring.length) parts.push(`${expiring.length} expiring in 3 days`)
+      new Notification('🍳 ShelfWise expiry alert', {
+        body: `${parts.join(' · ')} — tap to review inventory.`,
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        tag: 'shelfwise-daily',
+      })
+      localStorage.setItem('sw_last_notify', todayKey)
+    } catch (e) { /* ignore */ }
+  }, [products])
+
   // Read URL params on client mount (avoids SSR hydration mismatch)
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -359,6 +401,41 @@ function App() {
       fetchStats()
     } catch {
       toast.error('Delete failed')
+    }
+  }
+
+  // Dispose = log to waste (unless "Used up") + delete the product row.
+  // wasteEntry: { reason, unitCost?, notes? }  (reason: used_up|expired|spoiled|damaged|overstock|other)
+  const disposeProduct = async (product, wasteEntry) => {
+    if (!product) return
+    try {
+      // Log waste unless it's "used_up" (consumed normally — not waste)
+      if (wasteEntry?.reason && wasteEntry.reason !== 'used_up') {
+        await fetch('/api/waste', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            productId: product.id,
+            productName: product.name,
+            category: product.category || '',
+            quantity: Number(product.quantity) || 0,
+            unit: product.unit || 'ea',
+            unitCost: wasteEntry.unitCost != null && wasteEntry.unitCost !== '' ? Number(wasteEntry.unitCost) : null,
+            reason: wasteEntry.reason,
+            notes: wasteEntry.notes || '',
+          }),
+        })
+      }
+      const res = await fetch(`/api/products/${product.id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Delete failed')
+      const msg = wasteEntry?.reason === 'used_up'
+        ? `Marked "${product.name}" as used up ✓`
+        : `Disposed "${product.name}" — waste logged 🗑️`
+      toast.success(msg)
+      fetchProducts()
+      fetchStats()
+    } catch (e) {
+      toast.error(e.message || 'Dispose failed')
     }
   }
 
@@ -964,6 +1041,7 @@ function App() {
   const hasStock = modulesEnabled.length === 0 || modulesEnabled.includes('stock')
   const hasRecipes = modulesEnabled.length === 0 || modulesEnabled.includes('recipes')
   const hasRota = modulesEnabled.includes('rota')
+  const hasAnalytics = modulesEnabled.length === 0 || modulesEnabled.includes('analytics')
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-amber-50/30 via-white to-emerald-50/40">
@@ -1014,8 +1092,13 @@ function App() {
               </Button>
             )}
             {hasRota && (
-              <Button variant={view === 'rota' ? 'default' : 'ghost'} size="sm" onClick={() => setView('rota')} className="opacity-70">
-                <ChefHat className="h-4 w-4 mr-2" /> Rota <span className="text-[10px] ml-1 bg-slate-200 px-1 rounded">soon</span>
+              <Button variant={view === 'rota' ? 'default' : 'ghost'} size="sm" onClick={() => setView('rota')}>
+                <ChefHat className="h-4 w-4 mr-2" /> Rota
+              </Button>
+            )}
+            {hasAnalytics && (
+              <Button variant={view === 'analytics' ? 'default' : 'ghost'} size="sm" onClick={() => setView('analytics')}>
+                <BarChart3 className="h-4 w-4 mr-2" /> Waste
               </Button>
             )}
             <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title="Settings">
@@ -1046,6 +1129,16 @@ function App() {
             {hasRecipes && (
               <Button variant={view === 'recipes' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('recipes'); setMobileNav(false) }}>
                 <BookOpen className="h-4 w-4 mr-2" /> Recipes
+              </Button>
+            )}
+            {hasRota && (
+              <Button variant={view === 'rota' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('rota'); setMobileNav(false) }}>
+                <ChefHat className="h-4 w-4 mr-2" /> Rota
+              </Button>
+            )}
+            {hasAnalytics && (
+              <Button variant={view === 'analytics' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('analytics'); setMobileNav(false) }}>
+                <BarChart3 className="h-4 w-4 mr-2" /> Waste
               </Button>
             )}
             <Button variant="ghost" className="w-full justify-start" onClick={() => { setSettingsOpen(true); setMobileNav(false) }}>
@@ -1081,6 +1174,7 @@ function App() {
             printLogbook={printLogbook}
             openEdit={openEdit}
             deleteProduct={deleteProduct}
+            openDispose={openDispose}
             exportCSV={exportCSV}
             formatDate={formatDate}
           />
@@ -1094,6 +1188,12 @@ function App() {
             onView={setViewRecipe}
             onDelete={deleteRecipe}
           />
+        )}
+        {view === 'rota' && (
+          <RotaView />
+        )}
+        {view === 'analytics' && (
+          <AnalyticsView products={products} />
         )}
       </main>
 
@@ -1315,6 +1415,17 @@ function App() {
         onClose={() => setPrintOpen(false)}
         kitchenName={settings.kitchenName || 'My Kitchen'}
         kitchenType={settings.kitchenType || ''}
+      />
+
+      {/* Dispose product dialog — logs to waste_log with reason */}
+      <DisposeProductDialog
+        product={disposeTarget}
+        onClose={() => setDisposeTarget(null)}
+        onConfirm={async (wasteEntry) => {
+          const p = disposeTarget
+          setDisposeTarget(null)
+          await disposeProduct(p, wasteEntry)
+        }}
       />
 
       {/* Barcode Scanner Dialog */}
@@ -2216,7 +2327,6 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
     { key: 'critical', label: 'Critical Stock', value: stats.critical, icon: AlertTriangle, color: 'from-orange-500 to-red-500', accent: 'text-orange-600', bg: 'bg-orange-50', filterKey: 'Critical' },
     { key: 'in_date', label: 'In Date', value: stats.inDate || 0, icon: Check, color: 'from-emerald-500 to-teal-600', accent: 'text-emerald-600', bg: 'bg-emerald-50', filterKey: 'Ok' },
     { key: 'recipes', label: 'Recipes', value: recipesCount ?? '—', icon: BookOpen, color: 'from-purple-500 to-fuchsia-600', accent: 'text-purple-600', bg: 'bg-purple-50', onClick: gotoRecipes },
-    { key: 'rota', label: 'Rota', value: 'Soon', icon: ChefHat, color: 'from-slate-400 to-slate-500', accent: 'text-slate-500', bg: 'bg-slate-50', disabled: true },
   ]
   const cards = cardsAll.filter(c => show(c.key))
   const isEmpty = stats.total === 0
@@ -2796,7 +2906,7 @@ function ViewRecipeDialog({ recipe, onClose, onDelete }) {
   )
 }
 
-function InventoryView({ products, loading, statusFilter, setStatusFilter, search, setSearch, sort, setSort, categoryFilter, setCategoryFilter, storageFilter, setStorageFilter, facets, openAdd, openScan, openSnap, openBarcode, openVoice, printLogbook, openEdit, deleteProduct, exportCSV, formatDate }) {
+function InventoryView({ products, loading, statusFilter, setStatusFilter, search, setSearch, sort, setSort, categoryFilter, setCategoryFilter, storageFilter, setStorageFilter, facets, openAdd, openScan, openSnap, openBarcode, openVoice, printLogbook, openEdit, deleteProduct, openDispose, exportCSV, formatDate }) {
   const activeFilters = [statusFilter !== 'All', categoryFilter !== 'All', storageFilter !== 'All', !!search].filter(Boolean).length
   return (
     <div className="space-y-6">
@@ -2902,21 +3012,15 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
                         <Button variant="ghost" size="icon" onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button variant="ghost" size="icon" className="text-red-600 hover:text-red-700 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Delete this product?</AlertDialogTitle>
-                              <AlertDialogDescription>This will permanently remove "{p.name}" from your inventory.</AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction className="bg-red-600 hover:bg-red-700" onClick={() => deleteProduct(p.id)}>Delete</AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                          onClick={() => openDispose(p)}
+                          title="Dispose / Remove"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -2956,9 +3060,10 @@ function SetupWizardV2({ settings, onComplete }) {
   ]
 
   const MODULES = [
-    { id: 'stock',   title: 'Stock Monitoring', desc: 'Track expiries, low stock and inventory alerts.', icon: Package, ready: true },
-    { id: 'recipes', title: 'Recipes',          desc: 'Scan recipes & check ingredient availability.', icon: BookOpen, ready: true },
-    { id: 'rota',    title: 'Rota (Staff Scheduling)', desc: 'Manage shifts & staff rosters. Coming soon!', icon: ChefHat,  ready: false },
+    { id: 'stock',     title: 'Stock Monitoring',        desc: 'Track expiries, low stock and inventory alerts.', icon: Package, ready: true },
+    { id: 'recipes',   title: 'Recipes',                 desc: 'Scan recipes & check ingredient availability.', icon: BookOpen, ready: true },
+    { id: 'rota',      title: 'Rota (Staff Scheduling)', desc: 'Plan weekly shifts, roles and days off.',        icon: ChefHat,  ready: true },
+    { id: 'analytics', title: 'Waste Analytics',         desc: 'Track disposed items, reasons and cost of waste.', icon: BarChart3, ready: true },
   ]
 
   const WIDGETS_BY_MODULE = {
@@ -2974,7 +3079,10 @@ function SetupWizardV2({ settings, onComplete }) {
       { id: 'recipes',   title: 'Recipes',         desc: 'Shortcut card to your saved recipes.' },
     ],
     rota: [
-      { id: 'rota',      title: 'Rota',            desc: 'Placeholder — full feature coming soon.' },
+      { id: 'rota_today', title: 'Today\'s Rota',  desc: 'Who is on shift today.' },
+    ],
+    analytics: [
+      { id: 'waste_week', title: 'Waste (this week)', desc: 'Items disposed in the last 7 days.' },
     ],
   }
 
@@ -3468,15 +3576,17 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
     { key: 'in_date',   label: 'In Date items' },
     { key: 'use_today', label: 'Use Today (urgent)' },
     { key: 'recipes',   label: 'Recipes shortcut' },
-    { key: 'rota',      label: 'Rota (coming soon)' },
+    { key: 'rota_today', label: 'Today\'s Rota' },
+    { key: 'waste_week', label: 'Waste (this week)' },
     { key: 'expiry_alerts', label: 'Expiry alert banner' },
     { key: 'urgent_list',   label: 'Urgent items list' },
     { key: 'search',        label: 'Global search box' },
   ]
   const ALL_MODULES = [
-    { key: 'stock',   label: 'Stock Monitoring',    desc: 'Inventory + expiry tracking' },
-    { key: 'recipes', label: 'Recipes',             desc: 'AI recipe parsing & ingredient match' },
-    { key: 'rota',    label: 'Rota (Coming soon)',  desc: 'Staff scheduling', disabled: true },
+    { key: 'stock',     label: 'Stock Monitoring', desc: 'Inventory + expiry tracking' },
+    { key: 'recipes',   label: 'Recipes',          desc: 'AI recipe parsing & ingredient match' },
+    { key: 'rota',      label: 'Rota',             desc: 'Weekly staff scheduling' },
+    { key: 'analytics', label: 'Waste Analytics',  desc: 'Track disposals, reasons & cost' },
   ]
 
   useEffect(() => {
@@ -3611,6 +3721,8 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
                   </Button>
                 </div>
               </div>
+
+              <NotificationSettingsCard />
             </div>
           )}
 
@@ -3967,6 +4079,647 @@ function LoginGate({ settings, onAuth, saveSettings }) {
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+
+// ============================================================================
+// Notification settings card — browser Notification API opt-in.
+// ============================================================================
+function NotificationSettingsCard() {
+  const [permission, setPermission] = useState('default')
+  const [supported, setSupported] = useState(true)
+  const [enabled, setEnabled] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!('Notification' in window)) { setSupported(false); return }
+    setPermission(Notification.permission)
+    setEnabled(localStorage.getItem('sw_notifications_enabled') === '1' && Notification.permission === 'granted')
+  }, [])
+
+  const enable = async () => {
+    if (!supported) { toast.error('Your browser doesn\'t support notifications'); return }
+    const res = await Notification.requestPermission()
+    setPermission(res)
+    if (res === 'granted') {
+      localStorage.setItem('sw_notifications_enabled', '1')
+      setEnabled(true)
+      try {
+        new Notification('🔔 ShelfWise alerts on', {
+          body: 'You\'ll get reminders when items are about to expire.',
+          icon: '/icon-192.png',
+          badge: '/icon-192.png',
+        })
+      } catch {}
+      toast.success('Notifications enabled ✅')
+    } else {
+      toast.error('Permission denied. You can re-enable it in browser settings.')
+    }
+  }
+
+  const disable = () => {
+    localStorage.setItem('sw_notifications_enabled', '0')
+    setEnabled(false)
+    toast.success('Notifications disabled')
+  }
+
+  const test = () => {
+    if (permission !== 'granted') { toast.error('Enable notifications first'); return }
+    try {
+      new Notification('🔔 ShelfWise test', {
+        body: 'This is what a real expiry alert will look like.',
+        icon: '/icon-192.png',
+      })
+    } catch (e) { toast.error('Could not show notification') }
+  }
+
+  if (!supported) {
+    return (
+      <div className="rounded-lg border-2 border-slate-200 bg-slate-50 p-4">
+        <Label className="text-slate-700 text-sm font-bold">🔔 Browser Notifications</Label>
+        <p className="text-xs text-slate-600 mt-1">Not supported on this browser.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className={`rounded-lg border-2 p-4 ${enabled ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
+      <Label className="text-sm font-bold">🔔 Browser Notifications</Label>
+      <p className="text-xs text-muted-foreground mt-1 mb-3">
+        Get an in-browser alert when items are about to expire (checks once when you open the app).
+      </p>
+      {enabled ? (
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" size="sm" onClick={test}>Send test</Button>
+          <Button variant="outline" size="sm" onClick={disable} className="text-red-600">
+            <BellOff className="h-4 w-4 mr-1" /> Turn off
+          </Button>
+        </div>
+      ) : (
+        <Button size="sm" onClick={enable} className="bg-emerald-600 hover:bg-emerald-700">
+          <Bell className="h-4 w-4 mr-1" /> {permission === 'denied' ? 'Blocked — allow in browser settings' : 'Enable notifications'}
+        </Button>
+      )}
+    </div>
+  )
+}
+
+
+// ============================================================================
+// Dispose (waste-log) dialog — asks the user WHY a product is being removed.
+// "Used up" is NOT logged as waste. Anything else creates a waste_log row.
+// ============================================================================
+function DisposeProductDialog({ product, onClose, onConfirm }) {
+  const [reason, setReason] = useState('expired')
+  const [unitCost, setUnitCost] = useState('')
+  const [notes, setNotes] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (product) {
+      // Smart-default: if expired, pre-select expired. If low qty, "used_up". Otherwise "expired".
+      const status = product._status
+      if (status === 'Expired') setReason('expired')
+      else if (status === 'Critical') setReason('used_up')
+      else setReason('expired')
+      setUnitCost('')
+      setNotes('')
+    }
+  }, [product?.id])
+
+  if (!product) return null
+  const REASONS = [
+    { id: 'used_up',   label: 'Used up (consumed normally)', emoji: '✅', color: 'bg-emerald-50 border-emerald-300 text-emerald-800', note: 'Not counted as waste' },
+    { id: 'expired',   label: 'Expired',                      emoji: '⏰', color: 'bg-red-50 border-red-300 text-red-800' },
+    { id: 'spoiled',   label: 'Spoiled / gone off',           emoji: '🤢', color: 'bg-amber-50 border-amber-300 text-amber-800' },
+    { id: 'damaged',   label: 'Damaged / dropped',            emoji: '💥', color: 'bg-orange-50 border-orange-300 text-orange-800' },
+    { id: 'overstock', label: 'Overstock / not needed',       emoji: '📦', color: 'bg-slate-50 border-slate-300 text-slate-800' },
+    { id: 'other',     label: 'Other',                        emoji: '❓', color: 'bg-slate-50 border-slate-300 text-slate-800' },
+  ]
+
+  const isWaste = reason !== 'used_up'
+
+  const handleConfirm = async () => {
+    setBusy(true)
+    try {
+      await onConfirm({
+        reason,
+        unitCost: isWaste ? unitCost : '',
+        notes,
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open={!!product} onOpenChange={(v) => { if (!v && !busy) onClose() }}>
+      <DialogContent className="sm:max-w-[520px] max-h-[92vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Remove &quot;{product.name}&quot;</DialogTitle>
+          <p className="text-sm text-muted-foreground">
+            Tell us why — this helps you track waste over time.
+          </p>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div className="grid grid-cols-1 gap-2">
+            {REASONS.map(r => (
+              <button
+                key={r.id}
+                type="button"
+                onClick={() => setReason(r.id)}
+                className={`text-left rounded-lg border-2 px-3 py-2.5 transition ${reason === r.id ? r.color + ' shadow-sm' : 'border-slate-200 hover:border-slate-300 bg-white'}`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">{r.emoji}</span>
+                  <span className="font-medium text-sm">{r.label}</span>
+                  {r.note && <span className="ml-auto text-[10px] text-muted-foreground italic">{r.note}</span>}
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {isWaste && (
+            <div className="grid grid-cols-2 gap-3 pt-2 border-t">
+              <div className="col-span-2">
+                <Label className="text-xs">Cost per {product.unit || 'unit'} <span className="text-muted-foreground">(optional, for cost tracking)</span></Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="e.g. 2.50"
+                  value={unitCost}
+                  onChange={e => setUnitCost(e.target.value)}
+                />
+              </div>
+              <div className="col-span-2">
+                <Label className="text-xs">Notes <span className="text-muted-foreground">(optional)</span></Label>
+                <Input
+                  placeholder="e.g. Left out overnight"
+                  value={notes}
+                  onChange={e => setNotes(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+
+          <p className="text-[11px] text-muted-foreground pt-1">
+            {isWaste
+              ? `This will log ${product.quantity} ${product.unit || 'unit'}${product.quantity !== 1 ? 's' : ''} to your waste analytics${unitCost ? ` (estimated cost: ${(Number(unitCost) * Number(product.quantity || 0)).toFixed(2)})` : ''}.`
+              : 'This will simply remove the item — no waste logged.'}
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button onClick={handleConfirm} disabled={busy} className={isWaste ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />}
+            {isWaste ? 'Dispose & Log' : 'Mark Used Up'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ============================================================================
+// Rota View — weekly staff scheduling grid.
+// Chef names are free-text; store a row per (date, slot).
+// ============================================================================
+function RotaView() {
+  // Anchor day for the visible week (defaults to today) — Monday-based week.
+  const [anchor, setAnchor] = useState(() => new Date())
+  const [shifts, setShifts] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [editing, setEditing] = useState(null) // { shift?, date, slot } — for the modal
+
+  // Compute Monday of the anchor week + 7 days
+  const monday = useMemo(() => {
+    const d = new Date(anchor)
+    const day = d.getDay() // 0=Sun ... 6=Sat
+    const diff = day === 0 ? -6 : 1 - day
+    d.setDate(d.getDate() + diff)
+    d.setHours(0, 0, 0, 0)
+    return d
+  }, [anchor])
+
+  const days = useMemo(() => Array.from({ length: 7 }).map((_, i) => {
+    const d = new Date(monday); d.setDate(d.getDate() + i)
+    return d
+  }), [monday])
+
+  const SLOTS = ['Morning', 'Afternoon', 'Evening']
+
+  const fromISO = monday.toISOString().slice(0, 10)
+  const toDate = new Date(monday); toDate.setDate(toDate.getDate() + 6)
+  const toISO = toDate.toISOString().slice(0, 10)
+
+  const loadShifts = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/rota?from=${fromISO}&to=${toISO}`)
+      if (!res.ok) throw new Error('Load failed')
+      const data = await res.json()
+      setShifts(Array.isArray(data) ? data : [])
+    } catch (e) {
+      toast.error('Could not load rota — did you run migration-7?')
+    } finally {
+      setLoading(false)
+    }
+  }, [fromISO, toISO])
+
+  useEffect(() => { loadShifts() }, [loadShifts])
+
+  // Build a lookup: shifts[date][slot] = shift row
+  const byCell = useMemo(() => {
+    const m = {}
+    for (const s of shifts) {
+      const key = s.shiftDate
+      m[key] = m[key] || {}
+      m[key][s.shiftSlot] = m[key][s.shiftSlot] || []
+      m[key][s.shiftSlot].push(s)
+    }
+    return m
+  }, [shifts])
+
+  const iso = (d) => d.toISOString().slice(0, 10)
+  const dayLabel = (d) => d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">Rota</h2>
+          <p className="text-muted-foreground mt-1">Weekly staff schedule</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => { const d = new Date(monday); d.setDate(d.getDate() - 7); setAnchor(d) }}>← Prev</Button>
+          <Button size="sm" variant="ghost" onClick={() => setAnchor(new Date())}>Today</Button>
+          <Button size="sm" variant="outline" onClick={() => { const d = new Date(monday); d.setDate(d.getDate() + 7); setAnchor(d) }}>Next →</Button>
+        </div>
+      </div>
+
+      <div className="text-sm text-muted-foreground">
+        <b>Week of {monday.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}</b>
+        {loading && <Loader2 className="inline h-3 w-3 animate-spin ml-2" />}
+      </div>
+
+      <div className="overflow-x-auto">
+        <div className="min-w-[900px]">
+          <div className="grid grid-cols-8 gap-1 text-xs">
+            <div className="font-semibold text-slate-600 p-2">Slot</div>
+            {days.map(d => (
+              <div key={iso(d)} className={`p-2 text-center font-semibold rounded ${iso(d) === iso(new Date()) ? 'bg-emerald-100 text-emerald-900' : 'text-slate-600'}`}>
+                <div>{d.toLocaleDateString('en-GB', { weekday: 'short' })}</div>
+                <div className="text-lg">{d.getDate()}</div>
+                <div className="text-[10px] text-muted-foreground">{d.toLocaleDateString('en-GB', { month: 'short' })}</div>
+              </div>
+            ))}
+
+            {SLOTS.map(slot => (
+              <React.Fragment key={slot}>
+                <div className="p-2 font-semibold text-slate-700 border-t bg-slate-50 flex items-center">{slot}</div>
+                {days.map(d => {
+                  const key = iso(d)
+                  const cell = byCell[key]?.[slot] || []
+                  return (
+                    <div key={key + slot} className="border-t border-slate-200 p-1 min-h-[70px] bg-white space-y-1">
+                      {cell.map(s => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => setEditing({ shift: s, date: key, slot })}
+                          className={`w-full text-left px-2 py-1 rounded text-[11px] ${s.chefName?.toUpperCase() === 'OFF' ? 'bg-slate-200 text-slate-500 line-through' : 'bg-emerald-100 text-emerald-900 hover:bg-emerald-200'}`}
+                        >
+                          <div className="font-semibold truncate">{s.chefName || '—'}</div>
+                          {(s.role || s.startTime) && (
+                            <div className="text-[10px] opacity-80 truncate">
+                              {s.role}{s.role && (s.startTime || s.endTime) ? ' · ' : ''}
+                              {s.startTime}{s.startTime && s.endTime ? '–' : ''}{s.endTime}
+                            </div>
+                          )}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setEditing({ shift: null, date: key, slot })}
+                        className="w-full text-center text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 text-[11px] py-1 rounded border border-dashed border-slate-200"
+                      >+ add</button>
+                    </div>
+                  )
+                })}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <RotaShiftDialog
+        target={editing}
+        onClose={() => setEditing(null)}
+        onSaved={() => { setEditing(null); loadShifts() }}
+      />
+    </div>
+  )
+}
+
+function RotaShiftDialog({ target, onClose, onSaved }) {
+  const [chefName, setChefName] = useState('')
+  const [role, setRole] = useState('')
+  const [startTime, setStartTime] = useState('')
+  const [endTime, setEndTime] = useState('')
+  const [notes, setNotes] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (target) {
+      const s = target.shift
+      setChefName(s?.chefName || '')
+      setRole(s?.role || '')
+      setStartTime(s?.startTime || '')
+      setEndTime(s?.endTime || '')
+      setNotes(s?.notes || '')
+    }
+  }, [target?.shift?.id, target?.date, target?.slot])
+
+  if (!target) return null
+
+  const save = async () => {
+    if (!chefName.trim()) { toast.error('Chef name required (or "OFF" for a day off)'); return }
+    setBusy(true)
+    try {
+      const body = {
+        id: target.shift?.id,
+        shiftDate: target.date,
+        shiftSlot: target.slot,
+        chefName: chefName.trim(),
+        role: role.trim(),
+        startTime: startTime.trim(),
+        endTime: endTime.trim(),
+        notes: notes.trim(),
+      }
+      const res = await fetch('/api/rota', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) throw new Error('Save failed')
+      toast.success(target.shift ? 'Shift updated' : 'Shift added')
+      onSaved()
+    } catch (e) {
+      toast.error(e.message || 'Save failed')
+    } finally { setBusy(false) }
+  }
+
+  const remove = async () => {
+    if (!target.shift?.id) return
+    if (!confirm('Delete this shift?')) return
+    setBusy(true)
+    try {
+      const res = await fetch(`/api/rota/${target.shift.id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Delete failed')
+      toast.success('Shift deleted')
+      onSaved()
+    } catch (e) { toast.error(e.message || 'Delete failed') } finally { setBusy(false) }
+  }
+
+  return (
+    <Dialog open={!!target} onOpenChange={(v) => { if (!v && !busy) onClose() }}>
+      <DialogContent className="sm:max-w-[440px]">
+        <DialogHeader>
+          <DialogTitle>{target.shift ? 'Edit shift' : 'Add shift'}</DialogTitle>
+          <p className="text-xs text-muted-foreground">
+            {new Date(target.date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })} · <b>{target.slot}</b>
+          </p>
+        </DialogHeader>
+        <div className="grid grid-cols-2 gap-3 py-2">
+          <div className="col-span-2">
+            <Label className="text-xs">Chef name</Label>
+            <Input value={chefName} onChange={e => setChefName(e.target.value)} placeholder='Anna, "OFF", "Open"…' autoFocus />
+            <p className="text-[10px] text-muted-foreground mt-1">Tip: use &quot;OFF&quot; to mark a day off.</p>
+          </div>
+          <div className="col-span-2">
+            <Label className="text-xs">Role <span className="text-muted-foreground">(optional)</span></Label>
+            <Input value={role} onChange={e => setRole(e.target.value)} placeholder="Head Chef, Sous, KP…" />
+          </div>
+          <div>
+            <Label className="text-xs">Start time</Label>
+            <Input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} />
+          </div>
+          <div>
+            <Label className="text-xs">End time</Label>
+            <Input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} />
+          </div>
+          <div className="col-span-2">
+            <Label className="text-xs">Notes</Label>
+            <Input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Deep-clean day, prep for Fri banquet…" />
+          </div>
+        </div>
+        <DialogFooter className="flex-row justify-between gap-2">
+          {target.shift ? (
+            <Button variant="ghost" size="sm" className="text-red-600 hover:text-red-700" onClick={remove} disabled={busy}>
+              <Trash2 className="h-4 w-4 mr-1" /> Delete
+            </Button>
+          ) : <div />}
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+            <Button onClick={save} disabled={busy} className="bg-emerald-600 hover:bg-emerald-700">
+              {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />}
+              Save
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ============================================================================
+// Analytics View — waste breakdown (this week / month / all)
+// ============================================================================
+function AnalyticsView({ products }) {
+  const [range, setRange] = useState('week') // week | month | all
+  const [data, setData] = useState({ entries: [], summary: null })
+  const [loading, setLoading] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const now = new Date()
+      let from = ''
+      if (range === 'week') {
+        const d = new Date(now); d.setDate(d.getDate() - 7); from = d.toISOString().slice(0, 10)
+      } else if (range === 'month') {
+        const d = new Date(now); d.setDate(d.getDate() - 30); from = d.toISOString().slice(0, 10)
+      }
+      const url = from ? `/api/waste?from=${from}` : '/api/waste'
+      const res = await fetch(url)
+      if (!res.ok) throw new Error()
+      const d = await res.json()
+      setData(d)
+    } catch (e) {
+      toast.error('Could not load waste data — did you run migration-7?')
+      setData({ entries: [], summary: null })
+    } finally { setLoading(false) }
+  }, [range])
+
+  useEffect(() => { load() }, [load])
+
+  const summary = data.summary || { count: 0, quantity: 0, cost: 0, byReason: {}, byCategory: {}, byWeek: {} }
+
+  const reasonLabel = (r) => ({
+    used_up: 'Used up',
+    expired: 'Expired',
+    spoiled: 'Spoiled',
+    damaged: 'Damaged',
+    overstock: 'Overstock',
+    other: 'Other',
+  })[r] || r
+
+  const reasonColor = (r) => ({
+    expired: 'bg-red-500',
+    spoiled: 'bg-amber-500',
+    damaged: 'bg-orange-500',
+    overstock: 'bg-slate-500',
+    other: 'bg-slate-400',
+  })[r] || 'bg-slate-500'
+
+  const topReasons = Object.entries(summary.byReason).sort((a, b) => b[1] - a[1])
+  const topCategories = Object.entries(summary.byCategory).sort((a, b) => b[1] - a[1]).slice(0, 6)
+  const byWeek = Object.entries(summary.byWeek).sort((a, b) => a[0].localeCompare(b[0]))
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">Waste Analytics</h2>
+          <p className="text-muted-foreground mt-1">Track what's being disposed and why</p>
+        </div>
+        <div className="flex gap-1 border rounded-lg overflow-hidden bg-white">
+          {['week', 'month', 'all'].map(r => (
+            <button
+              key={r}
+              onClick={() => setRange(r)}
+              className={`px-3 py-1.5 text-xs font-medium ${range === r ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+            >
+              {r === 'week' ? 'Last 7 days' : r === 'month' ? 'Last 30 days' : 'All time'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-emerald-600" /></div>
+      ) : (
+        <>
+          {/* KPI Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Card>
+              <CardContent className="p-4">
+                <p className="text-xs text-muted-foreground">Items disposed</p>
+                <p className="text-3xl font-bold text-slate-900">{summary.count}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <p className="text-xs text-muted-foreground">Total quantity</p>
+                <p className="text-3xl font-bold text-slate-900">{Number(summary.quantity || 0).toFixed(1)}</p>
+                <p className="text-[10px] text-muted-foreground mt-1">across mixed units</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-4">
+                <p className="text-xs text-muted-foreground">Est. cost of waste</p>
+                <p className="text-3xl font-bold text-red-600">{summary.cost > 0 ? summary.cost.toFixed(2) : '—'}</p>
+                <p className="text-[10px] text-muted-foreground mt-1">enter unit cost on dispose</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {summary.count === 0 ? (
+            <Card>
+              <CardContent className="p-8 text-center">
+                <div className="text-4xl mb-2">🎉</div>
+                <p className="font-semibold">No waste logged in this range.</p>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Waste is tracked when you dispose products (Inventory → 🗑️ button → reason).
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <>
+              {/* Breakdown by reason */}
+              <Card>
+                <CardContent className="p-4 space-y-3">
+                  <h3 className="font-semibold">By reason</h3>
+                  {topReasons.map(([r, count]) => {
+                    const pct = summary.count ? Math.round((count / summary.count) * 100) : 0
+                    return (
+                      <div key={r} className="space-y-1">
+                        <div className="flex justify-between text-xs">
+                          <span className="font-medium">{reasonLabel(r)}</span>
+                          <span className="text-muted-foreground">{count} ({pct}%)</span>
+                        </div>
+                        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                          <div className={`h-full ${reasonColor(r)}`} style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </CardContent>
+              </Card>
+
+              {topCategories.length > 0 && (
+                <Card>
+                  <CardContent className="p-4 space-y-3">
+                    <h3 className="font-semibold">Top waste categories</h3>
+                    {topCategories.map(([cat, count]) => (
+                      <div key={cat} className="flex justify-between text-sm border-b last:border-0 py-1.5">
+                        <span>{cat}</span>
+                        <span className="text-muted-foreground">{count} item{count !== 1 ? 's' : ''}</span>
+                      </div>
+                    ))}
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Recent waste list */}
+              <Card>
+                <CardContent className="p-4">
+                  <h3 className="font-semibold mb-3">Recent disposals ({data.entries.length})</h3>
+                  <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                    {data.entries.map(e => (
+                      <div key={e.id} className="flex items-center justify-between border-b last:border-0 py-2 text-sm">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium truncate">{e.productName}</p>
+                          <p className="text-[11px] text-muted-foreground">
+                            {new Date(e.disposedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                            {e.category ? ` · ${e.category}` : ''}
+                            {e.disposedBy ? ` · by ${e.disposedBy}` : ''}
+                          </p>
+                          {e.notes && <p className="text-[11px] text-muted-foreground italic">&quot;{e.notes}&quot;</p>}
+                        </div>
+                        <div className="text-right shrink-0 ml-2">
+                          <Badge variant="outline" className={
+                            e.reason === 'expired' ? 'text-red-700 border-red-300 bg-red-50' :
+                            e.reason === 'spoiled' ? 'text-amber-700 border-amber-300 bg-amber-50' :
+                            e.reason === 'damaged' ? 'text-orange-700 border-orange-300 bg-orange-50' :
+                            'text-slate-700 border-slate-300 bg-slate-50'
+                          }>{reasonLabel(e.reason)}</Badge>
+                          <p className="text-[11px] text-muted-foreground mt-1">
+                            {e.quantity} {e.unit}{e.unitCost != null ? ` · ${(e.unitCost * e.quantity).toFixed(2)}` : ''}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </>
+          )}
+        </>
+      )}
     </div>
   )
 }
