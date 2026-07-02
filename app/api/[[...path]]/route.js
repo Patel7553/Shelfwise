@@ -148,8 +148,16 @@ async function parseTextForItems(text) {
   const key = process.env.EMERGENT_LLM_KEY
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
   const today = new Date().toISOString().slice(0, 10)
-  const systemPrompt = `Convert spoken kitchen inventory notes into structured items. Today is ${today}.
-Return ONLY {"items":[{"name","quantity","unit","expiryDate","category","storageType","location"}]}.`
+  const systemPrompt = `Convert spoken kitchen inventory notes into structured items and return them as JSON. Today is ${today}.
+Return ONLY a JSON object of shape: {"items":[{"name","quantity","unit","expiryDate","category","storageType","location"}]}.
+- name: product name
+- quantity: number (default 1)
+- unit: "ea", "kg", "g", "L", "mL", "bunch", "pack", or "box"
+- expiryDate: "YYYY-MM-DD" or null
+- category: short category
+- storageType: "Fridge", "Freezer", "Dry" or "Ambient"
+- location: shelf/location if mentioned, else ""
+Output strictly valid JSON with no other text.`
   const body = {
     model: 'gpt-4o-mini',
     messages: [
@@ -175,8 +183,9 @@ Return ONLY {"items":[{"name","quantity","unit","expiryDate","category","storage
 async function scanRecipe({ image, text }) {
   const key = process.env.EMERGENT_LLM_KEY
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
-  const systemPrompt = `You are a recipe parser. Extract structured recipe data.
-Return ONLY {"title","servings","ingredients":[{"name","quantity","unit","notes"}],"allergens":[]}.`
+  const systemPrompt = `You are a recipe parser. Extract structured recipe data and return it as JSON.
+Return ONLY a JSON object of shape: {"title","servings","ingredients":[{"name","quantity","unit","notes"}],"allergens":[]}.
+Output strictly valid JSON with no other text.`
 
   const body = {
     model: 'gpt-4o',
@@ -584,8 +593,9 @@ export async function POST(request, { params }) {
         const key = process.env.EMERGENT_LLM_KEY
         if (!key) return json({ error: 'EMERGENT_LLM_KEY not set' }, 500)
 
-        const systemPrompt = `You are a professional chef. Generate clear, step-by-step COOKING INSTRUCTIONS for the recipe below.
-Return ONLY {"instructions":[...],"source":"..."}. 6-12 steps, each 12-30 words, mention temps & times.`
+        const systemPrompt = `You are a professional chef. Generate clear, step-by-step COOKING INSTRUCTIONS for the recipe below and return them as JSON.
+Return ONLY a JSON object of shape: {"instructions":[...],"source":"..."}. 6-12 steps, each 12-30 words, mention temps & times.
+Output strictly valid JSON with no other text.`
         const userPrompt = `Recipe title: ${title || '(unknown)'}\nServings: ${servings || 'unspecified'}\nIngredients:\n${ingredients.map(i => '- ' + i).join('\n')}`
 
         const apiRes = await fetch(EMERGENT_URL, {
