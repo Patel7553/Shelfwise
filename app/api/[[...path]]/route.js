@@ -353,6 +353,20 @@ export async function GET(request, { params }) {
       return json({ kitchens: (data || []).map(kitchenToApi) })
     }
 
+    // Diagnostic — returns which env vars are set (booleans only, no secret values leaked).
+    if (path === 'admin/env-check') {
+      const { ctx, error } = await requireAdmin(request)
+      if (error) return error
+      return json({
+        RESEND_API_KEY: !!process.env.RESEND_API_KEY,
+        RESEND_API_KEY_length: (process.env.RESEND_API_KEY || '').length,
+        SHELFWISE_ADMIN_EMAIL: process.env.SHELFWISE_ADMIN_EMAIL || '(not set)',
+        NEXT_PUBLIC_BASE_URL: process.env.NEXT_PUBLIC_BASE_URL || '(not set)',
+        EMERGENT_LLM_KEY: !!process.env.EMERGENT_LLM_KEY,
+        SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+      })
+    }
+
     // ----- OWNER / CHEF endpoints (kitchen-scoped) -----
     const ownerOrChef = ['products','settings','facets','stats','recipes','rota','waste'].some(p => path === p || path.startsWith(p + '/'))
     if (ownerOrChef) {
@@ -438,7 +452,6 @@ export async function GET(request, { params }) {
         if (!data) return json({ error: 'Not found' }, 404)
         return json(data)
       }
-
       if (path === 'rota') {
         // List shifts. Filter by ?from=YYYY-MM-DD&to=YYYY-MM-DD (defaults: current week ±).
         const url = new URL(request.url)
@@ -583,7 +596,7 @@ export async function POST(request, { params }) {
             method: 'POST',
             headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              from: 'ShelfWise <onboarding@resend.dev>',
+              from: process.env.MAIL_FROM || 'ShelfWise <onboarding@resend.dev>',
               to: [adminEmail],
               subject: `ShelfWise — new sign-up: ${email}`,
               html,
@@ -663,7 +676,7 @@ export async function POST(request, { params }) {
             method: 'POST',
             headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              from: 'ShelfWise <onboarding@resend.dev>',
+              from: process.env.MAIL_FROM || 'ShelfWise <onboarding@resend.dev>',
               to: [data.owner_email],
               subject: `✅ Your kitchen "${data.kitchen_name || 'ShelfWise'}" is approved`,
               html,
@@ -708,7 +721,7 @@ export async function POST(request, { params }) {
           method: 'POST',
           headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            from: 'ShelfWise <onboarding@resend.dev>',
+            from: process.env.MAIL_FROM || 'ShelfWise <onboarding@resend.dev>',
             to: [to],
             subject: '✅ ShelfWise test email',
             html: `<p>This is a test email from ShelfWise. If you see this, Resend + your env vars are configured correctly.</p><p>Sent at ${new Date().toISOString()}</p>`,
@@ -739,6 +752,8 @@ export async function POST(request, { params }) {
     }
 
     // Diagnostic — returns which env vars are set (booleans only, no values leaked).
+    // Handler for this lives in GET (see admin/env-check above). Kept here as a safety net
+    // in case someone accidentally POSTs it.
     if (path === 'admin/env-check') {
       const { ctx, error } = await requireAdmin(request)
       if (error) return error
@@ -1007,7 +1022,7 @@ Output strictly valid JSON with no other text.`
         const res = await fetch('https://api.resend.com/emails', {
           method: 'POST',
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from: 'ShelfWise Alerts <onboarding@resend.dev>', to: [to], subject, html })
+          body: JSON.stringify({ from: process.env.MAIL_FROM || 'ShelfWise Alerts <onboarding@resend.dev>', to: [to], subject, html })
         })
         if (!res.ok) {
           const txt = await res.text()
