@@ -1016,6 +1016,9 @@ function App() {
             <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title="Settings">
               <Settings className="h-4 w-4" />
             </Button>
+            <Button variant="ghost" size="icon" onClick={async () => { await signOutAll(); router.replace('/login') }} title="Sign out" className="text-red-600 hover:text-red-700 hover:bg-red-50">
+              <LogOut className="h-4 w-4" />
+            </Button>
           </nav>
 
           {/* Mobile menu button */}
@@ -2829,6 +2832,15 @@ function SetupWizardV2({ settings, onComplete }) {
     }
   }
 
+  // If Stock isn't chosen, there's nothing else to configure — skip step 2 entirely.
+  const handleNext = () => {
+    if (showStockStep) {
+      setStep(2)
+    } else {
+      finish()
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 bg-gradient-to-br from-emerald-50 via-white to-teal-50 overflow-y-auto">
       <div className="max-w-2xl mx-auto p-4 md:p-8 min-h-full">
@@ -2841,7 +2853,7 @@ function SetupWizardV2({ settings, onComplete }) {
         {/* Progress bar */}
         <div className="flex items-center gap-2 mb-6 max-w-md mx-auto">
           <div className={`flex-1 h-1.5 rounded-full ${step >= 1 ? 'bg-emerald-500' : 'bg-slate-200'}`} />
-          <div className={`flex-1 h-1.5 rounded-full ${step >= 2 ? 'bg-emerald-500' : 'bg-slate-200'}`} />
+          {showStockStep && <div className={`flex-1 h-1.5 rounded-full ${step >= 2 ? 'bg-emerald-500' : 'bg-slate-200'}`} />}
         </div>
 
         {step === 1 && (
@@ -2887,54 +2899,51 @@ function SetupWizardV2({ settings, onComplete }) {
               </div>
               <div className="flex justify-end pt-2">
                 <Button
-                  onClick={() => setStep(2)}
-                  disabled={modules.length === 0}
+                  onClick={handleNext}
+                  disabled={modules.length === 0 || busy}
                   className="bg-emerald-600 hover:bg-emerald-700"
                 >
-                  Next <ArrowRight className="h-4 w-4 ml-2" />
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                  {showStockStep ? 'Next' : 'Finish Setup'} <ArrowRight className="h-4 w-4 ml-2" />
                 </Button>
               </div>
             </CardContent>
           </Card>
         )}
 
-        {step === 2 && (
+        {step === 2 && showStockStep && (
           <Card className="shadow-lg border-emerald-100">
             <CardContent className="p-6 space-y-4">
               <div>
                 <h2 className="font-bold text-lg text-emerald-900">Step 2 · Which dashboard cards do you want?</h2>
-                <p className="text-sm text-muted-foreground">
-                  {showStockStep ? 'Pick the alert cards you want to see on your dashboard. You can add more later.' : "You skipped Stock Monitoring, so we'll skip this too. Click Finish."}
-                </p>
+                <p className="text-sm text-muted-foreground">Pick the alert cards you want to see on your dashboard. You can add more later.</p>
               </div>
-              {showStockStep && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {STOCK_WIDGETS.map(w => {
-                    const active = widgets.includes(w.id)
-                    return (
-                      <button
-                        key={w.id}
-                        type="button"
-                        onClick={() => toggle(widgets, setWidgets, w.id)}
-                        className={`text-left p-3 rounded-lg border-2 transition ${active ? 'bg-emerald-50 border-emerald-500' : 'bg-white border-slate-200 hover:border-emerald-300'}`}
-                      >
-                        <div className="flex items-start gap-2">
-                          <div className={`mt-0.5 h-5 w-5 rounded-md border-2 flex items-center justify-center ${active ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300 bg-white'}`}>
-                            {active && <Check className="h-3.5 w-3.5 text-white" />}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="font-semibold text-sm">{w.title}</div>
-                            <div className="text-[11px] text-muted-foreground">{w.desc}</div>
-                          </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {STOCK_WIDGETS.map(w => {
+                  const active = widgets.includes(w.id)
+                  return (
+                    <button
+                      key={w.id}
+                      type="button"
+                      onClick={() => toggle(widgets, setWidgets, w.id)}
+                      className={`text-left p-3 rounded-lg border-2 transition ${active ? 'bg-emerald-50 border-emerald-500' : 'bg-white border-slate-200 hover:border-emerald-300'}`}
+                    >
+                      <div className="flex items-start gap-2">
+                        <div className={`mt-0.5 h-5 w-5 rounded-md border-2 flex items-center justify-center ${active ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300 bg-white'}`}>
+                          {active && <Check className="h-3.5 w-3.5 text-white" />}
                         </div>
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold text-sm">{w.title}</div>
+                          <div className="text-[11px] text-muted-foreground">{w.desc}</div>
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
               <div className="flex justify-between pt-2">
                 <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
-                <Button onClick={finish} disabled={busy || (showStockStep && widgets.length === 0)} className="bg-emerald-600 hover:bg-emerald-700">
+                <Button onClick={finish} disabled={busy || widgets.length === 0} className="bg-emerald-600 hover:bg-emerald-700">
                   {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />}
                   Finish Setup
                 </Button>
