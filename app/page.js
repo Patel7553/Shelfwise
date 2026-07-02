@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -11,7 +12,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, Settings, ArrowRight } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, Settings, ArrowRight, Copy, RefreshCw, LogOut } from 'lucide-react'
+import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
+
+// `fetch` inside this file transparently uses `apiFetch` (auth token attached).
+const fetch = apiFetch
 
 const STATUS_META = {
   Expired: { label: 'Expired', color: 'bg-red-100 text-red-700 border-red-200' },
@@ -148,14 +153,33 @@ function App() {
   const [settings, setSettings] = useState({ kitchenName: '', kitchenType: '', customFields: [], onboarded: true, inviteCode: '', alertEmail: '', tagline: 'From shelf to plate — never lose track.' })
   const [wizardOpen, setWizardOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [authed, setAuthed] = useState(false)
+  const [authed, setAuthed] = useState(null) // null = checking, true/false
+  const [me, setMe] = useState(null)         // { role, isAdmin, userEmail, kitchen }
   const [mobileNav, setMobileNav] = useState(false)
+  const router = useRouter()
 
-  // Check localStorage for previous login
+  // Check auth on mount by calling /api/auth/me
   useEffect(() => {
     if (typeof window === 'undefined') return
-    if (localStorage.getItem('shelfwise_authed') === '1') setAuthed(true)
-  }, [])
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/auth/me')
+        if (res.status === 401) {
+          if (!cancelled) { setAuthed(false); router.replace('/login') }
+          return
+        }
+        const data = await res.json()
+        if (cancelled) return
+        setMe(data)
+        setAuthed(true)
+        // If owner kitchen not approved, show waiting screen (handled below in render)
+      } catch {
+        if (!cancelled) { setAuthed(false); router.replace('/login') }
+      }
+    })()
+    return () => { cancelled = true }
+  }, [router])
 
   const fetchProducts = async () => {
     setLoading(true)
@@ -187,13 +211,9 @@ function App() {
   const fetchSettings = async () => {
     try {
       const res = await fetch('/api/settings')
+      if (!res.ok) return
       const data = await res.json()
       setSettings(data)
-      // If kitchen isn't onboarded yet, force user back to LoginGate setup flow
-      if (data && data.onboarded === false) {
-        try { localStorage.removeItem('shelfwise_authed') } catch {}
-        setAuthed(false)
-      }
     } catch {}
   }
 
@@ -912,11 +932,31 @@ function App() {
 
   const formatDate = (d) => d ? new Date(d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—'
 
+  // ---- AUTH GATE ----------------------------------------------------------
+  if (authed === null) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 to-white">
+        <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+      </div>
+    )
+  }
+  if (me && me.role === 'owner' && me.kitchen && me.kitchen.status !== 'approved' && !me.isAdmin) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-amber-50 p-4">
+        <Card className="max-w-md w-full shadow-lg">
+          <CardContent className="p-8 text-center space-y-3">
+            <AlertTriangle className="h-10 w-10 text-amber-500 mx-auto" />
+            <h2 className="font-bold text-lg">Awaiting approval</h2>
+            <p className="text-sm text-slate-600">Your kitchen <b>{me.kitchen.kitchenName}</b> is currently <b>{me.kitchen.status}</b>. Please check back after the admin approves your account.</p>
+            <Button variant="outline" onClick={async () => { await signOutAll(); router.replace('/login') }}>Sign out</Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-amber-50/30 via-white to-emerald-50/40">
-      {!authed && (
-        <LoginGate settings={settings} onAuth={() => { localStorage.setItem('shelfwise_authed', '1'); setAuthed(true) }} saveSettings={saveSettings} />
-      )}
       {/* Top Nav */}
       <header className="border-b bg-white/90 backdrop-blur-md sticky top-0 z-30">
         <div className="container mx-auto px-4 py-3 flex items-center justify-between gap-2">
@@ -965,8 +1005,8 @@ function App() {
             <Button variant="ghost" className="w-full justify-start" onClick={() => { setSettingsOpen(true); setMobileNav(false) }}>
               <Settings className="h-4 w-4 mr-2" /> Settings
             </Button>
-            <Button variant="ghost" className="w-full justify-start text-red-600" onClick={() => { localStorage.removeItem('shelfwise_authed'); setAuthed(false); setMobileNav(false) }}>
-              <X className="h-4 w-4 mr-2" /> Sign out
+            <Button variant="ghost" className="w-full justify-start text-red-600" onClick={async () => { await signOutAll(); setMobileNav(false); router.replace('/login') }}>
+              <LogOut className="h-4 w-4 mr-2" /> Sign out
             </Button>
           </div>
         )}
@@ -2908,6 +2948,79 @@ function SetupWizard({ open, onClose, settings, saveSettings }) {
   )
 }
 
+function ChefCodeCard() {
+  const [code, setCode] = useState('...')
+  const [kitchenName, setKitchenName] = useState('')
+  const [timezone, setTimezone] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [rotating, setRotating] = useState(false)
+
+  const loadCode = async () => {
+    setLoading(true)
+    try {
+      const res = await fetch('/api/owner/chef-code')
+      if (!res.ok) {
+        // Chef users can't see this; hide the card content.
+        setCode('—')
+      } else {
+        const data = await res.json()
+        setCode(data.code || '—')
+        setKitchenName(data.kitchenName || '')
+        setTimezone(data.timezone || '')
+      }
+    } catch {}
+    finally { setLoading(false) }
+  }
+
+  useEffect(() => { loadCode() }, [])
+
+  async function copyCode() {
+    try {
+      await navigator.clipboard.writeText(code)
+      toast.success('Code copied to clipboard')
+    } catch {
+      toast.error('Could not copy — long-press to copy manually')
+    }
+  }
+
+  async function rotate() {
+    if (!confirm("This will regenerate today's code and invalidate the current one. Continue?")) return
+    setRotating(true)
+    try {
+      const res = await fetch('/api/owner/rotate-code', { method: 'POST' })
+      if (!res.ok) throw new Error()
+      await loadCode()
+      toast.success('New code generated')
+    } catch {
+      toast.error('Could not rotate code')
+    } finally { setRotating(false) }
+  }
+
+  return (
+    <div className="rounded-lg border-2 border-emerald-200 bg-emerald-50 p-4">
+      <Label className="text-emerald-900 text-sm font-bold">🔑 Today's Chef Code</Label>
+      <p className="text-xs text-emerald-700 mt-1 mb-3">
+        Share this with your kitchen team so they can log in as chefs. Rotates daily at midnight ({timezone || 'kitchen time'}).
+      </p>
+      <div className="flex gap-2 items-center">
+        <div className="flex-1 text-center font-mono text-2xl tracking-[0.2em] bg-white rounded-md py-3 border-2 border-emerald-300 text-emerald-900">
+          {loading ? <Loader2 className="h-5 w-5 animate-spin inline text-emerald-600" /> : code}
+        </div>
+        <Button variant="outline" size="sm" onClick={copyCode} disabled={loading || code === '—'} type="button">
+          <Copy className="h-4 w-4 mr-1" /> Copy
+        </Button>
+      </div>
+      <div className="mt-2 flex justify-between items-center">
+        <p className="text-[11px] text-emerald-700/70">Kitchen: <b>{kitchenName || '—'}</b></p>
+        <Button variant="ghost" size="sm" onClick={rotate} disabled={rotating || code === '—'} type="button" className="text-emerald-700 hover:text-emerald-900 h-7 px-2">
+          {rotating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+          Rotate
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
   const [tab, setTab] = useState('profile') // 'profile' | 'login' | 'dashboard' | 'fields'
   const [name, setName] = useState('')
@@ -3045,14 +3158,7 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
 
           {tab === 'login' && (
             <div className="space-y-5">
-              <div className="rounded-lg border-2 border-emerald-200 bg-emerald-50 p-4">
-                <Label className="text-emerald-900 text-sm font-bold">🔑 Kitchen Login Code</Label>
-                <p className="text-xs text-emerald-700 mt-1 mb-3">Share this code with your team so they can sign in.</p>
-                <div className="flex gap-2">
-                  <Input value={inviteCode} onChange={e => setInviteCode(e.target.value)} className="text-center font-mono text-xl tracking-[0.25em] bg-white h-12" />
-                  <Button variant="outline" size="sm" type="button" onClick={rotateCode}>New Code</Button>
-                </div>
-              </div>
+              <ChefCodeCard />
 
               <div className="rounded-lg border-2 border-amber-200 bg-amber-50 p-4">
                 <Label className="text-amber-900 text-sm font-bold">📧 Alert Email</Label>
