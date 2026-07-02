@@ -955,8 +955,33 @@ function App() {
     )
   }
 
+  const modulesEnabled = Array.isArray(settings.modulesEnabled) ? settings.modulesEnabled : []
+  const hasStock = modulesEnabled.length === 0 || modulesEnabled.includes('stock')
+  const hasRecipes = modulesEnabled.length === 0 || modulesEnabled.includes('recipes')
+  const hasRota = modulesEnabled.includes('rota')
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-amber-50/30 via-white to-emerald-50/40">
+      {/* Setup wizard for first-time-onboarded kitchens */}
+      {me?.kitchen && me.kitchen.onboarded === false && (
+        <SetupWizardV2
+          settings={me.kitchen}
+          onComplete={async (payload) => {
+            const res = await fetch('/api/settings', {
+              method: 'PUT',
+              body: JSON.stringify({ ...payload, onboarded: true }),
+            })
+            if (res.ok) {
+              const updated = await res.json()
+              setSettings(updated)
+              setMe({ ...me, kitchen: updated })
+              toast.success('All set! Welcome to ShelfWise 🎉')
+            } else {
+              toast.error('Could not save your setup — try again')
+            }
+          }}
+        />
+      )}
       {/* Top Nav */}
       <header className="border-b bg-white/90 backdrop-blur-md sticky top-0 z-30">
         <div className="container mx-auto px-4 py-3 flex items-center justify-between gap-2">
@@ -973,12 +998,21 @@ function App() {
             <Button variant={view === 'dashboard' ? 'default' : 'ghost'} size="sm" onClick={goToDashboard}>
               <LayoutDashboard className="h-4 w-4 mr-2" /> Dashboard
             </Button>
-            <Button variant={view === 'inventory' ? 'default' : 'ghost'} size="sm" onClick={() => { setStatusFilter('All'); setView('inventory') }}>
-              <Package className="h-4 w-4 mr-2" /> Inventory
-            </Button>
-            <Button variant={view === 'recipes' ? 'default' : 'ghost'} size="sm" onClick={() => setView('recipes')}>
-              <BookOpen className="h-4 w-4 mr-2" /> Recipes
-            </Button>
+            {hasStock && (
+              <Button variant={view === 'inventory' ? 'default' : 'ghost'} size="sm" onClick={() => { setStatusFilter('All'); setView('inventory') }}>
+                <Package className="h-4 w-4 mr-2" /> Inventory
+              </Button>
+            )}
+            {hasRecipes && (
+              <Button variant={view === 'recipes' ? 'default' : 'ghost'} size="sm" onClick={() => setView('recipes')}>
+                <BookOpen className="h-4 w-4 mr-2" /> Recipes
+              </Button>
+            )}
+            {hasRota && (
+              <Button variant={view === 'rota' ? 'default' : 'ghost'} size="sm" onClick={() => setView('rota')} className="opacity-70">
+                <ChefHat className="h-4 w-4 mr-2" /> Rota <span className="text-[10px] ml-1 bg-slate-200 px-1 rounded">soon</span>
+              </Button>
+            )}
             <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title="Settings">
               <Settings className="h-4 w-4" />
             </Button>
@@ -996,12 +1030,16 @@ function App() {
             <Button variant={view === 'dashboard' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { goToDashboard(); setMobileNav(false) }}>
               <LayoutDashboard className="h-4 w-4 mr-2" /> Dashboard
             </Button>
-            <Button variant={view === 'inventory' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setStatusFilter('All'); setView('inventory'); setMobileNav(false) }}>
-              <Package className="h-4 w-4 mr-2" /> Inventory
-            </Button>
-            <Button variant={view === 'recipes' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('recipes'); setMobileNav(false) }}>
-              <BookOpen className="h-4 w-4 mr-2" /> Recipes
-            </Button>
+            {hasStock && (
+              <Button variant={view === 'inventory' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setStatusFilter('All'); setView('inventory'); setMobileNav(false) }}>
+                <Package className="h-4 w-4 mr-2" /> Inventory
+              </Button>
+            )}
+            {hasRecipes && (
+              <Button variant={view === 'recipes' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('recipes'); setMobileNav(false) }}>
+                <BookOpen className="h-4 w-4 mr-2" /> Recipes
+              </Button>
+            )}
             <Button variant="ghost" className="w-full justify-start" onClick={() => { setSettingsOpen(true); setMobileNav(false) }}>
               <Settings className="h-4 w-4 mr-2" /> Settings
             </Button>
@@ -2008,7 +2046,9 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
   const [quickSearch, setQuickSearch] = useState('')
   const [globalResults, setGlobalResults] = useState(null)
   const [globalLoading, setGlobalLoading] = useState(false)
-  const show = (k) => !widgets || widgets.length === 0 || widgets.includes(k)
+  // If widgets is undefined → show all (backwards compat).
+  // If widgets array is provided (even empty) → strict include check.
+  const show = (k) => widgets === undefined || (Array.isArray(widgets) && widgets.includes(k))
 
   const onSearch = async (e) => {
     e.preventDefault()
@@ -2036,6 +2076,7 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
     { key: 'expiring', label: 'Expiring Soon', value: stats.expiring, icon: Clock, color: 'from-amber-500 to-orange-500', accent: 'text-amber-600', bg: 'bg-amber-50', filterKey: 'Expiring' },
     { key: 'expired', label: 'Expired', value: stats.expired, icon: PackageX, color: 'from-red-500 to-rose-600', accent: 'text-red-600', bg: 'bg-red-50', filterKey: 'Expired' },
     { key: 'critical', label: 'Critical Stock', value: stats.critical, icon: AlertTriangle, color: 'from-orange-500 to-red-500', accent: 'text-orange-600', bg: 'bg-orange-50', filterKey: 'Critical' },
+    { key: 'in_date', label: 'In Date', value: stats.inDate || 0, icon: Check, color: 'from-emerald-500 to-teal-600', accent: 'text-emerald-600', bg: 'bg-emerald-50', filterKey: 'Ok' },
   ]
   const cards = cardsAll.filter(c => show(c.key))
   const isEmpty = stats.total === 0
@@ -2748,6 +2789,164 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
   )
 }
 
+function SetupWizardV2({ settings, onComplete }) {
+  const [step, setStep] = useState(1)
+  const [modules, setModules] = useState([])
+  const [widgets, setWidgets] = useState([])
+  const [busy, setBusy] = useState(false)
+
+  const MODULES = [
+    { id: 'stock',   title: 'Stock Monitoring', desc: 'Track expiries, low stock and inventory alerts.', icon: Package, color: 'emerald', ready: true },
+    { id: 'recipes', title: 'Recipes',          desc: 'Scan recipes & check ingredient availability.', icon: BookOpen, color: 'purple',  ready: true },
+    { id: 'rota',    title: 'Rota (Staff Scheduling)', desc: 'Manage shifts & staff rosters. Coming soon!', icon: ChefHat,  color: 'slate',   ready: false },
+  ]
+
+  const STOCK_WIDGETS = [
+    { id: 'all_items', title: 'All Items',       desc: 'Total count of everything in stock.' },
+    { id: 'critical',  title: 'Critical Stock',  desc: 'Items with very low quantity.' },
+    { id: 'expired',   title: 'Expired',         desc: 'Items past their expiry date.' },
+    { id: 'expiring',  title: 'Expiring Soon',   desc: 'Items expiring within 7 days.' },
+    { id: 'in_date',   title: 'In Date',         desc: 'Items with valid future expiry dates.' },
+    { id: 'use_today', title: 'Use Today',       desc: 'Urgent items expiring today or tomorrow.' },
+  ]
+
+  const toggle = (list, setter, id) => {
+    setter(list.includes(id) ? list.filter(x => x !== id) : [...list, id])
+  }
+
+  const showStockStep = modules.includes('stock')
+
+  async function finish() {
+    if (busy) return
+    setBusy(true)
+    try {
+      await onComplete({
+        modulesEnabled: modules,
+        dashboardWidgets: showStockStep ? widgets : [],
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-gradient-to-br from-emerald-50 via-white to-teal-50 overflow-y-auto">
+      <div className="max-w-2xl mx-auto p-4 md:p-8 min-h-full">
+        <div className="flex flex-col items-center mb-6">
+          <img src="/logo-icon.png" alt="ShelfWise" className="h-16 w-16 rounded-2xl object-contain bg-white shadow-md" />
+          <h1 className="text-2xl font-bold text-emerald-900 mt-3">Welcome, {settings?.kitchen_name || settings?.kitchenName || 'Chef'}!</h1>
+          <p className="text-sm text-emerald-700/70 mt-1">Let's set up your ShelfWise. Takes 30 seconds.</p>
+        </div>
+
+        {/* Progress bar */}
+        <div className="flex items-center gap-2 mb-6 max-w-md mx-auto">
+          <div className={`flex-1 h-1.5 rounded-full ${step >= 1 ? 'bg-emerald-500' : 'bg-slate-200'}`} />
+          <div className={`flex-1 h-1.5 rounded-full ${step >= 2 ? 'bg-emerald-500' : 'bg-slate-200'}`} />
+        </div>
+
+        {step === 1 && (
+          <Card className="shadow-lg border-emerald-100">
+            <CardContent className="p-6 space-y-4">
+              <div>
+                <h2 className="font-bold text-lg text-emerald-900">Step 1 · What do you want to track?</h2>
+                <p className="text-sm text-muted-foreground">Pick the tools your kitchen needs. You can add more later.</p>
+              </div>
+              <div className="space-y-2">
+                {MODULES.map(m => {
+                  const active = modules.includes(m.id)
+                  const Icon = m.icon
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      disabled={!m.ready}
+                      onClick={() => m.ready && toggle(modules, setModules, m.id)}
+                      className={`w-full text-left p-4 rounded-lg border-2 transition ${
+                        !m.ready ? 'opacity-60 cursor-not-allowed bg-slate-50 border-slate-200' :
+                        active ? 'bg-emerald-50 border-emerald-500' : 'bg-white border-slate-200 hover:border-emerald-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`h-11 w-11 rounded-lg flex items-center justify-center ${active ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                          <Icon className="h-5 w-5" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold flex items-center gap-2">
+                            {m.title}
+                            {!m.ready && <span className="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">coming soon</span>}
+                          </div>
+                          <div className="text-xs text-muted-foreground">{m.desc}</div>
+                        </div>
+                        <div className={`h-6 w-6 rounded-md border-2 flex items-center justify-center ${active ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300 bg-white'}`}>
+                          {active && <Check className="h-4 w-4 text-white" />}
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="flex justify-end pt-2">
+                <Button
+                  onClick={() => setStep(2)}
+                  disabled={modules.length === 0}
+                  className="bg-emerald-600 hover:bg-emerald-700"
+                >
+                  Next <ArrowRight className="h-4 w-4 ml-2" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {step === 2 && (
+          <Card className="shadow-lg border-emerald-100">
+            <CardContent className="p-6 space-y-4">
+              <div>
+                <h2 className="font-bold text-lg text-emerald-900">Step 2 · Which dashboard cards do you want?</h2>
+                <p className="text-sm text-muted-foreground">
+                  {showStockStep ? 'Pick the alert cards you want to see on your dashboard. You can add more later.' : "You skipped Stock Monitoring, so we'll skip this too. Click Finish."}
+                </p>
+              </div>
+              {showStockStep && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {STOCK_WIDGETS.map(w => {
+                    const active = widgets.includes(w.id)
+                    return (
+                      <button
+                        key={w.id}
+                        type="button"
+                        onClick={() => toggle(widgets, setWidgets, w.id)}
+                        className={`text-left p-3 rounded-lg border-2 transition ${active ? 'bg-emerald-50 border-emerald-500' : 'bg-white border-slate-200 hover:border-emerald-300'}`}
+                      >
+                        <div className="flex items-start gap-2">
+                          <div className={`mt-0.5 h-5 w-5 rounded-md border-2 flex items-center justify-center ${active ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300 bg-white'}`}>
+                            {active && <Check className="h-3.5 w-3.5 text-white" />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-sm">{w.title}</div>
+                            <div className="text-[11px] text-muted-foreground">{w.desc}</div>
+                          </div>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              <div className="flex justify-between pt-2">
+                <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
+                <Button onClick={finish} disabled={busy || (showStockStep && widgets.length === 0)} className="bg-emerald-600 hover:bg-emerald-700">
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />}
+                  Finish Setup
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function SetupWizard({ open, onClose, settings, saveSettings }) {
   const [step, setStep] = useState(0)
   const [name, setName] = useState('')
@@ -3030,14 +3229,22 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
   const [alertEmail, setAlertEmail] = useState('')
   const [testing, setTesting] = useState(false)
   const [widgets, setWidgets] = useState([])
+  const [modules, setModules] = useState([])
   const ALL_WIDGETS = [
     { key: 'all_items', label: 'All Items count' },
-    { key: 'expiring', label: 'Expiring Soon' },
-    { key: 'expired', label: 'Expired items' },
-    { key: 'critical', label: 'Critical Stock level' },
+    { key: 'expiring',  label: 'Expiring Soon' },
+    { key: 'expired',   label: 'Expired items' },
+    { key: 'critical',  label: 'Critical Stock level' },
+    { key: 'in_date',   label: 'In Date items' },
+    { key: 'use_today', label: 'Use Today (urgent)' },
     { key: 'expiry_alerts', label: 'Expiry alert banner' },
-    { key: 'urgent_list', label: 'Urgent items list' },
-    { key: 'search', label: 'Global search box' },
+    { key: 'urgent_list',   label: 'Urgent items list' },
+    { key: 'search',        label: 'Global search box' },
+  ]
+  const ALL_MODULES = [
+    { key: 'stock',   label: 'Stock Monitoring',    desc: 'Inventory + expiry tracking' },
+    { key: 'recipes', label: 'Recipes',             desc: 'AI recipe parsing & ingredient match' },
+    { key: 'rota',    label: 'Rota (Coming soon)',  desc: 'Staff scheduling', disabled: true },
   ]
 
   useEffect(() => {
@@ -3049,10 +3256,12 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
       setInviteCode(settings.inviteCode || '')
       setAlertEmail(settings.alertEmail || '')
       setWidgets(Array.isArray(settings.dashboardWidgets) ? settings.dashboardWidgets : ALL_WIDGETS.map(w => w.key))
+      setModules(Array.isArray(settings.modulesEnabled) ? settings.modulesEnabled : ['stock', 'recipes'])
     }
   }, [open])
 
   const toggleWidget = (k) => setWidgets(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
+  const toggleModule = (k) => setModules(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
 
   const addField = () => {
     const newField = { key: `field_${fields.length + 1}_${Date.now().toString(36)}`, label: '', type: 'text' }
@@ -3087,7 +3296,7 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
       label: f.label.trim(),
       type: f.type || 'text'
     }))
-    await saveSettings({ kitchenName: name.trim(), kitchenType: type, customFields: cleanFields, inviteCode, alertEmail: alertEmail.trim(), dashboardWidgets: widgets, onboarded: true })
+    await saveSettings({ kitchenName: name.trim(), kitchenType: type, customFields: cleanFields, inviteCode, alertEmail: alertEmail.trim(), dashboardWidgets: widgets, modulesEnabled: modules, onboarded: true })
     onClose()
   }
 
@@ -3174,10 +3383,32 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
           )}
 
           {tab === 'dashboard' && (
-            <div className="space-y-3">
+            <div className="space-y-5">
               <div>
-                <Label>Dashboard widgets</Label>
-                <p className="text-xs text-muted-foreground">Tick what you want to see on the home screen.</p>
+                <Label className="text-base font-bold">Modules enabled</Label>
+                <p className="text-xs text-muted-foreground">Which features appear in your top navigation.</p>
+              </div>
+              <div className="space-y-2">
+                {ALL_MODULES.map(m => (
+                  <label key={m.key} className={`flex items-center gap-3 p-3 rounded-lg border-2 transition ${m.disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${modules.includes(m.key) ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-emerald-300'}`}>
+                    <input
+                      type="checkbox"
+                      disabled={m.disabled}
+                      checked={modules.includes(m.key)}
+                      onChange={() => !m.disabled && toggleModule(m.key)}
+                      className="h-4 w-4 accent-emerald-600"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium">{m.label}</div>
+                      <div className="text-xs text-muted-foreground">{m.desc}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              <div className="pt-3 border-t">
+                <Label className="text-base font-bold">Dashboard cards</Label>
+                <p className="text-xs text-muted-foreground">Tick the widgets you want to see on your dashboard.</p>
               </div>
               <div className="space-y-2">
                 {ALL_WIDGETS.map(w => (

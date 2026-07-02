@@ -86,6 +86,7 @@ function kitchenToApi(k) {
     timezone: k.timezone || 'Asia/Kolkata',
     status: k.status || 'pending',
     dashboardWidgets: Array.isArray(k.dashboard_widgets) ? k.dashboard_widgets : ['all','expiring','expired','critical'],
+    modulesEnabled: Array.isArray(k.modules_enabled) ? k.modules_enabled : ['stock','recipes'],
     customFields: Array.isArray(k.custom_fields) ? k.custom_fields : [],
     categories: Array.isArray(k.categories) ? k.categories : [],
     locations: Array.isArray(k.locations) ? k.locations : [],
@@ -349,13 +350,14 @@ export async function GET(request, { params }) {
         const in7 = new Date(start.getTime() + 7 * 86400000)
         const todayISO = start.toISOString().slice(0, 10)
         const in7ISO = in7.toISOString().slice(0, 10)
-        const [{ count: total }, { count: expired }, { count: expiring }, { count: critical }] = await Promise.all([
+        const [{ count: total }, { count: expired }, { count: expiring }, { count: critical }, { count: inDate }] = await Promise.all([
           sb.from('products').select('*', { count: 'exact', head: true }).eq('kitchen_id', kid),
           sb.from('products').select('*', { count: 'exact', head: true }).eq('kitchen_id', kid).not('expiry_date', 'is', null).lt('expiry_date', todayISO),
           sb.from('products').select('*', { count: 'exact', head: true }).eq('kitchen_id', kid).not('expiry_date', 'is', null).gte('expiry_date', todayISO).lte('expiry_date', in7ISO),
           sb.from('products').select('*', { count: 'exact', head: true }).eq('kitchen_id', kid).lte('quantity', 2).or(`expiry_date.is.null,expiry_date.gt.${in7ISO}`),
+          sb.from('products').select('*', { count: 'exact', head: true }).eq('kitchen_id', kid).not('expiry_date', 'is', null).gt('expiry_date', in7ISO),
         ])
-        return json({ total: total || 0, expired: expired || 0, expiring: expiring || 0, critical: critical || 0 })
+        return json({ total: total || 0, expired: expired || 0, expiring: expiring || 0, critical: critical || 0, inDate: inDate || 0 })
       }
 
       if (path === 'recipes') {
@@ -441,15 +443,16 @@ export async function POST(request, { params }) {
         timezone,
         status: 'pending',
         code_seed: newCodeSeed(),
-        dashboard_widgets: [],       // blank slate — chef picks during setup
+        dashboard_widgets: [],       // blank slate — chef picks during setup wizard
+        modules_enabled: [],         // blank slate — chef picks during setup wizard
         categories: [],
         locations: [],
         units: [],
         onboarded: false,
       })
       if (kErr) {
-        // Roll back auth user
-        try { await sb.auth.admin.deleteUser(created.user.id) } catch {}
+        // Roll back auth user if kitchen creation fails — prevents orphaned accounts.
+        try { await sb.auth.admin.deleteUser(created.user.id) } catch (e) { console.warn('Failed to rollback auth user:', e) }
         return json({ error: kErr.message }, 500)
       }
       return json({ ok: true, status: 'pending', message: 'Account created. Awaiting admin approval.' }, 201)
@@ -757,6 +760,7 @@ export async function PUT(request, { params }) {
       if (typeof body.alertEmail === 'string') patch.alert_email = body.alertEmail
       if (typeof body.tagline === 'string') patch.tagline = body.tagline
       if (Array.isArray(body.dashboardWidgets)) patch.dashboard_widgets = body.dashboardWidgets
+      if (Array.isArray(body.modulesEnabled)) patch.modules_enabled = body.modulesEnabled
       if (Array.isArray(body.categories)) patch.categories = body.categories
       if (Array.isArray(body.locations)) patch.locations = body.locations
       if (Array.isArray(body.units)) patch.units = body.units
