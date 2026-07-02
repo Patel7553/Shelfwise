@@ -701,7 +701,7 @@ export async function POST(request, { params }) {
       const body = await request.json().catch(() => ({}))
       const to = String(body.to || ctx.userEmail || process.env.SHELFWISE_ADMIN_EMAIL || '').trim()
       const resendKey = process.env.RESEND_API_KEY
-      if (!resendKey) return json({ ok: false, error: 'RESEND_API_KEY not set on server' }, 500)
+      if (!resendKey) return json({ ok: false, error: 'RESEND_API_KEY not set on server (Vercel → Settings → Env Variables)' }, 500)
       if (!to) return json({ ok: false, error: 'No recipient email — set SHELFWISE_ADMIN_EMAIL or pass `to`' }, 400)
       try {
         const r = await fetch('https://api.resend.com/emails', {
@@ -715,11 +715,41 @@ export async function POST(request, { params }) {
           }),
         })
         const txt = await r.text().catch(() => '')
-        if (!r.ok) return json({ ok: false, status: r.status, resendResponse: txt, adminEmailConfigured: !!process.env.SHELFWISE_ADMIN_EMAIL, sentTo: to }, 500)
-        return json({ ok: true, sentTo: to, resendResponse: txt })
+        let parsed = null
+        try { parsed = JSON.parse(txt) } catch { /* text response */ }
+        if (!r.ok) {
+          const errMsg = parsed?.message || parsed?.name || txt || `Resend returned ${r.status}`
+          return json({
+            ok: false,
+            error: `Resend ${r.status}: ${errMsg}`.slice(0, 500),
+            hint: r.status === 403 || errMsg.toLowerCase().includes('domain')
+              ? 'Resend sandbox: onboarding@resend.dev can only send to the email that owns your Resend account. Verify a domain at https://resend.com/domains OR use the Resend account owner email.'
+              : r.status === 401
+              ? 'Invalid API key — regenerate at https://resend.com/api-keys and update RESEND_API_KEY in Vercel.'
+              : undefined,
+            resendResponse: txt.slice(0, 500),
+            adminEmailConfigured: !!process.env.SHELFWISE_ADMIN_EMAIL,
+            sentTo: to,
+          }, 500)
+        }
+        return json({ ok: true, sentTo: to, resendResponse: txt.slice(0, 200) })
       } catch (e) {
         return json({ ok: false, error: e.message }, 500)
       }
+    }
+
+    // Diagnostic — returns which env vars are set (booleans only, no values leaked).
+    if (path === 'admin/env-check') {
+      const { ctx, error } = await requireAdmin(request)
+      if (error) return error
+      return json({
+        RESEND_API_KEY: !!process.env.RESEND_API_KEY,
+        RESEND_API_KEY_length: (process.env.RESEND_API_KEY || '').length,
+        SHELFWISE_ADMIN_EMAIL: process.env.SHELFWISE_ADMIN_EMAIL || '(not set)',
+        NEXT_PUBLIC_BASE_URL: process.env.NEXT_PUBLIC_BASE_URL || '(not set)',
+        EMERGENT_LLM_KEY: !!process.env.EMERGENT_LLM_KEY,
+        SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+      })
     }
 
     // -------- OWNER endpoints --------

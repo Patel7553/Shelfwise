@@ -1,0 +1,51 @@
+════════════════════════════════════════════════════════
+  ShelfWise — Session 5b (Email debug patch)
+════════════════════════════════════════════════════════
+
+WHY THIS PATCH
+──────────────
+The "Test email" button showed just "500" with no info — impossible to
+debug. This patch:
+
+1) Fixes the API to always return a readable error message (with hints)
+2) Adds a new "🔍 Env check" button to the admin toolbar so you can
+   instantly see which environment variables are set on Vercel
+3) Better toast messages that stay on screen longer so you can read them
+
+FILES IN THIS ZIP
+─────────────────
+    app/admin/page.js
+    app/api/[[...path]]/route.js
+
+═══════════════════════════════════════════════════
+  HOW TO INSTALL (2 minutes)
+═══════════════════════════════════════════════════
+1) Extract the zip
+2) In VS Code: drag `app/admin/page.js` onto the existing file → Replace
+3) In VS Code: drag `app/api/[[...path]]/route.js` onto the existing file → Replace
+4) Source Control → commit ("fix: better email debug") → Sync/Push
+5) Wait for Vercel to deploy (~1 min)
+
+No SQL migration needed. All other Session 5 features stay intact.
+
+═══════════════════════════════════════════════════
+  HOW TO USE THE NEW DEBUG TOOLS
+═══════════════════════════════════════════════════
+
+■ Step A — Click "🔍 Env check" (new button)
+  → Shows a popup like:
+      RESEND_API_KEY: ✅
+      RESEND_API_KEY_length: 36
+      SHELFWISE_ADMIN_EMAIL: patel.parth1966@gmail.com
+      ...
+  → If any shows ❌ or "(not set)" — that's the problem!
+    Go to Vercel → Settings → Env Variables → add missing one → Redeploy
+
+■ Step B — Click "📧 Test email" (existing button, now shows the real error)
+  → You'll now see one of:
+      ✅ "Test email sent to ..."  → Resend is working
+      🔴 "Resend 403: You can only send to..." → sandbox restriction
+      🔴 "Resend 401: Invalid API key"        → key is wrong
+      🔴 "RESEND_API_KEY not set on server"   → env var missing
+
+═══════════════════════════════════════════════════

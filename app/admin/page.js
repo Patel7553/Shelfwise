@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { apiJson, signOutAll } from '@/lib/apiClient'
+import { apiJson, signOutAll, getBearerToken } from '@/lib/apiClient'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -60,14 +60,36 @@ export default function AdminPage() {
     if (!to) return
     setLoading(true)
     try {
-      const res = await apiJson('/api/admin/test-email', {
+      const res = await fetch('/api/admin/test-email', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json',
+                   authorization: `Bearer ${await getBearerToken()}` },
         body: JSON.stringify({ to }),
       })
-      if (res.ok) toast.success(`Test email sent to ${res.sentTo}. Check inbox / spam.`)
-      else toast.error(`Failed: ${res.error || res.resendResponse || 'unknown'}`)
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data.ok) {
+        toast.success(`Test email sent to ${data.sentTo}. Check inbox / spam.`, { duration: 8000 })
+      } else {
+        const msg = data.error || `HTTP ${res.status}`
+        console.error('Test email failed:', data)
+        toast.error(msg, { duration: 12000 })
+        if (data.hint) toast.warning(data.hint, { duration: 15000 })
+      }
     } catch (err) {
       toast.error(err.message || 'Test failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function envCheck() {
+    setLoading(true)
+    try {
+      const data = await apiJson('/api/admin/env-check')
+      const rows = Object.entries(data).map(([k, v]) => `${k}: ${typeof v === 'boolean' ? (v ? '✅' : '❌') : v}`).join('\n')
+      window.alert('Vercel env vars status:\n\n' + rows)
+    } catch (err) {
+      toast.error(err.message || 'Env check failed')
     } finally {
       setLoading(false)
     }
@@ -86,6 +108,7 @@ export default function AdminPage() {
             </div>
           </div>
           <div className="flex gap-2">
+            <Button variant="ghost" size="sm" onClick={envCheck}>🔍 Env check</Button>
             <Button variant="ghost" size="sm" onClick={testEmail}><Mail className="h-4 w-4 mr-1" />Test email</Button>
             <Button variant="ghost" size="sm" onClick={load}><RefreshCw className="h-4 w-4 mr-1" />Refresh</Button>
             <Button variant="outline" size="sm" onClick={async () => { await signOutAll(); router.replace('/login') }}><LogOut className="h-4 w-4 mr-1" />Sign out</Button>
