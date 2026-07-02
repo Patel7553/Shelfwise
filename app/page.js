@@ -2800,6 +2800,25 @@ function SetupWizardV2({ settings, onComplete }) {
   const [modules, setModules] = useState([])
   const [widgets, setWidgets] = useState([])
   const [busy, setBusy] = useState(false)
+  // Step 0: kitchen basics — pre-filled if already saved
+  const [kitchenName, setKitchenName] = useState(settings?.kitchenName || settings?.kitchen_name || '')
+  const [kitchenType, setKitchenType] = useState(settings?.kitchenType || settings?.kitchen_type || '')
+  const [timezone, setTimezone] = useState(settings?.timezone || 'Asia/Kolkata')
+
+  const KITCHEN_TYPES = ['Restaurant', 'Cafe', 'Hospital', 'Hotel', 'School', 'Catering', 'Bakery', 'Ghost Kitchen', 'Other']
+  const TIMEZONES = [
+    { value: 'Asia/Kolkata', label: 'India (IST)' },
+    { value: 'America/Toronto', label: 'Canada Eastern (Toronto)' },
+    { value: 'America/Vancouver', label: 'Canada Pacific (Vancouver)' },
+    { value: 'America/New_York', label: 'US Eastern (New York)' },
+    { value: 'America/Chicago', label: 'US Central (Chicago)' },
+    { value: 'America/Los_Angeles', label: 'US Pacific (Los Angeles)' },
+    { value: 'Europe/London', label: 'UK (London)' },
+    { value: 'Europe/Paris', label: 'Europe Central (Paris)' },
+    { value: 'Asia/Dubai', label: 'UAE (Dubai)' },
+    { value: 'Asia/Singapore', label: 'Singapore' },
+    { value: 'Australia/Sydney', label: 'Australia Eastern (Sydney)' },
+  ]
 
   const MODULES = [
     { id: 'stock',   title: 'Stock Monitoring', desc: 'Track expiries, low stock and inventory alerts.', icon: Package, ready: true },
@@ -2807,8 +2826,6 @@ function SetupWizardV2({ settings, onComplete }) {
     { id: 'rota',    title: 'Rota (Staff Scheduling)', desc: 'Manage shifts & staff rosters. Coming soon!', icon: ChefHat,  ready: false },
   ]
 
-  // Widgets grouped by the module they belong to.
-  // Step 2 only shows the groups whose module the user picked in Step 1.
   const WIDGETS_BY_MODULE = {
     stock: [
       { id: 'all_items', title: 'All Items',       desc: 'Total items count.' },
@@ -2830,11 +2847,20 @@ function SetupWizardV2({ settings, onComplete }) {
     setter(list.includes(id) ? list.filter(x => x !== id) : [...list, id])
   }
 
+  const visibleGroups = modules
+    .filter(m => WIDGETS_BY_MODULE[m])
+    .map(m => ({ module: m, widgets: WIDGETS_BY_MODULE[m], title: MODULES.find(x => x.id === m)?.title }))
+
+  const canSkipWidgetStep = visibleGroups.every(g => g.widgets.length === 0)
+
   async function finish() {
     if (busy) return
     setBusy(true)
     try {
       await onComplete({
+        kitchenName: kitchenName.trim(),
+        kitchenType,
+        timezone,
         modulesEnabled: modules,
         dashboardWidgets: widgets,
       })
@@ -2843,39 +2869,70 @@ function SetupWizardV2({ settings, onComplete }) {
     }
   }
 
-  // Widget groups that are visible in step 2 (based on modules picked)
-  const visibleGroups = modules
-    .filter(m => WIDGETS_BY_MODULE[m])
-    .map(m => ({ module: m, widgets: WIDGETS_BY_MODULE[m], title: MODULES.find(x => x.id === m)?.title }))
-
-  // If no module has any picker widgets, skip step 2
-  const canSkipStep2 = visibleGroups.every(g => g.widgets.length === 0)
-
-  const handleNext = () => {
-    if (canSkipStep2) finish()
-    else setStep(2)
-  }
+  const totalSteps = canSkipWidgetStep ? 2 : 3
 
   return (
     <div className="fixed inset-0 z-50 bg-gradient-to-br from-emerald-50 via-white to-teal-50 overflow-y-auto">
       <div className="max-w-2xl mx-auto p-4 md:p-8 min-h-full">
         <div className="flex flex-col items-center mb-6">
           <img src="/logo-icon.png" alt="ShelfWise" className="h-16 w-16 rounded-2xl object-contain bg-white shadow-md" />
-          <h1 className="text-2xl font-bold text-emerald-900 mt-3">Welcome, {settings?.kitchen_name || settings?.kitchenName || 'Chef'}!</h1>
-          <p className="text-sm text-emerald-700/70 mt-1">Let's set up your ShelfWise. Takes 30 seconds.</p>
+          <h1 className="text-2xl font-bold text-emerald-900 mt-3">Welcome to ShelfWise!</h1>
+          <p className="text-sm text-emerald-700/70 mt-1">Let's set up your kitchen. Takes about a minute.</p>
         </div>
 
         {/* Progress bar */}
         <div className="flex items-center gap-2 mb-6 max-w-md mx-auto">
-          <div className={`flex-1 h-1.5 rounded-full ${step >= 1 ? 'bg-emerald-500' : 'bg-slate-200'}`} />
-          {!canSkipStep2 && <div className={`flex-1 h-1.5 rounded-full ${step >= 2 ? 'bg-emerald-500' : 'bg-slate-200'}`} />}
+          {Array.from({ length: totalSteps }).map((_, i) => (
+            <div key={i} className={`flex-1 h-1.5 rounded-full ${step >= i + 1 ? 'bg-emerald-500' : 'bg-slate-200'}`} />
+          ))}
         </div>
 
+        {/* Step 1 — kitchen basics */}
         {step === 1 && (
           <Card className="shadow-lg border-emerald-100">
             <CardContent className="p-6 space-y-4">
               <div>
-                <h2 className="font-bold text-lg text-emerald-900">Step 1 · What do you want to track?</h2>
+                <h2 className="font-bold text-lg text-emerald-900">Step 1 · Kitchen details</h2>
+                <p className="text-sm text-muted-foreground">Tell us about your kitchen.</p>
+              </div>
+              <div>
+                <Label>Kitchen name *</Label>
+                <Input value={kitchenName} onChange={e => setKitchenName(e.target.value)} placeholder="e.g. Bella Cucina" required autoFocus />
+              </div>
+              <div>
+                <Label>Kitchen type</Label>
+                <Select value={kitchenType} onValueChange={setKitchenType}>
+                  <SelectTrigger><SelectValue placeholder="Choose one..." /></SelectTrigger>
+                  <SelectContent>
+                    {KITCHEN_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Timezone *</Label>
+                <Select value={timezone} onValueChange={setTimezone}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {TIMEZONES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-slate-500 mt-1">Your chef codes rotate at midnight in this timezone.</p>
+              </div>
+              <div className="flex justify-end pt-2">
+                <Button onClick={() => setStep(2)} disabled={!kitchenName.trim()} className="bg-emerald-600 hover:bg-emerald-700">
+                  Next <ArrowRight className="h-4 w-4 ml-2" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Step 2 — module picker */}
+        {step === 2 && (
+          <Card className="shadow-lg border-emerald-100">
+            <CardContent className="p-6 space-y-4">
+              <div>
+                <h2 className="font-bold text-lg text-emerald-900">Step 2 · What do you want to track?</h2>
                 <p className="text-sm text-muted-foreground">Pick the tools your kitchen needs. You can add more later in Settings.</p>
               </div>
               <div className="space-y-2">
@@ -2912,25 +2969,27 @@ function SetupWizardV2({ settings, onComplete }) {
                   )
                 })}
               </div>
-              <div className="flex justify-end pt-2">
+              <div className="flex justify-between pt-2">
+                <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
                 <Button
-                  onClick={handleNext}
+                  onClick={() => canSkipWidgetStep ? finish() : setStep(3)}
                   disabled={modules.length === 0 || busy}
                   className="bg-emerald-600 hover:bg-emerald-700"
                 >
                   {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                  {canSkipStep2 ? 'Finish Setup' : 'Next'} <ArrowRight className="h-4 w-4 ml-2" />
+                  {canSkipWidgetStep ? 'Finish Setup' : 'Next'} <ArrowRight className="h-4 w-4 ml-2" />
                 </Button>
               </div>
             </CardContent>
           </Card>
         )}
 
-        {step === 2 && !canSkipStep2 && (
+        {/* Step 3 — widgets grouped by module */}
+        {step === 3 && !canSkipWidgetStep && (
           <Card className="shadow-lg border-emerald-100">
             <CardContent className="p-6 space-y-4">
               <div>
-                <h2 className="font-bold text-lg text-emerald-900">Step 2 · Pick your dashboard cards</h2>
+                <h2 className="font-bold text-lg text-emerald-900">Step 3 · Pick your dashboard cards</h2>
                 <p className="text-sm text-muted-foreground">Choose which cards appear on your dashboard. You can change these later in Settings.</p>
               </div>
 
@@ -2964,7 +3023,7 @@ function SetupWizardV2({ settings, onComplete }) {
               ))}
 
               <div className="flex justify-between pt-2">
-                <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
+                <Button variant="outline" onClick={() => setStep(2)}>Back</Button>
                 <Button onClick={finish} disabled={busy} className="bg-emerald-600 hover:bg-emerald-700">
                   {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />}
                   Finish Setup
@@ -2972,7 +3031,7 @@ function SetupWizardV2({ settings, onComplete }) {
               </div>
               {widgets.length === 0 && (
                 <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2">
-                  Tip: You haven't picked any cards. Your dashboard will show quick actions only. You can add cards later from Settings → Dashboard.
+                  Tip: You haven't picked any cards. You can add them later from Settings → Dashboard.
                 </p>
               )}
             </CardContent>

@@ -94,7 +94,7 @@ export default function AdminPage() {
                 <CardContent className="p-4 flex flex-wrap gap-3 items-center justify-between">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="font-semibold">{k.kitchenName}</h3>
+                      <h3 className="font-semibold">{k.kitchenName || <span className="text-slate-400 italic">Unnamed — {k.ownerEmail}</span>}</h3>
                       <Badge variant="outline" className={
                         k.status === 'approved' ? 'text-emerald-700 border-emerald-300 bg-emerald-50' :
                         k.status === 'pending' ? 'text-amber-700 border-amber-300 bg-amber-50' :

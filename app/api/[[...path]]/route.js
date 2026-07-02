@@ -410,15 +410,17 @@ export async function POST(request, { params }) {
 
     // -------- PUBLIC AUTH --------
     if (path === 'auth/signup') {
-      // Body: { email, password, kitchenName, kitchenType, timezone }
+      // Body: { email, password, kitchenName?, kitchenType?, timezone? }
+      // Kitchen name/type/timezone are now OPTIONAL — the owner sets these
+      // via the setup wizard AFTER admin approval.
       const body = await request.json()
       const email = String(body.email || '').trim().toLowerCase()
       const password = String(body.password || '')
       const kitchenName = String(body.kitchenName || '').trim()
       const kitchenType = String(body.kitchenType || '').trim()
-      const timezone = String(body.timezone || 'Asia/Kolkata').trim()
-      if (!email || !password || !kitchenName) {
-        return json({ error: 'email, password and kitchenName are required' }, 400)
+      const timezone = String(body.timezone || 'UTC').trim()
+      if (!email || !password) {
+        return json({ error: 'email and password are required' }, 400)
       }
       if (password.length < 8) return json({ error: 'Password must be at least 8 characters' }, 400)
 
@@ -428,7 +430,7 @@ export async function POST(request, { params }) {
         email,
         password,
         email_confirm: true,
-        user_metadata: { kitchen_name: kitchenName },
+        user_metadata: kitchenName ? { kitchen_name: kitchenName } : {},
       })
       if (authErr) return json({ error: authErr.message || 'Sign-up failed' }, 400)
 
@@ -438,13 +440,13 @@ export async function POST(request, { params }) {
         id: kitchenId,
         owner_id: created.user.id,
         owner_email: email,
-        kitchen_name: kitchenName,
+        kitchen_name: kitchenName,       // may be empty — owner fills in wizard
         kitchen_type: kitchenType,
         timezone,
         status: 'pending',
         code_seed: newCodeSeed(),
-        dashboard_widgets: [],       // blank slate — chef picks during setup wizard
-        modules_enabled: [],         // blank slate — chef picks during setup wizard
+        dashboard_widgets: [],
+        modules_enabled: [],
         categories: [],
         locations: [],
         units: [],
@@ -455,6 +457,41 @@ export async function POST(request, { params }) {
         try { await sb.auth.admin.deleteUser(created.user.id) } catch (e) { console.warn('Failed to rollback auth user:', e) }
         return json({ error: kErr.message }, 500)
       }
+
+      // 3) Notify admin by email (best-effort — don't fail signup if email fails).
+      const adminEmail = process.env.SHELFWISE_ADMIN_EMAIL
+      const resendKey = process.env.RESEND_API_KEY
+      if (adminEmail && resendKey) {
+        try {
+          const html = `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#f9fafb;padding:24px;color:#111">
+            <div style="max-width:560px;margin:auto;background:white;border-radius:16px;padding:32px;box-shadow:0 2px 8px rgba(0,0,0,0.05)">
+              <h1 style="font-size:22px;margin:0 0 8px;color:#064e3b">🔔 New kitchen sign-up</h1>
+              <p style="color:#6b7280;font-size:13px;margin:0 0 20px">Someone requested access to ShelfWise.</p>
+              <table style="width:100%;font-size:14px;line-height:1.6">
+                <tr><td style="color:#6b7280;padding:4px 0">Email:</td><td><b>${email}</b></td></tr>
+                ${kitchenName ? `<tr><td style="color:#6b7280;padding:4px 0">Kitchen:</td><td><b>${kitchenName}</b></td></tr>` : ''}
+                ${kitchenType ? `<tr><td style="color:#6b7280;padding:4px 0">Type:</td><td>${kitchenType}</td></tr>` : ''}
+                <tr><td style="color:#6b7280;padding:4px 0">Requested at:</td><td>${new Date().toLocaleString()}</td></tr>
+              </table>
+              <div style="margin-top:24px">
+                <a href="https://shelfwise-beige.vercel.app/admin" style="display:inline-block;background:#10b981;color:white;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600">Open admin panel to approve →</a>
+              </div>
+            </div></body></html>`
+          await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              from: 'ShelfWise <onboarding@resend.dev>',
+              to: [adminEmail],
+              subject: `ShelfWise — new sign-up: ${email}`,
+              html,
+            }),
+          })
+        } catch (e) {
+          console.warn('Admin notify email failed:', e.message)
+        }
+      }
+
       return json({ ok: true, status: 'pending', message: 'Account created. Awaiting admin approval.' }, 201)
     }
 
