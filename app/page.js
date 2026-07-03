@@ -593,8 +593,18 @@ function App() {
         toast.warning('Could not extract any items. Try rephrasing.')
         return
       }
-      setVoiceItems(data.items)
-      toast.success(`Detected ${data.items.length} item${data.items.length !== 1 ? 's' : ''}`)
+      setVoiceItems((data.items || []).map(it => ({
+        name: it.name || '',
+        quantity: Number(it.quantity) || 1,
+        unit: it.unit || 'ea',
+        expiryDate: it.expiryDate || '',
+        category: it.category || '',
+        storageType: it.storageType || 'Fridge',
+        location: it.location || '',
+        _keep: true,
+        _expanded: false,
+      })))
+      toast.success(`Detected ${data.items.length} item${data.items.length !== 1 ? 's' : ''} — review, edit, then save`)
     } catch (e) {
       toast.error(e.message || 'Could not parse speech')
     } finally {
@@ -603,17 +613,19 @@ function App() {
   }
 
   const saveVoiceItems = async () => {
+    const toSave = voiceItems.filter(i => i._keep && i.name?.trim())
+    if (!toSave.length) { toast.error('Nothing selected to save'); return }
     setVoiceParsing(true)
     try {
-      for (const item of voiceItems) {
-        if (!item.name) continue
+      for (const item of toSave) {
+        const { _keep, _expanded, ...clean } = item
         await fetch('/api/products', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(item),
+          body: JSON.stringify(clean),
         })
       }
-      toast.success(`Added ${voiceItems.length} item${voiceItems.length !== 1 ? 's' : ''} from voice ✅`)
+      toast.success(`Added ${toSave.length} item${toSave.length !== 1 ? 's' : ''} from voice ✅`)
       setVoiceOpen(false)
       fetchProducts()
       fetchStats()
@@ -623,6 +635,10 @@ function App() {
       setVoiceParsing(false)
     }
   }
+
+  // Voice: helpers for editing individual detected items
+  const updateVoiceItem = (idx, patch) => setVoiceItems(items => items.map((it, i) => i === idx ? { ...it, ...patch } : it))
+  const removeVoiceItem = (idx) => setVoiceItems(items => items.filter((_, i) => i !== idx))
 
   // Print a logbook template (chefs fill it on shift, then scan with AI later)
   // Open the in-app Print Logbook modal (iOS-safe — no window.open, so users can just tap Close)
@@ -1552,15 +1568,128 @@ function App() {
 
             {voiceItems.length > 0 && (
               <div className="space-y-2">
-                <p className="text-xs font-semibold text-emerald-700">✨ Detected {voiceItems.length} item{voiceItems.length !== 1 ? 's' : ''}:</p>
-                {voiceItems.map((it, i) => (
-                  <div key={i} className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-3 text-sm space-y-1">
-                    <p className="font-semibold">{it.name}</p>
-                    <p className="text-xs text-slate-600">
-                      {it.quantity} {it.unit} • {it.storageType}
-                      {it.expiryDate ? ` • exp ${it.expiryDate}` : ''}
-                      {it.location ? ` • 📍 ${it.location}` : ''}
-                    </p>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-emerald-700">
+                    ✨ Detected {voiceItems.length} item{voiceItems.length !== 1 ? 's' : ''}
+                  </p>
+                  <p className="text-[11px] text-slate-500">{voiceItems.filter(i => i._keep).length} selected</p>
+                </div>
+                <p className="text-[11px] text-slate-500 bg-blue-50 border border-blue-200 rounded px-2 py-1.5">
+                  💡 Tap any item to edit name, qty, expiry, storage etc. Untick to skip.
+                </p>
+
+                {voiceItems.map((it, idx) => (
+                  <div
+                    key={idx}
+                    className={`border-2 rounded-xl transition ${it._keep ? 'border-emerald-200 bg-white' : 'border-slate-200 bg-slate-50 opacity-60'}`}
+                  >
+                    {/* Collapsed summary — tap to expand */}
+                    <div className="flex items-center gap-2 p-3">
+                      <input
+                        type="checkbox"
+                        checked={!!it._keep}
+                        onChange={e => updateVoiceItem(idx, { _keep: e.target.checked })}
+                        className="h-4 w-4 accent-emerald-600 shrink-0"
+                        onClick={e => e.stopPropagation()}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => updateVoiceItem(idx, { _expanded: !it._expanded })}
+                        className="flex-1 min-w-0 text-left"
+                      >
+                        <p className="font-semibold text-sm truncate">{it.name || '(no name)'}</p>
+                        <p className="text-[11px] text-slate-600 truncate">
+                          {it.quantity} {it.unit} • {it.storageType}
+                          {it.expiryDate ? ` • exp ${it.expiryDate}` : ''}
+                          {it.location ? ` • 📍 ${it.location}` : ''}
+                        </p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeVoiceItem(idx)}
+                        className="h-7 w-7 flex items-center justify-center rounded-md text-red-600 hover:bg-red-50 shrink-0"
+                        title="Remove"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    {/* Expanded editable form */}
+                    {it._expanded && (
+                      <div className="border-t px-3 pb-3 pt-2 space-y-2 bg-emerald-50/40 rounded-b-xl">
+                        <div>
+                          <Label className="text-xs">Name *</Label>
+                          <Input
+                            value={it.name}
+                            onChange={e => updateVoiceItem(idx, { name: e.target.value })}
+                            className="h-9"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <Label className="text-xs">Quantity</Label>
+                            <Input
+                              type="number"
+                              step="0.1"
+                              value={it.quantity}
+                              onChange={e => updateVoiceItem(idx, { quantity: Number(e.target.value) || 0 })}
+                              className="h-9"
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Unit</Label>
+                            <Select value={it.unit || 'ea'} onValueChange={v => updateVoiceItem(idx, { unit: v })}>
+                              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                {['ea','kg','g','L','mL','bunch','pack','box'].map(u => (
+                                  <SelectItem key={u} value={u}>{u}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                        <div>
+                          <Label className="text-xs">Expiry date</Label>
+                          <Input
+                            type="date"
+                            value={it.expiryDate || ''}
+                            onChange={e => updateVoiceItem(idx, { expiryDate: e.target.value })}
+                            className="h-9"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <Label className="text-xs">Storage</Label>
+                            <Select value={it.storageType || 'Fridge'} onValueChange={v => updateVoiceItem(idx, { storageType: v })}>
+                              <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                {['Fridge','Freezer','Dry','Ambient'].map(s => (
+                                  <SelectItem key={s} value={s}>{s}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <Label className="text-xs">Location</Label>
+                            <Input
+                              value={it.location || ''}
+                              onChange={e => updateVoiceItem(idx, { location: e.target.value })}
+                              placeholder="Shelf 2"
+                              className="h-9"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <Label className="text-xs">Category</Label>
+                          <Input
+                            value={it.category || ''}
+                            onChange={e => updateVoiceItem(idx, { category: e.target.value })}
+                            placeholder="Dairy"
+                            className="h-9"
+                          />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
