@@ -321,6 +321,64 @@ Rules:
   }
 }
 
+// ---- Barcode: identify a product from a photo of the front of pack ----
+// Fallback when public barcode databases (Open Food Facts / UPCitemdb / Beauty Facts)
+// return no result — very common for regional or private-label products.
+async function identifyProductFromPhoto(base64DataUrl, barcodeHint = '') {
+  const key = process.env.EMERGENT_LLM_KEY
+  if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+  const systemPrompt = `You are an expert at identifying packaged food/drink/cleaning products from a photo of the front of the pack.
+${barcodeHint ? `Reference barcode: ${barcodeHint}\n` : ''}
+Return ONLY a valid JSON object of shape:
+{
+  "name": "clean product name including brand + variant (e.g. 'Tesco Semi-Skimmed Milk 1L', 'Amul Butter Salted', 'Heinz Baked Beans')",
+  "brand": "brand name only (e.g. 'Tesco', 'Amul', 'Heinz')",
+  "quantity": number (numeric part of the pack size, default 1),
+  "unit": "kg" | "g" | "L" | "mL" | "ea" | "pack" | "box",
+  "category": "Dairy" | "Meat" | "Produce" | "Dry Goods" | "Frozen" | "Cleaning" | "Beverages" | "Snacks" | "Bakery" | "Other",
+  "storageType": "Fridge" | "Freezer" | "Dry" | "Ambient",
+  "confidence": "high" | "medium" | "low"
+}
+
+Rules:
+- Read all visible text on the pack. Use the biggest/boldest text for the product name.
+- If pack size is "500 g" then quantity=500, unit="g". If "1 L" then quantity=1, unit="L".
+- If you cannot see the pack clearly, still make a best-guess and set confidence="low".
+- Output STRICT JSON. No prose. No markdown.`
+
+  const body = {
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: [
+        { type: 'text', text: 'Identify this product from the photo.' },
+        { type: 'image_url', image_url: { url: base64DataUrl } }
+      ]}
+    ],
+    temperature: 0.1,
+    response_format: { type: 'json_object' },
+  }
+  const res = await fetch(EMERGENT_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`Emergent LLM ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  const content = data?.choices?.[0]?.message?.content || '{}'
+  let parsed
+  try { parsed = JSON.parse(content) } catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : {} }
+  return {
+    name: String(parsed.name || '').trim(),
+    brand: String(parsed.brand || '').trim(),
+    quantity: Number(parsed.quantity) || 1,
+    unit: ['kg','g','L','mL','ea','pack','box'].includes(parsed.unit) ? parsed.unit : 'ea',
+    category: String(parsed.category || '').trim(),
+    storageType: ['Fridge','Freezer','Dry','Ambient'].includes(parsed.storageType) ? parsed.storageType : 'Ambient',
+    confidence: ['high','medium','low'].includes(parsed.confidence) ? parsed.confidence : 'medium',
+  }
+}
+
 async function parseTextForItems(text) {
   const key = process.env.EMERGENT_LLM_KEY
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
@@ -1007,7 +1065,7 @@ export async function POST(request, { params }) {
     }
 
     // -------- AI passthrough (still requires auth, but not kitchen scoping)
-    if (path === 'scan' || path === 'scan-receipt' || path === 'parse-voice' || path === 'recipe-instructions') {
+    if (path === 'scan' || path === 'scan-receipt' || path === 'parse-voice' || path === 'recipe-instructions' || path === 'identify-product') {
       const { ctx, error } = await requireAuth(request)
       if (error) return error
       const body = await request.json()
@@ -1020,6 +1078,13 @@ export async function POST(request, { params }) {
       if (path === 'scan-receipt') {
         if (!body.image || !body.image.startsWith('data:image/')) return json({ error: 'Invalid or missing image' }, 400)
         const parsed = await parseReceiptImage(body.image)
+        return json(parsed)
+      }
+      if (path === 'identify-product') {
+        // Photo-based product identification (barcode scanner AI fallback).
+        if (!body.image || !body.image.startsWith('data:image/')) return json({ error: 'Invalid or missing image' }, 400)
+        const barcode = String(body.barcode || '').trim().slice(0, 40)
+        const parsed = await identifyProductFromPhoto(body.image, barcode)
         return json(parsed)
       }
       if (path === 'parse-voice') {

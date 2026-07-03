@@ -677,23 +677,26 @@ function App() {
           const data = await res.json()
           if (data?.status === 1 && data?.product) {
             const p = data.product
-            detected.name = p.product_name || p.product_name_en || p.generic_name || ''
-            detected.category = (p.categories || '').split(',')[0]?.trim() || ''
-            if (p.quantity) {
-              const m = String(p.quantity).match(/([\d.]+)\s*(kg|g|L|ml|mL|cl)/i)
-              if (m) {
-                detected.quantity = Number(m[1])
-                const u = m[2].toLowerCase()
-                detected.unit = u === 'ml' ? 'mL' : (u === 'l' ? 'L' : u)
+            const nm = p.product_name || p.product_name_en || p.generic_name || p.abbreviated_product_name || ''
+            if (nm.trim()) {  // Only accept if we actually got a name — otherwise fall through to AI
+              detected.name = nm
+              detected.category = (p.categories || '').split(',')[0]?.trim() || ''
+              if (p.quantity) {
+                const m = String(p.quantity).match(/([\d.]+)\s*(kg|g|L|ml|mL|cl)/i)
+                if (m) {
+                  detected.quantity = Number(m[1])
+                  const u = m[2].toLowerCase()
+                  detected.unit = u === 'ml' ? 'mL' : (u === 'l' ? 'L' : u)
+                }
               }
+              const cat = detected.category.toLowerCase()
+              if (cat.includes('frozen')) detected.storageType = 'Freezer'
+              else if (cat.includes('dry') || cat.includes('snack') || cat.includes('cereal') || cat.includes('pasta') || cat.includes('rice')) detected.storageType = 'Dry'
+              else if (cat.includes('beverage') || cat.includes('drink')) detected.storageType = 'Ambient'
+              detected.expiryDate = ''
+              toast.success(`Found: ${detected.name}. Please enter the expiry date from the package.`)
+              found = true
             }
-            const cat = detected.category.toLowerCase()
-            if (cat.includes('frozen')) detected.storageType = 'Freezer'
-            else if (cat.includes('dry') || cat.includes('snack') || cat.includes('cereal') || cat.includes('pasta') || cat.includes('rice')) detected.storageType = 'Dry'
-            else if (cat.includes('beverage') || cat.includes('drink')) detected.storageType = 'Ambient'
-            detected.expiryDate = ''
-            toast.success(`Found: ${detected.name || code}. Please enter the expiry date from the package.`)
-            found = true
           }
         } catch {}
       }
@@ -705,7 +708,7 @@ function App() {
           if (res.ok) {
             const data = await res.json()
             const item = data?.items?.[0]
-            if (item?.title) {
+            if (item?.title && item.title.trim()) {
               detected.name = item.title
               detected.category = item.category || ''
               detected.expiryDate = ''
@@ -721,7 +724,7 @@ function App() {
         try {
           const res = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${encodeURIComponent(code)}.json`)
           const data = await res.json()
-          if (data?.status === 1 && data?.product?.product_name) {
+          if (data?.status === 1 && data?.product?.product_name && data.product.product_name.trim()) {
             detected.name = data.product.product_name
             detected.category = 'Cleaning/Beauty'
             detected.expiryDate = ''
@@ -732,7 +735,11 @@ function App() {
       }
 
       if (!found) {
-        toast.warning("This product isn't in our barcode databases. Please fill in details manually — we'll remember it for next time!", { duration: 7000 })
+        // AI Vision fallback: prompt user to snap the front of the pack
+        toast.info("Not in public databases — let's identify by photo instead 📸", { duration: 4000 })
+        setBarcodeOpen(false)
+        setAiFallback({ barcode: code })
+        return
       }
 
       setBarcodeOpen(false)
@@ -741,6 +748,43 @@ function App() {
       setSnapOpen(true)
     } finally {
       setBarcodeLoading(false)
+    }
+  }
+
+  // AI-vision fallback for the barcode scanner — user snaps front of pack.
+  const [aiFallback, setAiFallback] = useState(null)   // { barcode }
+  const [aiBusy, setAiBusy] = useState(false)
+  const handleAiFallbackPhoto = async (file) => {
+    if (!file) return
+    setAiBusy(true)
+    try {
+      const dataUrl = await resizeImage(file)
+      const res = await fetch('/api/identify-product', {
+        method: 'POST',
+        body: JSON.stringify({ image: dataUrl, barcode: aiFallback?.barcode || '' }),
+      })
+      if (!res.ok) throw new Error('AI identification failed')
+      const p = await res.json()
+      if (!p?.name) throw new Error('Could not identify — please fill manually')
+      const detected = {
+        name: p.name,
+        quantity: p.quantity || 1,
+        unit: p.unit || 'ea',
+        category: p.category || '',
+        storageType: p.storageType || 'Ambient',
+        expiryDate: '',
+        location: '',
+        customFields: { barcode: aiFallback?.barcode || '', brand: p.brand || '' },
+      }
+      toast.success(`AI found: ${p.name} (${p.confidence} confidence). Please add expiry date.`)
+      setAiFallback(null)
+      setSnapItem(detected)
+      setSnapImage(dataUrl)
+      setSnapOpen(true)
+    } catch (e) {
+      toast.error(e.message || 'Could not identify from photo')
+    } finally {
+      setAiBusy(false)
     }
   }
 
@@ -1597,6 +1641,57 @@ function App() {
         loading={barcodeLoading}
         onManual={(code) => onBarcodeFound(code)}
       />
+
+      {/* AI-Vision fallback for barcode scanner — user snaps front of pack */}
+      <Dialog open={!!aiFallback} onOpenChange={(v) => { if (!v) setAiFallback(null) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-emerald-600" /> Identify by photo
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-slate-700">
+              This barcode {aiFallback?.barcode && <span className="font-mono bg-slate-100 px-1 rounded text-xs">({aiFallback.barcode})</span>} isn't in the public databases.
+              Snap a clear photo of the <b>front of the pack</b> — our AI will read the label and fill in the details.
+            </p>
+            <label className="block">
+              <div className="rounded-lg border-2 border-dashed border-emerald-300 bg-emerald-50 hover:bg-emerald-100 transition p-6 text-center cursor-pointer">
+                {aiBusy ? (
+                  <div className="flex flex-col items-center gap-2 text-emerald-700">
+                    <Loader2 className="h-8 w-8 animate-spin" />
+                    <span className="text-sm font-medium">AI is reading the label…</span>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-2 text-emerald-700">
+                    <Upload className="h-8 w-8" />
+                    <span className="text-sm font-medium">Tap to take a photo</span>
+                    <span className="text-xs text-emerald-600/80">Front of pack, well-lit, no glare</span>
+                  </div>
+                )}
+              </div>
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                disabled={aiBusy}
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) handleAiFallbackPhoto(f)
+                  e.target.value = ''
+                }}
+              />
+            </label>
+            <p className="text-xs text-muted-foreground">
+              💡 Tip: once we identify a product, next time you scan the same barcode we'll recognise it instantly from your history.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAiFallback(null)}>Skip &amp; enter manually</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* AI Snap Label Dialog — single product photo */}
       <Dialog open={snapOpen} onOpenChange={setSnapOpen}>

@@ -430,3 +430,23 @@ All indexed by `(kitchen_id, timestamp desc)`. All FK to `kitchens` with `on del
 2. Extract `shelfwise-session-haccp.zip` and drag-drop replace files in local repo.
 3. Commit + push → Vercel auto-deploys.
 4. Enable "HACCP Compliance" module in Settings → Modules for the desired kitchens.
+
+---
+
+## 2026-07-03 — Barcode Scanner: GPT-4o Vision Fallback
+
+**Bug fix by main agent**: User reported barcode scanner "still can't scan any products" — even for UK Tesco items. Root cause: Open Food Facts returns records with EMPTY `product_name` for many UK own-brand items, so the flow flagged them as `found` and opened an empty form. UPCitemdb trial tier is also rate-limited at 100/day, and Indian regional products are missing entirely.
+
+**Backend changes** (`app/api/[[...path]]/route.js`):
+- New `identifyProductFromPhoto(base64, barcodeHint)` helper — GPT-4o Vision reads the front of a pack and returns `{name, brand, quantity, unit, category, storageType, confidence}`.
+- New POST endpoint `/api/identify-product` — accepts `{image, barcode?}`, requires auth, returns the parsed product.
+
+**Frontend changes** (`app/app/page.js`):
+- `onBarcodeFound()` now only treats a public-database result as "found" when the `product_name` field is a non-empty string (previously it accepted blank).
+- New `aiFallback` state + `handleAiFallbackPhoto()` handler for the AI Vision fallback flow.
+- New `<Dialog>` "Identify by photo" — appears when all 4 public databases return nothing. User taps → device camera opens → snaps front of pack → AI extracts details → prefills SnapItem form.
+- After AI success, product is saved to inventory with the barcode in `customFields.barcode` — next scan of the same code hits the user's history match instantly (learning behaviour).
+
+**Testing**: User will validate end-to-end on Vercel with real UK Tesco / Indian products.
+
+**Pending user action**: Extract `shelfwise-session-barcode-ai.zip` → drag-drop replace `app/page.js` + `app/api/[[...path]]/route.js` → commit + sync → wait 2 min for Vercel.

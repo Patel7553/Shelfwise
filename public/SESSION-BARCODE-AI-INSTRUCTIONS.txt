@@ -1,0 +1,111 @@
+╔══════════════════════════════════════════════════════════════════╗
+║  ShelfWise — Barcode Scanner: AI Vision Fallback                 ║
+║  Fixes: "Camera reads barcode but product info is empty"         ║
+╚══════════════════════════════════════════════════════════════════╝
+
+WHAT THIS FIXES:
+────────────────
+Public barcode databases (Open Food Facts, UPCitemdb, Open Beauty Facts)
+are missing MOST products — especially:
+  • UK Tesco own-brand items (records exist but often have blank names)
+  • Indian regional products (Amul, MDH, Haldiram sub-variants, etc.)
+  • Anything private-label or newer than the databases
+
+BEFORE THIS FIX:
+  Scan barcode → "not in database" → empty form → useless
+
+AFTER THIS FIX:
+  Scan barcode → not in public DB → "Snap the front of pack" prompt
+              → GPT-4o Vision reads the label → auto-fills the form
+              → Next scan of the same code = instant match (learned)
+
+═══════════════════════════════════════════════════════════════════
+DEPLOYMENT — 2 STEPS (5 minutes total)
+═══════════════════════════════════════════════════════════════════
+
+STEP 1 — REPLACE FILES IN VS CODE (2 min)
+──────────────────────────────────────────
+  Drag-and-drop these files from the zip → they will OVERWRITE:
+    ✓ app/page.js
+    ✓ app/api/[[...path]]/route.js
+
+  VS Code should say "Do you want to overwrite?" → click "Yes to All"
+
+  NO database migration needed this time. Nothing changes in Supabase.
+
+STEP 2 — DEPLOY TO VERCEL (3 min)
+──────────────────────────────────
+  In VS Code:
+    a) Source Control icon → 2 files changed
+    b) Commit message: "Fix barcode scanner: AI vision fallback"
+    c) ✓ Commit → "Sync Changes"
+    d) Wait 2-3 min → refresh shelfwise.co.in
+
+═══════════════════════════════════════════════════════════════════
+HOW IT WORKS NOW
+═══════════════════════════════════════════════════════════════════
+
+  1. You scan a barcode with your camera (unchanged)
+
+  2. App checks in order:
+       a) YOUR OWN inventory history  (scanned before? instant match)
+       b) Open Food Facts             (2.8M European products)
+       c) UPCitemdb                   (US retail)
+       d) Open Beauty Facts           (cosmetics / cleaning)
+
+  3. If step 2 returns a REAL name → form opens with product filled in ✓
+
+  4. NEW: If step 2 returns nothing OR blank names → new dialog opens:
+       "Identify by photo"
+       Tap the green box → phone camera opens → snap the front of pack
+       → AI (GPT-4o Vision) reads the label
+       → Form opens with name, brand, quantity, unit, category filled
+
+  5. You add the expiry date + save → next scan of that barcode
+     will INSTANTLY match from your history (learned).
+
+═══════════════════════════════════════════════════════════════════
+TESTING CHECKLIST
+═══════════════════════════════════════════════════════════════════
+
+  ☐ Scan a barcode that USED to work (e.g. a common Coca-Cola can)
+    → Should still work like before (public DB match)
+
+  ☐ Scan a UK Tesco own-brand item that failed before
+    → Should now show "Not in public databases — identify by photo"
+    → Snap the front → AI fills in the details
+
+  ☐ Scan an Indian product (Amul, MDH etc)
+    → Same AI-photo flow
+
+  ☐ Scan the SAME Tesco item AGAIN after saving it once
+    → This time it should instantly match from history — no photo needed
+
+═══════════════════════════════════════════════════════════════════
+COST NOTE
+═══════════════════════════════════════════════════════════════════
+
+Each AI-fallback lookup uses ~1 image API call via GPT-4o Vision.
+Emergent LLM key handles this — no extra config needed.
+Estimated cost: ~£0.005 per product identified.
+The learning behaviour means you only pay this ONCE per unique product.
+
+═══════════════════════════════════════════════════════════════════
+QUESTIONS OR ISSUES?
+═══════════════════════════════════════════════════════════════════
+
+If AI photo dialog doesn't show up:
+  → Check browser console — is /api/identify-product returning 401?
+    You may have been signed out. Log in again.
+
+If AI says "Could not identify":
+  → Photo was too blurry / dark / angled. Retake with:
+    - Front of pack (not sides / back)
+    - Bright light, no glare
+    - Fill 70% of the frame with the pack
+
+If camera won't open:
+  → iPhone Safari: Settings → Safari → Camera → Ask/Allow
+  → Android Chrome: Site Settings → Camera → Allow
+
+— ShelfWise
