@@ -1004,14 +1004,21 @@ Output strictly valid JSON with no other text.`
         let doc = { id: uuidv4(), kitchen_id: kid, ...toDb(body) }
         let { data, error } = await sb.from('products').insert(doc).select().single()
         if (error && /column .* does not exist|schema cache/i.test(error.message || '')) {
-          const { custom_fields, updated_at, ...core } = doc
+          const {
+            custom_fields, updated_at,
+            unit_cost, reorder_point, allergens, supplier, source, source_meta,
+            ...core
+          } = doc
           const retry = await sb.from('products').insert(core).select().single()
           data = retry.data
           error = retry.error
         }
         if (error) {
           console.error('products insert failed:', error)
-          throw new Error(error.message || 'Insert failed')
+          const hint = /column .* does not exist|schema cache/i.test(error.message || '')
+            ? ' — please run supabase/migration-8-cost-allergens.sql in Supabase SQL Editor.'
+            : ''
+          return json({ error: (error.message || 'Insert failed') + hint }, 500)
         }
         return json(enrich(fromDb(data)), 201)
       }
@@ -1022,13 +1029,26 @@ Output strictly valid JSON with no other text.`
         const docs = itemsIn.filter(i => i.name).map(b => ({ id: uuidv4(), kitchen_id: kid, ...toDb(b) }))
         if (!docs.length) return json({ inserted: 0, items: [] }, 201)
         let { data, error } = await sb.from('products').insert(docs).select()
+        // Retry gracefully if any newer column (from a not-yet-run migration) is missing.
         if (error && /column .* does not exist|schema cache/i.test(error.message || '')) {
-          const coreDocs = docs.map(({ custom_fields, updated_at, ...core }) => core)
+          const coreDocs = docs.map((d) => {
+            const {
+              custom_fields, updated_at,
+              unit_cost, reorder_point, allergens, supplier, source, source_meta,
+              ...core
+            } = d
+            return core
+          })
           const retry = await sb.from('products').insert(coreDocs).select()
           data = retry.data
           error = retry.error
         }
-        if (error) throw new Error(error.message || 'Insert failed')
+        if (error) {
+          const hint = /column .* does not exist|schema cache/i.test(error.message || '')
+            ? ' — please run supabase/migration-8-cost-allergens.sql in Supabase SQL Editor.'
+            : ''
+          return json({ error: (error.message || 'Insert failed') + hint }, 500)
+        }
         return json({ inserted: data.length, items: data.map(fromDb).map(enrich) }, 201)
       }
 
@@ -1187,8 +1207,24 @@ export async function PUT(request, { params }) {
       if (error) return error
       const id = segs[1]
       const body = await request.json()
-      const { data, error: e2 } = await sb.from('products').update(toDb(body)).eq('id', id).eq('kitchen_id', ctx.kitchenId).select().single()
-      if (e2) throw e2
+      const patch = toDb(body)
+      let { data, error: e2 } = await sb.from('products').update(patch).eq('id', id).eq('kitchen_id', ctx.kitchenId).select().single()
+      if (e2 && /column .* does not exist|schema cache/i.test(e2.message || '')) {
+        // Migration 8 not run yet — retry without new columns
+        const {
+          unit_cost, reorder_point, allergens, supplier, source, source_meta,
+          ...core
+        } = patch
+        const retry = await sb.from('products').update(core).eq('id', id).eq('kitchen_id', ctx.kitchenId).select().single()
+        data = retry.data
+        e2 = retry.error
+      }
+      if (e2) {
+        const hint = /column .* does not exist|schema cache/i.test(e2.message || '')
+          ? ' — please run supabase/migration-8-cost-allergens.sql in Supabase SQL Editor.'
+          : ''
+        return json({ error: (e2.message || 'Update failed') + hint }, 500)
+      }
       return json(enrich(fromDb(data)))
     }
     return json({ error: 'Not found' }, 404)

@@ -170,11 +170,13 @@ code {
 
 /* ============================================================
    Dark mode overrides — polished slate/emerald palette
-   These re-map hardcoded Tailwind colors so the whole app looks
-   good in dark mode without touching JSX files.
    ============================================================ */
 .dark {
   color-scheme: dark;
+}
+html.dark, .dark body {
+  background-color: hsl(220 20% 8%) !important;
+  color: hsl(210 20% 95%) !important;
 }
 
 /* Backgrounds — cards SLIGHTLY lighter than page bg for depth */
@@ -269,7 +271,16 @@ code {
   /* let the gradient show through — no override */
 }
 
+/* Page shell background — the app uses a subtle amber/emerald gradient in light mode.
+   In dark mode, kill the gradient so the deep-slate body shows through. */
+.dark .bg-gradient-to-br.from-amber-50\/30 { background: none !important; }
+.dark .bg-gradient-to-br.from-emerald-50 { background: hsl(220 20% 8%) !important; }
+.dark .from-amber-50\/30, .dark .via-white, .dark .to-emerald-50\/40 { --tw-gradient-from: transparent !important; --tw-gradient-to: transparent !important; }
+
 /* Divide utilities used in lists */
+.dark .divide-slate-100 > * + *, .dark .divide-slate-200 > * + * {
+  border-color: hsl(220 15% 22%) !important;
+}
 .dark .divide-slate-100 > * + *, .dark .divide-slate-200 > * + * {
   border-color: hsl(220 15% 22%) !important;
 }

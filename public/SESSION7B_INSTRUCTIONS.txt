@@ -1,0 +1,72 @@
+════════════════════════════════════════════════════════
+  ShelfWise — Session 7b (Bug fixes)
+════════════════════════════════════════════════════════
+
+WHAT'S FIXED
+────────────
+
+1) 🔧 "Bulk save failed" → Now shows the REAL error message
+   Most likely cause: you didn't run migration-8 yet. The new
+   endpoint tells you exactly:
+     "column products.unit_cost does not exist — please run
+      supabase/migration-8-cost-allergens.sql in Supabase SQL Editor."
+   Also: if migration IS missing, the server now gracefully falls
+   back to inserting without the new columns (basic import still works).
+
+2) 🔧 Save button hidden in the Add/Edit Product dialog
+   The dialog was too tall (allergens section pushed the Save button
+   off-screen with no scroll). Now:
+     • Dialog is capped at 92% viewport height
+     • Body scrolls internally
+     • Save + Cancel buttons are STICKY at the bottom, always visible
+
+3) 🌗 Dark mode — forced body background + killed the page gradient
+   In dark mode, the app was still showing the light-mode
+   amber/emerald gradient wash. Now the deep-slate bg shows through
+   properly. All cards, inputs, borders re-tuned for readability.
+
+FILES IN THIS ZIP
+─────────────────
+    app/page.js
+    app/globals.css
+    app/api/[[...path]]/route.js
+
+INSTALL (2 min)
+───────────────
+1) Extract → drag all 3 files onto their existing counterparts
+   in VS Code (Replace)
+2) Source Control → commit ("fix: bulk save + dialog scroll + dark mode")
+   → Sync/Push
+3) Wait ~1 min for Vercel to deploy
+
+═══════════════════════════════════════════════════
+  ⚠️  YOU STILL NEED TO RUN THE MIGRATION
+═══════════════════════════════════════════════════
+If you haven't run supabase/migration-8-cost-allergens.sql yet:
+
+  1) Supabase → SQL Editor → New query
+  2) Paste the ENTIRE contents of that file
+  3) Click Run — should say "Success. No rows returned"
+
+Without it:
+  • Receipt import works but skips cost/allergens/supplier data
+  • Cost tracking KPI card shows "—"
+  • Allergens don't persist
+  • Reorder points don't persist
+  • Currency doesn't persist
+
+═══════════════════════════════════════════════════
+  QUICK TEST AFTER DEPLOY
+═══════════════════════════════════════════════════
+
+[ ] Add/Edit a product → save button is always visible at the bottom,
+    even when you tick allergens (scroll the middle section, footer
+    stays put)
+
+[ ] Toggle to dark mode via the sun/moon icon top-right — the whole
+    background should turn dark slate (not that pale emerald wash)
+
+[ ] Try receipt scan again — should either succeed OR show a clear
+    error telling you exactly what to fix
+
+═══════════════════════════════════════════════════

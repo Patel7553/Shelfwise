@@ -1329,11 +1329,11 @@ function App() {
 
       {/* Add/Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="sm:max-w-[560px]">
-          <DialogHeader>
+        <DialogContent className="sm:max-w-[560px] max-h-[92vh] flex flex-col p-0 gap-0">
+          <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
             <DialogTitle>{editing ? 'Edit Product' : 'Add Product'}</DialogTitle>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-4 py-2">
+          <div className="grid grid-cols-2 gap-4 py-2 px-6 overflow-y-auto flex-1">
             <div className="col-span-2">
               <Label htmlFor="name">Name *</Label>
               <Input id="name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Whole Milk" />
@@ -1504,7 +1504,7 @@ function App() {
               </div>
             )}
           </div>
-          <DialogFooter>
+          <DialogFooter className="px-6 py-4 border-t bg-background shrink-0 sm:flex-row gap-2">
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
             <Button onClick={saveProduct} className="bg-emerald-600 hover:bg-emerald-700">{editing ? 'Save Changes' : 'Add Product'}</Button>
           </DialogFooter>
@@ -1624,12 +1624,13 @@ function App() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ items: rows }),
             })
-            if (!res.ok) throw new Error('Bulk save failed')
-            toast.success(`Imported ${rows.length} items from receipt 🧾`)
+            const data = await res.json().catch(() => ({}))
+            if (!res.ok) throw new Error(data?.error || `Bulk save failed (${res.status})`)
+            toast.success(`Imported ${data.inserted || rows.length} items from receipt 🧾`)
             fetchProducts()
             fetchStats()
           } catch (e) {
-            toast.error(e.message || 'Import failed')
+            toast.error(e.message?.slice(0, 250) || 'Import failed', { duration: 12000 })
           }
         }}
         settings={settings}
