@@ -46,6 +46,27 @@ code {
     text-align: center;
 }
 
+/* iOS Safari fix: <input type="date"> ignores width constraints and
+   overflows its container. Force strict width + border-box. */
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"] {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  -webkit-appearance: none;
+  appearance: none;
+  font-family: inherit;
+}
+
+/* Prevent all inputs from ever overflowing their grid cell */
+input, select, textarea {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
 .App-logo {
     height: 40vmin;
     pointer-events: none;

@@ -1637,12 +1637,12 @@ function App() {
                 <Label className="text-xs">Product name *</Label>
                 <Input value={snapItem.name || ''} onChange={e => setSnapItem({ ...snapItem, name: e.target.value })} placeholder="e.g. Whole Milk" autoFocus />
               </div>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 gap-2">
                 <div>
                   <Label className="text-xs">Qty</Label>
                   <Input type="number" min="0" step="0.1" value={snapItem.quantity || 1} onChange={e => setSnapItem({ ...snapItem, quantity: Number(e.target.value) })} />
                 </div>
-                <div className="col-span-2">
+                <div>
                   <Label className="text-xs">Unit</Label>
                   {(() => {
                     const STANDARD_UNITS = ['ea', 'kg', 'g', 'L', 'mL', 'bunch', 'pack', 'box']
@@ -1694,7 +1694,7 @@ function App() {
                 <Label className="text-xs">Date received (today)</Label>
                 <Input type="date" value={snapItem.dateReceived || new Date().toISOString().slice(0,10)} onChange={e => setSnapItem({ ...snapItem, dateReceived: e.target.value })} />
               </div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2">
                 <div>
                   <Label className="text-xs">Storage</Label>
                   <Select

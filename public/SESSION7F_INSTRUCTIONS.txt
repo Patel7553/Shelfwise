@@ -1,0 +1,63 @@
+════════════════════════════════════════════════════════
+  ShelfWise — Session 7f (iOS date-input fix + snap form)
+════════════════════════════════════════════════════════
+
+WHAT'S FIXED
+────────────
+
+1) 🔧 iOS DATE INPUT OVERFLOWING ITS CONTAINER
+   Root cause: on iPhone Safari, <input type="date"> ignores width
+   constraints because the native picker button has intrinsic sizing.
+   This is why the Expiry Date box was extending outside the container.
+
+   Fix: added strict CSS in globals.css that forces ALL date/time inputs
+   to respect their container:
+     • width: 100% forced
+     • min-width: 0 (allows shrinking)
+     • max-width: 100% (never overflow)
+     • box-sizing: border-box
+     • -webkit-appearance reset
+
+   Also applied a safer default to ALL inputs so nothing overflows.
+
+2) 🔧 SNAP DIALOG (Add Items via camera) — SINGLE COLUMN
+   The Snap Label dialog still had side-by-side pairs (Qty+Unit,
+   Storage+Shelf) which caused overlap on narrow phones. Now all
+   fields stack vertically for consistent mobile UX.
+
+FILES IN THIS ZIP
+─────────────────
+    app/page.js
+    app/globals.css
+
+INSTALL (1 min)
+───────────────
+1) Extract → in VS Code, Replace both files
+2) Source Control → commit ("fix: iOS date overflow + snap form")
+   → Sync/Push
+3) Wait ~1 min for Vercel to deploy
+4) On iPhone: close Safari tab, reopen, hard refresh
+   (Or Chrome: ⋮ menu → Reload)
+
+═══════════════════════════════════════════════════
+  TEST AFTER DEPLOY
+═══════════════════════════════════════════════════
+
+[ ] Receipt scan → ✏️ Edit → Expiry Date box stays inside container
+[ ] Add Product → all boxes align neatly, no overflow
+[ ] Snap Label → Qty/Unit/Storage/Shelf all on separate rows
+
+═══════════════════════════════════════════════════
+  ⚠️ IF IT'S STILL BROKEN AFTER DEPLOY
+═══════════════════════════════════════════════════
+It's almost certainly a browser cache issue. Do a HARD refresh:
+  • iPhone: Settings → Safari → Advanced → Website Data → search
+    "shelfwise" → Delete
+  • Or fully close Safari (swipe up from home to app switcher, swipe
+    Safari away), then reopen
+  • Or open the app in Chrome / a different browser to compare
+
+If it's STILL broken, screenshot me the Vercel Deployments tab so I
+can confirm the deploy went through.
+
+═══════════════════════════════════════════════════
