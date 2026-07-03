@@ -208,9 +208,226 @@ function kitchenToApi(k) {
     alertEmail: k.alert_email || '',
     tagline: k.tagline || 'From shelf to plate — never lose track.',
     currency: k.currency || '',
+    weeklyDigestEnabled: k.weekly_digest_enabled !== false,
+    lastDigestSentAt: k.last_digest_sent_at,
     createdAt: k.created_at,
     approvedAt: k.approved_at,
   }
+}
+
+// ============================================================================
+// Weekly Digest email
+// ============================================================================
+// Small helper that wraps Resend for anywhere in the file.
+async function resendSend({ to, subject, html }) {
+  const resendKey = process.env.RESEND_API_KEY
+  if (!resendKey) return { ok: false, error: 'RESEND_API_KEY not set' }
+  if (!to) return { ok: false, error: 'no recipient' }
+  const from = process.env.MAIL_FROM || 'ShelfWise <onboarding@resend.dev>'
+  try {
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to: Array.isArray(to) ? to : [to], subject, html }),
+    })
+    const txt = await r.text()
+    if (!r.ok) return { ok: false, status: r.status, error: txt.slice(0, 400) }
+    return { ok: true, id: (() => { try { return JSON.parse(txt).id } catch { return null } })() }
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
+}
+
+const CURRENCY_SYMBOL_SERVER = {
+  GBP: '£', USD: '$', EUR: '€', INR: '₹', AED: 'د.إ', AUD: 'A$', CAD: 'C$', SGD: 'S$',
+}
+
+// Compute the weekly digest data for one kitchen. Returns null if nothing to report.
+async function computeWeeklyDigest(sb, kitchen) {
+  const kid = kitchen.id
+  const nowISO = new Date().toISOString()
+  const weekAgoISO = new Date(Date.now() - 7 * 86400000).toISOString()
+
+  // Pull inventory
+  const { data: products = [] } = await sb.from('products').select('*').eq('kitchen_id', kid).limit(5000)
+
+  // Compute status client-side (same rule as computeStatus)
+  const today = new Date(); today.setHours(0,0,0,0)
+  const in7 = new Date(today); in7.setDate(today.getDate() + 7)
+
+  let expired = [], expiring = [], reorder = []
+  let inventoryValue = 0
+  for (const p of products) {
+    const qty = Number(p.quantity) || 0
+    const cost = Number(p.unit_cost) || 0
+    inventoryValue += qty * cost
+    if (p.expiry_date) {
+      const d = new Date(p.expiry_date)
+      if (d < today) expired.push(p)
+      else if (d <= in7) expiring.push(p)
+    }
+    if (p.reorder_point != null && Number(p.quantity) <= Number(p.reorder_point)) reorder.push(p)
+  }
+  expiring.sort((a, b) => new Date(a.expiry_date) - new Date(b.expiry_date))
+
+  // Waste last 7 days
+  let wasteEntries = []
+  try {
+    const { data } = await sb.from('waste_log').select('*').eq('kitchen_id', kid).gte('disposed_at', weekAgoISO).limit(2000)
+    wasteEntries = data || []
+  } catch { /* table may not exist yet */ }
+
+  let wasteCount = wasteEntries.length
+  let wasteCost = 0
+  const wasteByItem = {}
+  for (const w of wasteEntries) {
+    const cost = (Number(w.unit_cost) || 0) * (Number(w.quantity) || 0)
+    wasteCost += cost
+    const key = w.product_name || '(unknown)'
+    wasteByItem[key] = (wasteByItem[key] || 0) + cost
+  }
+  const topWasted = Object.entries(wasteByItem).sort((a, b) => b[1] - a[1]).slice(0, 3)
+
+  // Money at risk (sum of unit_cost * qty for items expiring in next 7 days)
+  let atRisk = 0
+  for (const p of expiring) {
+    atRisk += (Number(p.unit_cost) || 0) * (Number(p.quantity) || 0)
+  }
+
+  return {
+    generatedAt: nowISO,
+    kitchen: { name: kitchen.kitchen_name || 'Your kitchen', currency: kitchen.currency || 'GBP', timezone: kitchen.timezone },
+    totalItems: products.length,
+    inventoryValue,
+    expired: expired.slice(0, 10).map(p => ({ name: p.name, qty: p.quantity, unit: p.unit, expiryDate: p.expiry_date })),
+    expiring: expiring.slice(0, 10).map(p => ({ name: p.name, qty: p.quantity, unit: p.unit, expiryDate: p.expiry_date })),
+    reorder: reorder.slice(0, 10).map(p => ({ name: p.name, qty: p.quantity, unit: p.unit, reorder: p.reorder_point })),
+    atRisk,
+    wasteCount,
+    wasteCost,
+    topWasted, // [[name, cost], ...]
+  }
+}
+
+function fmtCurrency(cur, n) {
+  const sym = CURRENCY_SYMBOL_SERVER[cur] || ''
+  const abs = Math.abs(Number(n) || 0)
+  const formatted = abs.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return `${sym}${formatted}`
+}
+
+function fmtDate(iso) {
+  if (!iso) return ''
+  try {
+    return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+  } catch { return iso }
+}
+
+function buildDigestHtml(digest) {
+  const cur = digest.kitchen.currency
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://shelfwise.co.in'
+  const weekLabel = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+  const hero = digest.wasteCost > 0
+    ? { emoji: '📉', title: `You wasted ${fmtCurrency(cur, digest.wasteCost)} this week`, sub: `${digest.wasteCount} items disposed. Let's cut it next week.` }
+    : { emoji: '✨', title: 'Zero waste this week', sub: 'Amazing — every ingredient made it to a plate. Keep it up.' }
+
+  const listRow = (items, empty) => items.length === 0
+    ? `<tr><td style="padding:8px 0;color:#94a3b8;font-style:italic">${empty}</td></tr>`
+    : items.map(p => `<tr><td style="padding:6px 0;border-bottom:1px solid #f1f5f9">
+        <div style="font-weight:600;color:#0f172a">${escapeHtml(p.name || '')}</div>
+        <div style="font-size:12px;color:#64748b">${p.qty || ''} ${escapeHtml(p.unit || '')}${p.expiryDate ? ' · expires ' + fmtDate(p.expiryDate) : ''}${p.reorder != null ? ' · reorder at ' + p.reorder : ''}</div>
+      </td></tr>`).join('')
+
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>ShelfWise Weekly Digest</title></head>
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;color:#0f172a">
+<div style="max-width:600px;margin:0 auto;background:#ffffff;">
+  <!-- Header -->
+  <div style="background:linear-gradient(135deg,#059669 0%,#047857 100%);color:white;padding:24px 24px 18px 24px">
+    <div style="font-size:22px;font-weight:700;letter-spacing:-0.02em">🍅 ShelfWise Weekly Digest</div>
+    <div style="opacity:0.85;font-size:14px;margin-top:4px">${escapeHtml(digest.kitchen.name)} · Week ending ${weekLabel}</div>
+  </div>
+
+  <!-- Hero -->
+  <div style="padding:28px 24px 16px 24px;text-align:center;border-bottom:1px solid #e2e8f0">
+    <div style="font-size:44px;margin-bottom:4px">${hero.emoji}</div>
+    <div style="font-size:22px;font-weight:700;color:#0f172a">${hero.title}</div>
+    <div style="font-size:14px;color:#64748b;margin-top:6px">${hero.sub}</div>
+  </div>
+
+  <!-- Stats grid -->
+  <div style="padding:20px 24px">
+    <table role="presentation" style="width:100%;border-collapse:collapse">
+      <tr>
+        <td style="width:33%;text-align:center;padding:10px;background:#f0fdf4;border-radius:8px">
+          <div style="font-size:22px;font-weight:700;color:#059669">${digest.totalItems}</div>
+          <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.05em">Items in stock</div>
+        </td>
+        <td style="width:6px"></td>
+        <td style="width:33%;text-align:center;padding:10px;background:#fef3c7;border-radius:8px">
+          <div style="font-size:22px;font-weight:700;color:#b45309">${digest.expiring.length}</div>
+          <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.05em">Expiring in 7d</div>
+        </td>
+        <td style="width:6px"></td>
+        <td style="width:33%;text-align:center;padding:10px;background:#fee2e2;border-radius:8px">
+          <div style="font-size:22px;font-weight:700;color:#b91c1c">${digest.expired.length}</div>
+          <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.05em">Already expired</div>
+        </td>
+      </tr>
+    </table>
+
+    ${digest.atRisk > 0 ? `<div style="margin-top:14px;padding:12px;background:#fff7ed;border-left:4px solid #f59e0b;border-radius:4px;font-size:14px;color:#7c2d12">
+      💰 <b>${fmtCurrency(cur, digest.atRisk)}</b> worth of stock expiring this week — plan a special or promotion.
+    </div>` : ''}
+  </div>
+
+  <!-- Expiring soon -->
+  <div style="padding:0 24px 20px 24px">
+    <h3 style="margin:0 0 8px 0;font-size:16px;color:#0f172a">⏰ Expiring in the next 7 days</h3>
+    <table role="presentation" style="width:100%;border-collapse:collapse">${listRow(digest.expiring, 'Nothing expiring soon — beautiful.')}</table>
+  </div>
+
+  <!-- Expired -->
+  ${digest.expired.length > 0 ? `<div style="padding:0 24px 20px 24px">
+    <h3 style="margin:0 0 8px 0;font-size:16px;color:#b91c1c">🚫 Already expired — dispose today</h3>
+    <table role="presentation" style="width:100%;border-collapse:collapse">${listRow(digest.expired, '')}</table>
+  </div>` : ''}
+
+  <!-- Reorder -->
+  ${digest.reorder.length > 0 ? `<div style="padding:0 24px 20px 24px">
+    <h3 style="margin:0 0 8px 0;font-size:16px;color:#0f172a">🛒 Low stock — reorder soon</h3>
+    <table role="presentation" style="width:100%;border-collapse:collapse">${listRow(digest.reorder, '')}</table>
+  </div>` : ''}
+
+  <!-- Waste breakdown -->
+  ${digest.topWasted.length > 0 ? `<div style="padding:0 24px 20px 24px">
+    <h3 style="margin:0 0 8px 0;font-size:16px;color:#0f172a">📊 Top wasted items this week</h3>
+    <table role="presentation" style="width:100%;border-collapse:collapse">
+      ${digest.topWasted.map(([name, cost]) => `<tr><td style="padding:6px 0;border-bottom:1px solid #f1f5f9">
+        <div style="display:flex;justify-content:space-between">
+          <span style="color:#0f172a">${escapeHtml(name)}</span>
+          <span style="font-weight:600;color:#b91c1c">${fmtCurrency(cur, cost)}</span>
+        </div>
+      </td></tr>`).join('')}
+    </table>
+  </div>` : ''}
+
+  <!-- CTA -->
+  <div style="padding:8px 24px 32px 24px;text-align:center">
+    <a href="${baseUrl}" style="display:inline-block;background:#059669;color:white;font-weight:600;text-decoration:none;padding:12px 28px;border-radius:8px;font-size:15px">Open ShelfWise →</a>
+  </div>
+
+  <!-- Footer -->
+  <div style="padding:16px 24px;background:#f8fafc;font-size:11px;color:#94a3b8;text-align:center;border-top:1px solid #e2e8f0">
+    You're receiving this because Weekly Digest is enabled in your ShelfWise settings.<br/>
+    Prefer no emails? Settings → Kitchen Profile → toggle off "Weekly digest emails".
+  </div>
+</div>
+</body></html>`
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
 
 // ============================================================================
@@ -506,6 +723,45 @@ export async function GET(request, { params }) {
 
     // ----- PUBLIC endpoints -----
     if (path === '' || path === 'health') return json({ ok: true, service: 'ShelfWise API (Supabase / multi-tenant)' })
+
+    // ---- CRON: weekly digest — Vercel calls this every Monday 8am UTC ----
+    // Auth: shared secret in Authorization header (Vercel Cron sets it automatically
+    // to `Bearer $CRON_SECRET` when the env var is defined).
+    if (path === 'cron/weekly-digest') {
+      const authz = request.headers.get('authorization') || ''
+      const cronSecret = process.env.CRON_SECRET
+      if (cronSecret && authz !== `Bearer ${cronSecret}`) {
+        return json({ error: 'unauthorized' }, 401)
+      }
+      // List all approved kitchens with weekly digest enabled
+      const { data: kitchens, error } = await sb
+        .from('kitchens')
+        .select('*')
+        .eq('status', 'approved')
+        .neq('weekly_digest_enabled', false)   // treat null as enabled
+      if (error) throw error
+
+      const results = []
+      for (const k of (kitchens || [])) {
+        try {
+          const digest = await computeWeeklyDigest(sb, k)
+          const html = buildDigestHtml(digest)
+          const to = k.owner_email
+          if (!to) { results.push({ id: k.id, ok: false, reason: 'no owner_email' }); continue }
+          const subject = `📊 ShelfWise: your ${digest.kitchen.name} weekly digest`
+          const send = await resendSend({ to, subject, html })
+          if (send.ok) {
+            await sb.from('kitchens').update({ last_digest_sent_at: new Date().toISOString() }).eq('id', k.id)
+          }
+          results.push({ id: k.id, name: k.kitchen_name, to, ok: send.ok, error: send.error || null })
+          // Gentle pacing — Resend allows ~2 req/sec on free tier
+          await new Promise(r => setTimeout(r, 550))
+        } catch (e) {
+          results.push({ id: k.id, ok: false, error: e.message })
+        }
+      }
+      return json({ ok: true, count: results.length, results })
+    }
 
     if (path === 'keepalive') {
       // Bumps the keepalive row so Supabase counts this as activity.
@@ -1140,7 +1396,7 @@ Output strictly valid JSON with no other text.`
     }
 
     // -------- Kitchen-scoped mutations --------
-    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries'].some(p => path === p)
+    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries'].some(p => path === p)
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
@@ -1434,6 +1690,19 @@ Output strictly valid JSON with no other text.`
         const result = await res.json()
         return json({ ok: true, sent: result.id, counts: { expired: expired.length, soon: soon.length } })
       }
+
+      // ---- Weekly Digest: send-test — owner triggers a live preview to their own email ----
+      if (path === 'digest/send-test') {
+        if (!ctx.kitchen) return json({ error: 'No kitchen' }, 404)
+        const to = ctx.kitchen.owner_email
+        if (!to) return json({ error: 'No owner email on file' }, 400)
+        const digest = await computeWeeklyDigest(sb, ctx.kitchen)
+        const html = buildDigestHtml(digest)
+        const subject = `📊 [TEST] ShelfWise: your ${digest.kitchen.name} weekly digest`
+        const send = await resendSend({ to, subject, html })
+        if (!send.ok) return json({ error: `Send failed: ${send.error}` }, 502)
+        return json({ ok: true, sent: send.id, to, preview: { totalItems: digest.totalItems, expiring: digest.expiring.length, expired: digest.expired.length, wasteCount: digest.wasteCount, wasteCost: digest.wasteCost } })
+      }
     }
 
     return json({ error: 'Not found' }, 404)
@@ -1472,6 +1741,7 @@ export async function PUT(request, { params }) {
       if (typeof body.alertEmail === 'string') patch.alert_email = body.alertEmail
       if (typeof body.tagline === 'string') patch.tagline = body.tagline
       if (typeof body.currency === 'string') patch.currency = body.currency
+      if (typeof body.weeklyDigestEnabled === 'boolean') patch.weekly_digest_enabled = body.weeklyDigestEnabled
       if (Array.isArray(body.dashboardWidgets)) patch.dashboard_widgets = body.dashboardWidgets
       if (Array.isArray(body.modulesEnabled)) patch.modules_enabled = body.modulesEnabled
       if (Array.isArray(body.categories)) patch.categories = body.categories

@@ -4291,6 +4291,8 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
   const [widgets, setWidgets] = useState([])
   const [modules, setModules] = useState([])
   const [currency, setCurrency] = useState('GBP')
+  const [weeklyDigest, setWeeklyDigest] = useState(true)
+  const [digestSending, setDigestSending] = useState(false)
   const ALL_WIDGETS = [
     { key: 'all_items', label: 'All Items count' },
     { key: 'expiring',  label: 'Expiring Soon' },
@@ -4322,6 +4324,7 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
       setInviteCode(settings.inviteCode || '')
       setAlertEmail(settings.alertEmail || '')
       setCurrency(settings.currency || 'GBP')
+      setWeeklyDigest(settings.weeklyDigestEnabled !== false)
       setWidgets(Array.isArray(settings.dashboardWidgets) ? settings.dashboardWidgets : ALL_WIDGETS.map(w => w.key))
       setModules(Array.isArray(settings.modulesEnabled) ? settings.modulesEnabled : ['stock', 'recipes'])
     }
@@ -4363,8 +4366,23 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
       label: f.label.trim(),
       type: f.type || 'text'
     }))
-    await saveSettings({ kitchenName: name.trim(), kitchenType: type, customFields: cleanFields, inviteCode, alertEmail: alertEmail.trim(), currency, dashboardWidgets: widgets, modulesEnabled: modules, onboarded: true })
+    await saveSettings({ kitchenName: name.trim(), kitchenType: type, customFields: cleanFields, inviteCode, alertEmail: alertEmail.trim(), currency, weeklyDigestEnabled: weeklyDigest, dashboardWidgets: widgets, modulesEnabled: modules, onboarded: true })
     onClose()
+  }
+
+  // Fire-off a live-preview of the weekly digest to the owner's email
+  const sendTestDigest = async () => {
+    setDigestSending(true)
+    try {
+      // Save current toggle first so backend knows the intent
+      await saveSettings({ weeklyDigestEnabled: weeklyDigest })
+      const res = await fetch('/api/digest/send-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed')
+      toast.success(`✅ Digest sent to ${data.to} — check your inbox`)
+    } catch (e) {
+      toast.error(e.message || 'Failed to send digest')
+    } finally { setDigestSending(false) }
   }
 
   const kitchenTypes = ['Restaurant', 'Cafe', 'Hotel', 'School', 'Hospital', 'Catering', 'Bakery', 'Other']
@@ -4462,6 +4480,27 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
                     {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send Test'}
                   </Button>
                 </div>
+              </div>
+
+              <div className="rounded-lg border-2 border-emerald-200 bg-emerald-50 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <Label className="text-emerald-900 text-sm font-bold">📊 Weekly Digest Email</Label>
+                    <p className="text-xs text-emerald-700 mt-1">Every Monday 8am — waste, cost, expiring items and top-wasted items. Sent to the kitchen owner's email.</p>
+                  </div>
+                  <label className="inline-flex items-center gap-2 shrink-0 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={weeklyDigest}
+                      onChange={e => setWeeklyDigest(e.target.checked)}
+                      className="h-5 w-5 accent-emerald-600"
+                    />
+                    <span className="text-xs font-semibold text-emerald-900">{weeklyDigest ? 'ON' : 'OFF'}</span>
+                  </label>
+                </div>
+                <Button variant="outline" size="sm" type="button" onClick={sendTestDigest} disabled={digestSending} className="mt-3 bg-white">
+                  {digestSending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Sending…</> : '📤 Send me a test digest now'}
+                </Button>
               </div>
 
               <NotificationSettingsCard />

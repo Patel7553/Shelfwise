@@ -450,3 +450,40 @@ All indexed by `(kitchen_id, timestamp desc)`. All FK to `kitchens` with `on del
 **Testing**: User will validate end-to-end on Vercel with real UK Tesco / Indian products.
 
 **Pending user action**: Extract `shelfwise-session-barcode-ai.zip` → drag-drop replace `app/page.js` + `app/api/[[...path]]/route.js` → commit + sync → wait 2 min for Vercel.
+
+---
+
+## 2026-07-03 — Weekly Digest Email (Vercel Cron + Resend)
+
+**Feature added by main agent**: Automated Monday 8am UTC weekly digest email — waste, cost, expiring items and top-wasted items. Uses existing Resend + verified `shelfwise.co.in` domain. Sent to owner email only.
+
+**DB changes** (`supabase/migration-10-weekly-digest.sql`):
+- New column `kitchens.weekly_digest_enabled boolean not null default true` — owner-controlled toggle
+- New column `kitchens.last_digest_sent_at timestamptz` — dedupe safety net
+
+**Backend changes** (`app/api/[[...path]]/route.js`):
+- `resendSend({to, subject, html})` helper — reusable wrapper around Resend API
+- `computeWeeklyDigest(sb, kitchen)` — aggregates last 7 days per kitchen: inventory value, expired, expiring-in-7-days, reorder-needed, waste (count + cost + top 3 items), money-at-risk
+- `buildDigestHtml(digest)` — branded responsive email template (green hero, stat grid, expiring table, waste breakdown, CTA)
+- `escapeHtml()` — XSS-safe formatter
+- GET `/api/cron/weekly-digest` — bearer-token-secured; loops all approved kitchens with digest enabled; sends via Resend with 550ms pacing; updates `last_digest_sent_at`; returns per-kitchen success/failure array
+- POST `/api/digest/send-test` — owner-only; computes their own digest and sends to owner_email; used by the "Send me a test digest now" button
+- `kitchenToApi()` now exposes `weeklyDigestEnabled` + `lastDigestSentAt`
+- PUT `/api/settings` accepts `weeklyDigestEnabled` boolean
+
+**Vercel config** (`vercel.json` — NEW FILE at repo root):
+- `crons: [{ path: '/api/cron/weekly-digest', schedule: '0 8 * * 1' }]` — Monday 8am UTC
+- Vercel automatically calls this endpoint with `Authorization: Bearer $CRON_SECRET` — user must set CRON_SECRET env var in Vercel
+
+**Frontend changes** (`app/app/page.js`):
+- SettingsDialog "Login & Emails" tab: new emerald card "📊 Weekly Digest Email" with ON/OFF toggle + "Send me a test digest now" button (calls `/api/digest/send-test`)
+- `weeklyDigest` + `digestSending` state; `sendTestDigest()` handler; wired into `save()` payload
+
+**Testing**: Local sandbox has no Supabase creds so cron returns 500 (expected). User will validate on Vercel after (a) running migration-10, (b) adding CRON_SECRET env var, (c) deploying.
+
+**Pending user action**:
+1. Run `supabase/migration-10-weekly-digest.sql` in Supabase SQL Editor.
+2. In Vercel → Settings → Environment Variables, add `CRON_SECRET` = any random 32+ char string (Vercel auto-adds it to the cron request).
+3. Extract zip → drag-drop `app/page.js`, `app/api/[[...path]]/route.js`, `vercel.json` (NEW at root) → commit + sync.
+4. Test flow: log in → Settings → Login & Emails → toggle ON → "Send me a test digest now" → check inbox.
+5. Wait until Monday 8am UTC to see the cron fire.

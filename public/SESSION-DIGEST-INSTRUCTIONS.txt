@@ -1,0 +1,128 @@
+╔══════════════════════════════════════════════════════════════════╗
+║  ShelfWise — Weekly Digest Email                                 ║
+║  Automated Monday 8am summary via Vercel Cron + Resend           ║
+╚══════════════════════════════════════════════════════════════════╝
+
+WHAT THIS DOES:
+───────────────
+Every Monday at 8am UTC, ShelfWise sends the OWNER of each kitchen a
+beautiful branded email with:
+
+  🎯 Big hero: "You wasted £127 this week" OR "Zero waste this week ✨"
+  📊 3-stat grid: items in stock · expiring in 7d · already expired
+  💰 "£X worth of stock expiring — plan a special" (if any)
+  ⏰ Top 10 items expiring in the next 7 days
+  🚫 Already-expired items to dispose today
+  🛒 Low-stock reorder list (below reorder point)
+  📉 Top 3 wasted items by cost
+  🔗 Big "Open ShelfWise →" button
+
+═══════════════════════════════════════════════════════════════════
+DEPLOYMENT — 4 STEPS (10 minutes)
+═══════════════════════════════════════════════════════════════════
+
+STEP 1 — RUN THE DATABASE MIGRATION (2 min)
+────────────────────────────────────────────
+  a) Supabase Dashboard → your project → SQL Editor → "New query"
+  b) Open the file: supabase/migration-10-weekly-digest.sql
+     Copy the ENTIRE contents.
+  c) Paste → Run.
+  d) Success. No rows returned.
+     (Adds 2 columns to kitchens: weekly_digest_enabled + last_digest_sent_at)
+
+STEP 2 — SET THE CRON_SECRET ENV VAR IN VERCEL (2 min)
+───────────────────────────────────────────────────────
+  Vercel auto-attaches this to every cron request, so we know it's
+  really Vercel calling (not some random attacker).
+
+  a) Vercel Dashboard → your shelfwise project → Settings → Environment Variables
+  b) Click "Add New"
+  c) Name:  CRON_SECRET
+     Value: [generate a random 32+ character string]
+            Example: 8f3e2a91-6d4c-4b5e-9a7f-1c2b3d4e5f6a-shelfwise
+            (Any random string works — this one is fine to use for now)
+     Environments: check ALL 3 (Production, Preview, Development)
+  d) Save
+
+  ⚠️ If you skip this step, Vercel Cron will still work but ANYONE
+     on the internet could trigger your digest endpoint. Setting it
+     is strongly recommended.
+
+STEP 3 — REPLACE FILES IN VS CODE (3 min)
+──────────────────────────────────────────
+  Drag-and-drop these files from the zip → they will OVERWRITE:
+    ✓ app/page.js
+    ✓ app/api/[[...path]]/route.js
+    ✓ supabase/migration-10-weekly-digest.sql   (NEW FILE)
+    ✓ vercel.json                                (NEW FILE AT REPO ROOT)
+
+  If VS Code asks "Do you want to overwrite?" → Yes to All
+
+STEP 4 — DEPLOY (3 min)
+────────────────────────
+  In VS Code:
+    a) Source Control → 4 files changed (including new vercel.json)
+    b) Commit message: "Add weekly digest email (Vercel Cron + Resend)"
+    c) ✓ Commit → Sync Changes
+    d) Wait for Vercel to deploy (2-3 min)
+    e) In Vercel Dashboard → your project → "Cron Jobs" tab
+       You should see: /api/cron/weekly-digest · schedule: 0 8 * * 1 ✓
+
+═══════════════════════════════════════════════════════════════════
+TEST IT IMMEDIATELY (don't wait until Monday!)
+═══════════════════════════════════════════════════════════════════
+
+  1. Log in to shelfwise.co.in as owner
+  2. Click Settings (gear icon) → "Login & Emails" tab
+  3. Scroll to the emerald "📊 Weekly Digest Email" card
+  4. Confirm the toggle is ON
+  5. Click "📤 Send me a test digest now"
+  6. Check your Gmail inbox → the branded digest arrives in ~5 sec
+
+═══════════════════════════════════════════════════════════════════
+HOW THE CRON WORKS
+═══════════════════════════════════════════════════════════════════
+
+Schedule: 0 8 * * 1  =  every Monday at 08:00 UTC
+
+Timezone note:
+  • UK (GMT/BST) → arrives at ~8am / 9am local ✓
+  • India (IST)  → arrives at ~1:30pm local
+  • Australia    → arrives at ~6pm local (Sydney)
+
+  For MVP we send everyone at the same UTC time. If you want
+  per-kitchen local time later, we can upgrade to hourly cron
+  and filter by kitchen.timezone.
+
+═══════════════════════════════════════════════════════════════════
+TURNING IT OFF (per kitchen)
+═══════════════════════════════════════════════════════════════════
+
+  Owner: Settings → Login & Emails → toggle OFF
+  → Their kitchen is skipped on the next cron run
+
+  Every kitchen has its own toggle. You (as founder) can also
+  disable the whole cron by removing the "crons" block from
+  vercel.json and redeploying.
+
+═══════════════════════════════════════════════════════════════════
+QUESTIONS OR ISSUES?
+═══════════════════════════════════════════════════════════════════
+
+"Send me a test digest now" button shows an error?
+  → Check the exact error toast. Usually one of:
+     (a) "RESEND_API_KEY not set" → Vercel env vars issue
+     (b) "No owner email on file" → kitchen row missing owner_email
+     (c) "Resend 403" → your Resend domain isn't verified
+
+Vercel Dashboard doesn't show the cron job?
+  → Confirm vercel.json is at REPO ROOT (not inside /app or /public)
+  → Check the "Deployments" tab — cron config only activates after a
+    successful deploy that includes the vercel.json file
+
+Digest email lands in Spam?
+  → First one might. Mark "Not spam" once and future ones will land
+    in the inbox. Because you're sending from a verified domain
+    (shelfwise.co.in) this should be rare.
+
+— ShelfWise
