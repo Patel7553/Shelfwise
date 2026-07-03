@@ -114,61 +114,20 @@ function suggestExpiryDate(category = '', storageType = '') {
 }
 
 // ============================================================================
-// Theme (light / dark / system)
-// Stores user's choice in localStorage; falls back to OS preference.
-// Applied by toggling the `dark` class on <html>. Works with existing shadcn
-// vars AND our custom overrides in globals.css.
+// Theme — currently disabled by user request (light mode only).
+// Kept as no-op stubs so we can turn it back on later without touching JSX.
 // ============================================================================
 function useTheme() {
-  const [pref, setPref] = useState('system') // 'light' | 'dark' | 'system'
-
-  // Load saved preference on mount
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const saved = localStorage.getItem('sw_theme') || 'system'
-    setPref(saved)
+    // Ensure any previous dark preference is cleared
+    document.documentElement.classList.remove('dark')
+    try { localStorage.removeItem('sw_theme') } catch {}
   }, [])
-
-  // Apply the theme + listen to OS changes when in 'system' mode
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const mql = window.matchMedia('(prefers-color-scheme: dark)')
-    const apply = () => {
-      const shouldBeDark = pref === 'dark' || (pref === 'system' && mql.matches)
-      document.documentElement.classList.toggle('dark', shouldBeDark)
-    }
-    apply()
-    if (pref === 'system') {
-      mql.addEventListener?.('change', apply)
-      return () => mql.removeEventListener?.('change', apply)
-    }
-  }, [pref])
-
-  const setTheme = (t) => {
-    setPref(t)
-    try { localStorage.setItem('sw_theme', t) } catch {}
-  }
-
-  return { theme: pref, setTheme }
+  return { theme: 'light', setTheme: () => {} }
 }
 
-function ThemeToggle({ theme, setTheme }) {
-  // Cycle: light → dark → system → light …
-  const next = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light'
-  const Icon = theme === 'dark' ? Moon : theme === 'system' ? Monitor : Sun
-  const label = theme === 'dark' ? 'Dark' : theme === 'system' ? 'System' : 'Light'
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      onClick={() => setTheme(next)}
-      title={`Theme: ${label} (click to switch to ${next})`}
-      className="relative"
-    >
-      <Icon className="h-4 w-4" />
-    </Button>
-  )
-}
+function ThemeToggle() { return null }
 
 function App() {
   const { theme, setTheme } = useTheme()
@@ -1202,7 +1161,6 @@ function App() {
                 <ShieldCheck className="h-4 w-4 mr-1" /> Admin
               </Button>
             )}
-            <ThemeToggle theme={theme} setTheme={setTheme} />
             <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title="Settings">
               <Settings className="h-4 w-4" />
             </Button>
@@ -1252,25 +1210,6 @@ function App() {
                 <ShieldCheck className="h-4 w-4 mr-2" /> Admin Panel
               </Button>
             )}
-            <div className="flex items-center justify-between px-2 py-2 border rounded-md">
-              <span className="text-sm font-medium">Theme</span>
-              <div className="flex gap-1">
-                {[
-                  { id: 'light', Icon: Sun },
-                  { id: 'dark', Icon: Moon },
-                  { id: 'system', Icon: Monitor },
-                ].map(({ id, Icon }) => (
-                  <button
-                    key={id}
-                    onClick={() => setTheme(id)}
-                    className={`h-8 w-8 rounded-md flex items-center justify-center border ${theme === id ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-transparent hover:bg-slate-100'}`}
-                    title={id}
-                  >
-                    <Icon className="h-4 w-4" />
-                  </button>
-                ))}
-              </div>
-            </div>
             <Button variant="ghost" className="w-full justify-start" onClick={() => { setSettingsOpen(true); setMobileNav(false) }}>
               <Settings className="h-4 w-4 mr-2" /> Settings
             </Button>
@@ -1333,7 +1272,7 @@ function App() {
           <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
             <DialogTitle>{editing ? 'Edit Product' : 'Add Product'}</DialogTitle>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-4 py-2 px-6 overflow-y-auto flex-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-2 px-6 overflow-y-auto flex-1">
             <div className="col-span-2">
               <Label htmlFor="name">Name *</Label>
               <Input id="name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Whole Milk" />
@@ -1996,11 +1935,14 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image }),
       })
+      const raw = await res.text()
+      let data = null
+      try { data = JSON.parse(raw) } catch { /* not JSON */ }
       if (!res.ok) {
-        const t = await res.text().catch(() => '')
-        throw new Error(t || `HTTP ${res.status}`)
+        const msg = data?.error || raw || `HTTP ${res.status}`
+        console.error('scan-receipt failed:', res.status, msg)
+        throw new Error(msg.slice(0, 300))
       }
-      const data = await res.json()
       setResult(data)
       // Seed editable rows with sensible defaults
       const seeded = (data.items || []).map(it => ({
@@ -2011,13 +1953,16 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
         category: it.category || '',
         storageType: it.storageType || 'Fridge',
         expiryDate: it.expiryDate || '',
+        location: '',
+        allergens: [],
         _include: true,
+        _expanded: false,
       }))
       setRows(seeded)
-      if (seeded.length === 0) toast.warning('No items detected in this image')
-      else toast.success(`Found ${seeded.length} items — review and import`)
+      if (seeded.length === 0) toast.warning('No items detected — try a clearer photo')
+      else toast.success(`Found ${seeded.length} items — review, edit, then import`)
     } catch (e) {
-      toast.error(e.message?.slice(0, 200) || 'Parse failed')
+      toast.error(`Parse failed: ${e.message}`, { duration: 15000 })
     } finally {
       setParsing(false)
     }
@@ -2041,7 +1986,9 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
       unitCost: r.unitCost === '' || r.unitCost == null ? null : Number(r.unitCost),
       category: r.category || '',
       storageType: r.storageType || 'Fridge',
+      location: r.location || '',
       expiryDate: r.expiryDate || '',
+      allergens: Array.isArray(r.allergens) ? r.allergens : [],
       supplier,
       source: 'receipt',
     }))
@@ -2107,60 +2054,133 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
               <div className="flex-1 min-w-0">
                 <p><b>Supplier:</b> {result.supplier || '—'}</p>
                 <p><b>Receipt total:</b> {result.totalCost != null ? `${currencySymbol}${Number(result.totalCost).toFixed(2)}` : '—'}</p>
-                <p className="text-slate-500">{included.length} of {rows.length} items selected · calculated total: <b>{currencySymbol}{totalCost.toFixed(2)}</b></p>
+                <p className="text-slate-500">{included.length} of {rows.length} items selected · Σ <b>{currencySymbol}{totalCost.toFixed(2)}</b></p>
               </div>
               <Button variant="outline" size="sm" onClick={() => { setImage(null); setResult(null); setRows([]) }}>Retake</Button>
             </div>
 
-            <div className="border rounded-lg overflow-hidden">
-              <div className="max-h-[360px] overflow-y-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-slate-50 sticky top-0">
-                    <tr className="text-left">
-                      <th className="p-2 w-8"></th>
-                      <th className="p-2">Product</th>
-                      <th className="p-2 w-16">Qty</th>
-                      <th className="p-2 w-16">Unit</th>
-                      <th className="p-2 w-20">Cost/unit</th>
-                      <th className="p-2 w-20">Storage</th>
-                      <th className="p-2 w-8"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((r, i) => (
-                      <tr key={i} className={`border-t ${!r._include ? 'opacity-40' : ''}`}>
-                        <td className="p-1.5 text-center">
-                          <input type="checkbox" checked={r._include} onChange={e => updateRow(i, { _include: e.target.checked })} />
-                        </td>
-                        <td className="p-1"><Input value={r.name} onChange={e => updateRow(i, { name: e.target.value })} className="h-7 text-xs" /></td>
-                        <td className="p-1"><Input type="number" step="0.1" min="0" value={r.quantity} onChange={e => updateRow(i, { quantity: e.target.value })} className="h-7 text-xs" /></td>
-                        <td className="p-1">
-                          <select value={r.unit} onChange={e => updateRow(i, { unit: e.target.value })} className="h-7 text-xs border rounded w-full bg-white">
+            <p className="text-xs text-slate-600 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+              💡 <b>Tap any item to edit</b> — fix name, price, category, storage, expiry, allergens. Untick to skip.
+            </p>
+
+            <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+              {rows.map((r, i) => (
+                <div key={i} className={`border-2 rounded-xl transition ${r._include ? 'border-emerald-200 bg-white' : 'border-slate-200 bg-slate-50 opacity-60'}`}>
+                  {/* Collapsed row — tap to expand */}
+                  <div className="flex items-center gap-2 p-3">
+                    <input
+                      type="checkbox"
+                      checked={r._include}
+                      onChange={e => { e.stopPropagation(); updateRow(i, { _include: e.target.checked }) }}
+                      className="h-5 w-5 accent-emerald-600 shrink-0"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => updateRow(i, { _expanded: !r._expanded })}
+                      className="flex-1 min-w-0 text-left"
+                    >
+                      <p className="font-semibold text-sm truncate">{r.name || '(un-named)'}</p>
+                      <p className="text-[11px] text-slate-500">
+                        {r.quantity} {r.unit}
+                        {r.unitCost ? ` · ${currencySymbol}${Number(r.unitCost).toFixed(2)}/${r.unit}` : ''}
+                        {r.category ? ` · ${r.category}` : ''}
+                        {r.storageType ? ` · ${r.storageType}` : ''}
+                      </p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateRow(i, { _expanded: !r._expanded })}
+                      className="shrink-0 text-emerald-700 font-semibold text-xs px-2 py-1 rounded hover:bg-emerald-50"
+                    >
+                      {r._expanded ? '▲ Done' : '✏️ Edit'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeRow(i)}
+                      title="Remove"
+                      className="shrink-0 text-slate-400 hover:text-red-600 p-1"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  {/* Expanded editor */}
+                  {r._expanded && (
+                    <div className="border-t px-3 py-3 space-y-2 bg-slate-50 rounded-b-xl">
+                      <div>
+                        <Label className="text-xs">Product name</Label>
+                        <Input value={r.name} onChange={e => updateRow(i, { name: e.target.value })} className="h-9 text-sm bg-white" />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">Quantity</Label>
+                          <Input type="number" step="0.1" min="0" value={r.quantity} onChange={e => updateRow(i, { quantity: e.target.value })} className="h-9 text-sm bg-white" />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Unit</Label>
+                          <select value={r.unit} onChange={e => updateRow(i, { unit: e.target.value })} className="h-9 text-sm border rounded-md w-full bg-white px-2">
                             {['ea', 'kg', 'g', 'L', 'mL', 'pack', 'box', 'bunch'].map(u => <option key={u} value={u}>{u}</option>)}
                           </select>
-                        </td>
-                        <td className="p-1"><Input type="number" step="0.01" min="0" value={r.unitCost} onChange={e => updateRow(i, { unitCost: e.target.value })} className="h-7 text-xs" placeholder="—" /></td>
-                        <td className="p-1">
-                          <select value={r.storageType} onChange={e => updateRow(i, { storageType: e.target.value })} className="h-7 text-xs border rounded w-full bg-white">
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">Cost per unit {currencySymbol && `(${currencySymbol})`}</Label>
+                          <Input type="number" step="0.01" min="0" value={r.unitCost} onChange={e => updateRow(i, { unitCost: e.target.value })} className="h-9 text-sm bg-white" placeholder="—" />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Storage</Label>
+                          <select value={r.storageType} onChange={e => updateRow(i, { storageType: e.target.value })} className="h-9 text-sm border rounded-md w-full bg-white px-2">
                             {['Fridge', 'Freezer', 'Dry', 'Ambient'].map(s => <option key={s} value={s}>{s}</option>)}
                           </select>
-                        </td>
-                        <td className="p-1 text-center">
-                          <button onClick={() => removeRow(i)} title="Remove"><X className="h-3.5 w-3.5 text-slate-400 hover:text-red-600" /></button>
-                        </td>
-                      </tr>
-                    ))}
-                    {rows.length === 0 && (
-                      <tr><td colSpan={7} className="p-6 text-center text-slate-500">No items to import.</td></tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">Category</Label>
+                          <Input value={r.category} onChange={e => updateRow(i, { category: e.target.value })} className="h-9 text-sm bg-white" placeholder="e.g. Dairy" />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Expiry date</Label>
+                          <Input type="date" value={r.expiryDate} onChange={e => updateRow(i, { expiryDate: e.target.value })} className="h-9 text-sm bg-white" />
+                        </div>
+                      </div>
+                      <div>
+                        <Label className="text-xs">Shelf / Location</Label>
+                        <Input value={r.location} onChange={e => updateRow(i, { location: e.target.value })} className="h-9 text-sm bg-white" placeholder="e.g. Shelf A2" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Allergens ({r.allergens?.length || 0})</Label>
+                        <div className="grid grid-cols-2 gap-1 mt-1">
+                          {ALLERGENS.map(a => {
+                            const active = r.allergens?.includes(a.id)
+                            return (
+                              <button
+                                key={a.id}
+                                type="button"
+                                onClick={() => updateRow(i, {
+                                  allergens: active
+                                    ? (r.allergens || []).filter(x => x !== a.id)
+                                    : [...(r.allergens || []), a.id]
+                                })}
+                                className={`flex items-center gap-1.5 px-2 py-1 rounded border text-[10px] text-left transition ${
+                                  active ? 'border-red-300 bg-red-50 text-red-800 font-semibold' : 'border-slate-200 bg-white text-slate-600'
+                                }`}
+                              >
+                                <span>{a.emoji}</span><span className="truncate">{a.label.split(' (')[0]}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {rows.length === 0 && (
+                <p className="p-6 text-center text-slate-500 text-sm">No items to import.</p>
+              )}
             </div>
-
-            <p className="text-[11px] text-slate-500">
-              ⚠️ Expiry dates are only pre-filled if visible on the receipt. Set them after import if needed.
-            </p>
           </div>
         )}
 

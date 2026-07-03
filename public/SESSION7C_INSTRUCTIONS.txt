@@ -1,0 +1,102 @@
+════════════════════════════════════════════════════════
+  ShelfWise — Session 7c (Bug fixes based on your feedback)
+════════════════════════════════════════════════════════
+
+WHAT'S FIXED
+────────────
+
+1) 🗑️  DARK MODE REMOVED
+   Per your request. Theme toggle button gone from both desktop and
+   mobile nav. All dark CSS overrides removed. App is always light mode
+   now — nothing accidentally goes dark.
+   (Code is kept as no-op stubs so we can re-add it later cleanly if
+   you ever want it back.)
+
+2) 📱 ADD/EDIT PRODUCT FORM — MOBILE LAYOUT FIX
+   Expiry date and Category fields were mixing / overlapping on
+   narrow phone screens. Now they stack vertically on mobile
+   (grid-cols-1) and go side-by-side only on tablet+ (sm:grid-cols-2).
+   Everything readable and tappable, save button always sticky.
+
+3) 🧾 RECEIPT SCANNER — NEW EDITABLE UX
+   Instead of a cramped table with tiny inputs, each detected item now
+   shows as a CARD with:
+     • Product name + summary (qty, unit, price, category, storage)
+     • ✏️ Edit button → expands the card with full editable form:
+        - Name, Quantity, Unit
+        - Cost per unit, Storage
+        - Category, Expiry date, Location
+        - Full 14-allergen tick grid (Natasha's Law compliant)
+     • ✕ button to remove that item from the import
+     • Checkbox to include/skip
+   Import button at the bottom shows count + total cost.
+
+4) 🔧 RECEIPT SCANNER — BETTER ERRORS
+   If the AI parse fails, the toast now shows the ACTUAL error message
+   from the server (not just "Parse failed"). Stays on screen 15 sec
+   so you can read it. Common cases now clearly reported:
+     • EMERGENT_LLM_KEY not set → tells you
+     • Image too large / bad format → tells you
+     • AI returned nothing → tells you to try a clearer photo
+
+FILES IN THIS ZIP
+─────────────────
+    app/page.js
+    app/globals.css
+
+INSTALL (2 min)
+───────────────
+1) Extract → drag both files onto their existing counterparts in VS Code
+   (Replace)
+2) Source Control → commit ("fix: remove dark mode + form layout + receipt UX")
+   → Sync/Push
+3) Wait ~1 min for Vercel to deploy
+
+═══════════════════════════════════════════════════
+  QUICK TEST AFTER DEPLOY
+═══════════════════════════════════════════════════
+
+[ ] Theme toggle icon is GONE from the top-right nav ✓
+[ ] Add/Edit any product on your phone → expiry & category no longer
+    overlap, everything stacks vertically & is tappable
+[ ] Save button always visible at the bottom (sticky), even after
+    ticking allergens
+[ ] Receipt scan → snap → each item shows as a card → tap ✏️ Edit
+    to see the full form including allergens
+[ ] If scan fails, toast now tells you exactly why
+
+═══════════════════════════════════════════════════
+  IF RECEIPT SCAN STILL FAILS
+═══════════════════════════════════════════════════
+Screenshot the exact error toast (leave it on screen for a few
+seconds — it now stays for 15 seconds) and send it. The message will
+tell us exactly what to fix. Common causes:
+
+  A) EMERGENT_LLM_KEY missing → check Vercel env vars
+  B) Very large image → try a smaller photo (< 4 MB)
+  C) Blurry image → retake with better light
+
+═══════════════════════════════════════════════════
+  🎯 NEXT UP (choose one for next session)
+═══════════════════════════════════════════════════
+
+■ Refactor page.js
+   The file is 5,200 lines. Splitting into ~15 clean smaller files
+   makes every future change 3× faster. No user-visible change but
+   massively improves reliability.
+
+■ HACCP compliance logs
+   Fridge temperature log (twice daily), cleaning schedule sign-off,
+   delivery quality checks with photos, PDF export for health
+   inspector. Big value-add for commercial kitchens.
+
+■ Weekly digest email
+   Every Sunday you get an email: "Last week you wasted £X (Y items).
+   Top losses: yogurt, chicken. Waste is up/down N% vs previous week."
+   Passive engagement that keeps kitchen owners coming back.
+
+■ Supplier auto-ordering
+   From your reorder-point flags → one tap generates a shopping list
+   → emails your supplier with all items you need.
+
+Pick one and I'll build it next session!
