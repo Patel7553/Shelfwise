@@ -29,6 +29,12 @@ function fromDb(row) {
     preparedBy: row.prepared_by || '',
     imageUrl: row.image_url || '',
     dateReceived: cf._dateReceived || row.created_at?.slice(0, 10) || null,
+    unitCost: row.unit_cost != null ? Number(row.unit_cost) : null,
+    reorderPoint: row.reorder_point != null ? Number(row.reorder_point) : null,
+    allergens: Array.isArray(row.allergens) ? row.allergens : [],
+    supplier: row.supplier || '',
+    source: row.source || 'manual',
+    sourceMeta: row.source_meta || null,
     customFields: cf,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -38,7 +44,7 @@ function fromDb(row) {
 function toDb(body) {
   const cf = body.customFields && typeof body.customFields === 'object' ? { ...body.customFields } : {}
   if (body.dateReceived) cf._dateReceived = body.dateReceived
-  return {
+  const row = {
     name: body.name || '',
     quantity: Number(body.quantity) || 0,
     unit: body.unit || 'ea',
@@ -51,6 +57,14 @@ function toDb(body) {
     custom_fields: cf,
     updated_at: new Date().toISOString(),
   }
+  // Optional new fields — only set if the client sent them (avoids overwriting).
+  if (body.unitCost !== undefined) row.unit_cost = body.unitCost === '' || body.unitCost === null ? null : Number(body.unitCost)
+  if (body.reorderPoint !== undefined) row.reorder_point = body.reorderPoint === '' || body.reorderPoint === null ? null : Number(body.reorderPoint)
+  if (body.allergens !== undefined) row.allergens = Array.isArray(body.allergens) ? body.allergens : []
+  if (body.supplier !== undefined) row.supplier = String(body.supplier || '')
+  if (body.source !== undefined) row.source = String(body.source || 'manual')
+  if (body.sourceMeta !== undefined) row.source_meta = body.sourceMeta
+  return row
 }
 
 function computeStatus(p) {
@@ -142,6 +156,7 @@ function kitchenToApi(k) {
     onboarded: k.onboarded === true,
     alertEmail: k.alert_email || '',
     tagline: k.tagline || 'From shelf to plate — never lose track.',
+    currency: k.currency || '',
     createdAt: k.created_at,
     approvedAt: k.approved_at,
   }
@@ -190,6 +205,69 @@ Output strictly valid JSON.`
   let parsed
   try { parsed = JSON.parse(content) } catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : { items: [] } }
   return Array.isArray(parsed.items) ? parsed.items : []
+}
+
+// Receipt / delivery-note parser — different prompt: focus on prices & supplier.
+async function parseReceiptImage(base64DataUrl) {
+  const key = process.env.EMERGENT_LLM_KEY
+  if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+  const today = new Date().toISOString().slice(0, 10)
+  const systemPrompt = `You are an expert at reading supplier delivery notes, invoices and shop receipts for professional kitchens.
+
+Return ONLY valid JSON:
+{
+  "supplier": "supplier / shop name from the header (or '')",
+  "receiptDate": "YYYY-MM-DD if visible, else null. Today is ${today}",
+  "currency": "GBP / USD / EUR / INR / '' if unclear",
+  "totalCost": number or null,
+  "items": [
+    {
+      "name": "clean product name",
+      "quantity": number (default 1),
+      "unit": one of "ea"|"kg"|"g"|"L"|"mL"|"pack"|"box"|"bunch",
+      "unitCost": price per single unit as a number, else null,
+      "totalLineCost": total for the line item if printed, else null,
+      "category": "Dairy" | "Meat" | "Produce" | "Dry Goods" | "Frozen" | "Cleaning" | "Beverages" | "Other",
+      "storageType": "Fridge" | "Freezer" | "Dry" | "Ambient",
+      "expiryDate": "YYYY-MM-DD" if visible next to the line, else null
+    }
+  ]
+}
+
+Rules:
+- Ignore subtotals, VAT lines, delivery charges, discounts (do NOT list them as items).
+- Do NOT invent expiry dates. Only fill if visible.
+- Output STRICT JSON.`
+
+  const body = {
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: [
+        { type: 'text', text: 'Read this receipt / delivery note and return the JSON described.' },
+        { type: 'image_url', image_url: { url: base64DataUrl } }
+      ]}
+    ],
+    temperature: 0.1,
+    response_format: { type: 'json_object' },
+  }
+  const res = await fetch(EMERGENT_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`Emergent LLM ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  const content = data?.choices?.[0]?.message?.content || '{}'
+  let parsed
+  try { parsed = JSON.parse(content) } catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : {} }
+  return {
+    supplier: parsed.supplier || '',
+    receiptDate: parsed.receiptDate || null,
+    currency: parsed.currency || '',
+    totalCost: parsed.totalCost != null ? Number(parsed.totalCost) : null,
+    items: Array.isArray(parsed.items) ? parsed.items : [],
+  }
 }
 
 async function parseTextForItems(text) {
@@ -421,14 +499,32 @@ export async function GET(request, { params }) {
         const in7 = new Date(start.getTime() + 7 * 86400000)
         const todayISO = start.toISOString().slice(0, 10)
         const in7ISO = in7.toISOString().slice(0, 10)
-        const [{ count: total }, { count: expired }, { count: expiring }, { count: critical }, { count: inDate }] = await Promise.all([
+        const [{ count: total }, { count: expired }, { count: expiring }, { count: critical }, { count: inDate }, valueRes] = await Promise.all([
           sb.from('products').select('*', { count: 'exact', head: true }).eq('kitchen_id', kid),
           sb.from('products').select('*', { count: 'exact', head: true }).eq('kitchen_id', kid).not('expiry_date', 'is', null).lt('expiry_date', todayISO),
           sb.from('products').select('*', { count: 'exact', head: true }).eq('kitchen_id', kid).not('expiry_date', 'is', null).gte('expiry_date', todayISO).lte('expiry_date', in7ISO),
           sb.from('products').select('*', { count: 'exact', head: true }).eq('kitchen_id', kid).lte('quantity', 2).or(`expiry_date.is.null,expiry_date.gt.${in7ISO}`),
           sb.from('products').select('*', { count: 'exact', head: true }).eq('kitchen_id', kid).not('expiry_date', 'is', null).gt('expiry_date', in7ISO),
+          sb.from('products').select('quantity,unit_cost,reorder_point').eq('kitchen_id', kid),
         ])
-        return json({ total: total || 0, expired: expired || 0, expiring: expiring || 0, critical: critical || 0, inDate: inDate || 0 })
+        // Compute inventory value + below-reorder count from a single fetched list
+        let totalValue = 0
+        let belowReorder = 0
+        for (const p of (valueRes.data || [])) {
+          const qty = Number(p.quantity) || 0
+          const c = p.unit_cost != null ? Number(p.unit_cost) : 0
+          if (c > 0 && qty > 0) totalValue += qty * c
+          if (p.reorder_point != null && qty <= Number(p.reorder_point)) belowReorder++
+        }
+        return json({
+          total: total || 0,
+          expired: expired || 0,
+          expiring: expiring || 0,
+          critical: critical || 0,
+          inDate: inDate || 0,
+          totalValue,
+          belowReorder,
+        })
       }
 
       if (path === 'recipes') {
@@ -779,7 +875,7 @@ export async function POST(request, { params }) {
     }
 
     // -------- AI passthrough (still requires auth, but not kitchen scoping)
-    if (path === 'scan' || path === 'parse-voice' || path === 'recipe-instructions') {
+    if (path === 'scan' || path === 'scan-receipt' || path === 'parse-voice' || path === 'recipe-instructions') {
       const { ctx, error } = await requireAuth(request)
       if (error) return error
       const body = await request.json()
@@ -788,6 +884,11 @@ export async function POST(request, { params }) {
         if (!body.image || !body.image.startsWith('data:image/')) return json({ error: 'Invalid or missing image' }, 400)
         const items = await scanImageForItems(body.image)
         return json({ items })
+      }
+      if (path === 'scan-receipt') {
+        if (!body.image || !body.image.startsWith('data:image/')) return json({ error: 'Invalid or missing image' }, 400)
+        const parsed = await parseReceiptImage(body.image)
+        return json(parsed)
       }
       if (path === 'parse-voice') {
         const text = String(body.text || '').trim()
@@ -1068,6 +1169,7 @@ export async function PUT(request, { params }) {
       if (typeof body.onboarded === 'boolean') patch.onboarded = body.onboarded
       if (typeof body.alertEmail === 'string') patch.alert_email = body.alertEmail
       if (typeof body.tagline === 'string') patch.tagline = body.tagline
+      if (typeof body.currency === 'string') patch.currency = body.currency
       if (Array.isArray(body.dashboardWidgets)) patch.dashboard_widgets = body.dashboardWidgets
       if (Array.isArray(body.modulesEnabled)) patch.modules_enabled = body.modulesEnabled
       if (Array.isArray(body.categories)) patch.categories = body.categories

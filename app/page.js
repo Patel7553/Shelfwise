@@ -29,7 +29,31 @@ const EMPTY_FORM = {
   name: '', quantity: '', unit: 'ea', expiryDate: '', category: '',
   storageType: 'Fridge', location: '', preparedBy: '', imageUrl: '',
   dateReceived: '',
+  unitCost: '', reorderPoint: '', supplier: '',
+  allergens: [],
   customFields: {}
+}
+
+// UK/EU Natasha's Law 14 allergens — used for legal compliance labelling
+const ALLERGENS = [
+  { id: 'gluten',       label: 'Gluten (wheat, rye, barley, oats)', emoji: '🌾' },
+  { id: 'crustaceans',  label: 'Crustaceans (prawns, crab, lobster)', emoji: '🦐' },
+  { id: 'eggs',         label: 'Eggs', emoji: '🥚' },
+  { id: 'fish',         label: 'Fish', emoji: '🐟' },
+  { id: 'peanuts',      label: 'Peanuts', emoji: '🥜' },
+  { id: 'soybeans',     label: 'Soybeans', emoji: '🫘' },
+  { id: 'milk',         label: 'Milk / Dairy', emoji: '🥛' },
+  { id: 'nuts',         label: 'Tree Nuts', emoji: '🌰' },
+  { id: 'celery',       label: 'Celery', emoji: '🥬' },
+  { id: 'mustard',      label: 'Mustard', emoji: '🌶️' },
+  { id: 'sesame',       label: 'Sesame', emoji: '🫓' },
+  { id: 'sulphites',    label: 'Sulphites', emoji: '🍷' },
+  { id: 'lupin',        label: 'Lupin', emoji: '🌼' },
+  { id: 'molluscs',     label: 'Molluscs (oysters, mussels)', emoji: '🦪' },
+]
+
+const CURRENCY_SYMBOL = {
+  GBP: '£', USD: '$', EUR: '€', INR: '₹', AUD: 'A$', CAD: 'C$', SGD: 'S$', AED: 'د.إ',
 }
 
 function getInitialFromURL() {
@@ -191,6 +215,10 @@ function App() {
   // Dispose (waste log) dialog state
   const [disposeTarget, setDisposeTarget] = useState(null)  // product being disposed
   const openDispose = (product) => setDisposeTarget(product)
+
+  // Receipt scanner state (delivery notes, invoices, shop receipts → AI parse → import)
+  const [receiptOpen, setReceiptOpen] = useState(false)
+  const openReceipt = () => setReceiptOpen(true)
 
   // Voice Input state
   const [voiceOpen, setVoiceOpen] = useState(false)
@@ -414,6 +442,10 @@ function App() {
       storageType: p.storageType || 'Fridge', location: p.location || '',
       preparedBy: p.preparedBy || '', imageUrl: p.imageUrl || '',
       dateReceived: p.dateReceived || p.created_at?.slice(0, 10) || '',
+      unitCost: p.unitCost != null ? String(p.unitCost) : '',
+      reorderPoint: p.reorderPoint != null ? String(p.reorderPoint) : '',
+      supplier: p.supplier || '',
+      allergens: Array.isArray(p.allergens) ? p.allergens : [],
       customFields: p.customFields || {}
     })
     setDialogOpen(true)
@@ -1251,7 +1283,7 @@ function App() {
 
       <main className="container mx-auto px-4 py-8">
         {view === 'dashboard' && (
-          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} printLogbook={printLogbook} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} />
+          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} currency={settings.currency} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -1381,6 +1413,59 @@ function App() {
               <Label htmlFor="prep">Prepared By</Label>
               <Input id="prep" value={form.preparedBy} onChange={e => setForm({ ...form, preparedBy: e.target.value })} placeholder="Chef name" />
             </div>
+
+            {/* Cost + Reorder + Supplier — collapsed into a subtle group */}
+            <div className="col-span-2 pt-2 border-t">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">💰 Cost &amp; supply (optional)</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label htmlFor="unitCost">Cost per {form.unit || 'unit'} ({CURRENCY_SYMBOL[settings.currency] || settings.currency || ''})</Label>
+                  <Input id="unitCost" type="number" step="0.01" min="0" value={form.unitCost} onChange={e => setForm({ ...form, unitCost: e.target.value })} placeholder="e.g. 2.50" />
+                </div>
+                <div>
+                  <Label htmlFor="reorder">Reorder when qty ≤</Label>
+                  <Input id="reorder" type="number" step="0.01" min="0" value={form.reorderPoint} onChange={e => setForm({ ...form, reorderPoint: e.target.value })} placeholder="e.g. 2" />
+                </div>
+                <div className="col-span-2">
+                  <Label htmlFor="supplier">Supplier</Label>
+                  <Input id="supplier" value={form.supplier} onChange={e => setForm({ ...form, supplier: e.target.value })} placeholder="e.g. Bidfood, Booker, Costco" />
+                </div>
+              </div>
+            </div>
+
+            {/* Allergens — legal requirement in UK/EU */}
+            <div className="col-span-2 pt-2 border-t">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                ⚠️ Allergens present in this product
+                {form.allergens?.length > 0 && <span className="ml-2 text-red-600 font-bold">({form.allergens.length} selected)</span>}
+              </p>
+              <div className="grid grid-cols-2 gap-1.5">
+                {ALLERGENS.map(a => {
+                  const active = form.allergens?.includes(a.id)
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      onClick={() => setForm(prev => ({
+                        ...prev,
+                        allergens: active
+                          ? prev.allergens.filter(x => x !== a.id)
+                          : [...(prev.allergens || []), a.id]
+                      }))}
+                      className={`flex items-center gap-2 px-2 py-1.5 rounded-md border text-[11px] text-left transition ${
+                        active
+                          ? 'border-red-300 bg-red-50 text-red-800 font-semibold'
+                          : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-600'
+                      }`}
+                    >
+                      <span>{a.emoji}</span>
+                      <span className="truncate">{a.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
             <div className="col-span-2">
               <Label>Photo (optional)</Label>
               <div className="flex items-center gap-3 mt-1">
@@ -1524,6 +1609,30 @@ function App() {
           setDisposeTarget(null)
           await disposeProduct(p, wasteEntry)
         }}
+      />
+
+      {/* Receipt / delivery-note scanner */}
+      <ReceiptScanDialog
+        open={receiptOpen}
+        onClose={() => setReceiptOpen(false)}
+        onImport={async (rows) => {
+          setReceiptOpen(false)
+          if (!rows.length) return
+          try {
+            const res = await fetch('/api/products/bulk', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ items: rows }),
+            })
+            if (!res.ok) throw new Error('Bulk save failed')
+            toast.success(`Imported ${rows.length} items from receipt 🧾`)
+            fetchProducts()
+            fetchStats()
+          } catch (e) {
+            toast.error(e.message || 'Import failed')
+          }
+        }}
+        settings={settings}
       />
 
       {/* Barcode Scanner Dialog */}
@@ -1855,6 +1964,218 @@ function App() {
 
 // In-app Print Logbook — iOS-safe (no window.open) so users can tap Close to return.
 // Uses @media print rules to hide everything except the printable sheet during printing.
+// ============================================================================
+// Receipt / delivery-note scanner — snap a photo → AI parses → confirm → import
+// Uses GPT-4o vision to extract supplier, items, prices, categories, etc.
+// ============================================================================
+function ReceiptScanDialog({ open, onClose, onImport, settings }) {
+  const [image, setImage] = useState(null)   // data URL
+  const [parsing, setParsing] = useState(false)
+  const [result, setResult] = useState(null) // { supplier, items, ... }
+  const [rows, setRows] = useState([])       // editable table
+  const fileRef = useRef(null)
+
+  const reset = () => { setImage(null); setResult(null); setRows([]); setParsing(false) }
+
+  useEffect(() => { if (!open) reset() }, [open])
+
+  const onFile = async (file) => {
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => setImage(String(reader.result))
+    reader.readAsDataURL(file)
+  }
+
+  const runParse = async () => {
+    if (!image) return
+    setParsing(true)
+    try {
+      const res = await fetch('/api/scan-receipt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image }),
+      })
+      if (!res.ok) {
+        const t = await res.text().catch(() => '')
+        throw new Error(t || `HTTP ${res.status}`)
+      }
+      const data = await res.json()
+      setResult(data)
+      // Seed editable rows with sensible defaults
+      const seeded = (data.items || []).map(it => ({
+        name: it.name || '',
+        quantity: Number(it.quantity) || 1,
+        unit: it.unit || 'ea',
+        unitCost: it.unitCost != null ? String(it.unitCost) : '',
+        category: it.category || '',
+        storageType: it.storageType || 'Fridge',
+        expiryDate: it.expiryDate || '',
+        _include: true,
+      }))
+      setRows(seeded)
+      if (seeded.length === 0) toast.warning('No items detected in this image')
+      else toast.success(`Found ${seeded.length} items — review and import`)
+    } catch (e) {
+      toast.error(e.message?.slice(0, 200) || 'Parse failed')
+    } finally {
+      setParsing(false)
+    }
+  }
+
+  const updateRow = (i, patch) => setRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r))
+  const removeRow = (i) => setRows(rs => rs.filter((_, idx) => idx !== i))
+
+  const included = rows.filter(r => r._include && r.name.trim())
+  const totalCost = included.reduce((sum, r) => sum + (Number(r.unitCost) || 0) * (Number(r.quantity) || 0), 0)
+  const currencySymbol = CURRENCY_SYMBOL[settings?.currency] || settings?.currency || ''
+
+  const doImport = () => {
+    if (!included.length) { toast.error('Nothing to import'); return }
+    const supplier = result?.supplier || ''
+    // Map to product API shape
+    const payload = included.map(r => ({
+      name: r.name.trim(),
+      quantity: Number(r.quantity) || 1,
+      unit: r.unit || 'ea',
+      unitCost: r.unitCost === '' || r.unitCost == null ? null : Number(r.unitCost),
+      category: r.category || '',
+      storageType: r.storageType || 'Fridge',
+      expiryDate: r.expiryDate || '',
+      supplier,
+      source: 'receipt',
+    }))
+    onImport(payload)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v && !parsing) onClose() }}>
+      <DialogContent className="sm:max-w-[720px] max-h-[92vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">🧾 Receipt / Delivery Note Scanner</DialogTitle>
+          <p className="text-sm text-muted-foreground">
+            Snap a photo of a supplier delivery note, invoice or shop receipt →
+            AI extracts every line item with prices → you review → we import.
+          </p>
+        </DialogHeader>
+
+        {!image && (
+          <div className="py-4">
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="w-full border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:bg-slate-50 hover:border-emerald-400 transition"
+            >
+              <div className="text-5xl mb-2">📸</div>
+              <p className="font-semibold text-slate-700">Tap to snap or upload receipt</p>
+              <p className="text-xs text-slate-500 mt-1">JPG / PNG / HEIC — clear, well-lit shot works best</p>
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={e => onFile(e.target.files?.[0])}
+            />
+            <div className="mt-4 text-xs text-slate-500 space-y-1">
+              <p>💡 <b>Tips:</b></p>
+              <ul className="list-disc pl-5 space-y-0.5">
+                <li>Lay the receipt flat on a table, camera directly above</li>
+                <li>Include the header (supplier name) and all line items</li>
+                <li>Good light + not blurry = fewer errors to fix</li>
+              </ul>
+            </div>
+          </div>
+        )}
+
+        {image && !result && (
+          <div className="py-2 space-y-3">
+            <div className="relative">
+              <img src={image} alt="receipt" className="w-full max-h-[300px] object-contain rounded-lg border" />
+              <Button size="sm" variant="outline" className="absolute top-2 right-2" onClick={() => setImage(null)}>Retake</Button>
+            </div>
+            <Button onClick={runParse} disabled={parsing} className="w-full bg-emerald-600 hover:bg-emerald-700">
+              {parsing ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Parsing (this can take 10-30 seconds)…</> : '✨ Extract items with AI'}
+            </Button>
+          </div>
+        )}
+
+        {result && (
+          <div className="py-2 space-y-3">
+            <div className="flex items-center gap-3 text-xs bg-slate-50 rounded-lg p-3">
+              <img src={image} alt="" className="w-16 h-16 object-cover rounded border" />
+              <div className="flex-1 min-w-0">
+                <p><b>Supplier:</b> {result.supplier || '—'}</p>
+                <p><b>Receipt total:</b> {result.totalCost != null ? `${currencySymbol}${Number(result.totalCost).toFixed(2)}` : '—'}</p>
+                <p className="text-slate-500">{included.length} of {rows.length} items selected · calculated total: <b>{currencySymbol}{totalCost.toFixed(2)}</b></p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => { setImage(null); setResult(null); setRows([]) }}>Retake</Button>
+            </div>
+
+            <div className="border rounded-lg overflow-hidden">
+              <div className="max-h-[360px] overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50 sticky top-0">
+                    <tr className="text-left">
+                      <th className="p-2 w-8"></th>
+                      <th className="p-2">Product</th>
+                      <th className="p-2 w-16">Qty</th>
+                      <th className="p-2 w-16">Unit</th>
+                      <th className="p-2 w-20">Cost/unit</th>
+                      <th className="p-2 w-20">Storage</th>
+                      <th className="p-2 w-8"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r, i) => (
+                      <tr key={i} className={`border-t ${!r._include ? 'opacity-40' : ''}`}>
+                        <td className="p-1.5 text-center">
+                          <input type="checkbox" checked={r._include} onChange={e => updateRow(i, { _include: e.target.checked })} />
+                        </td>
+                        <td className="p-1"><Input value={r.name} onChange={e => updateRow(i, { name: e.target.value })} className="h-7 text-xs" /></td>
+                        <td className="p-1"><Input type="number" step="0.1" min="0" value={r.quantity} onChange={e => updateRow(i, { quantity: e.target.value })} className="h-7 text-xs" /></td>
+                        <td className="p-1">
+                          <select value={r.unit} onChange={e => updateRow(i, { unit: e.target.value })} className="h-7 text-xs border rounded w-full bg-white">
+                            {['ea', 'kg', 'g', 'L', 'mL', 'pack', 'box', 'bunch'].map(u => <option key={u} value={u}>{u}</option>)}
+                          </select>
+                        </td>
+                        <td className="p-1"><Input type="number" step="0.01" min="0" value={r.unitCost} onChange={e => updateRow(i, { unitCost: e.target.value })} className="h-7 text-xs" placeholder="—" /></td>
+                        <td className="p-1">
+                          <select value={r.storageType} onChange={e => updateRow(i, { storageType: e.target.value })} className="h-7 text-xs border rounded w-full bg-white">
+                            {['Fridge', 'Freezer', 'Dry', 'Ambient'].map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                        </td>
+                        <td className="p-1 text-center">
+                          <button onClick={() => removeRow(i)} title="Remove"><X className="h-3.5 w-3.5 text-slate-400 hover:text-red-600" /></button>
+                        </td>
+                      </tr>
+                    ))}
+                    {rows.length === 0 && (
+                      <tr><td colSpan={7} className="p-6 text-center text-slate-500">No items to import.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-slate-500">
+              ⚠️ Expiry dates are only pre-filled if visible on the receipt. Set them after import if needed.
+            </p>
+          </div>
+        )}
+
+        <DialogFooter className="gap-2">
+          <Button variant="ghost" onClick={onClose} disabled={parsing}>Cancel</Button>
+          {result && (
+            <Button onClick={doImport} disabled={!included.length || parsing} className="bg-emerald-600 hover:bg-emerald-700">
+              <Check className="h-4 w-4 mr-2" /> Import {included.length} items
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
   const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
   const rows = Array.from({ length: 25 })
@@ -2389,7 +2710,7 @@ function UseTodayPanel({ products, goToInventory, formatDate }) {
   )
 }
 
-function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes }) {
+function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, openReceipt, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes, currency }) {
   const [quickSearch, setQuickSearch] = useState('')
   const [globalResults, setGlobalResults] = useState(null)
   const [globalLoading, setGlobalLoading] = useState(false)
@@ -2425,6 +2746,8 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
     { key: 'critical', label: 'Critical Stock', value: stats.critical, icon: AlertTriangle, color: 'from-orange-500 to-red-500', accent: 'text-orange-600', bg: 'bg-orange-50', filterKey: 'Critical' },
     { key: 'in_date', label: 'In Date', value: stats.inDate || 0, icon: Check, color: 'from-emerald-500 to-teal-600', accent: 'text-emerald-600', bg: 'bg-emerald-50', filterKey: 'Ok' },
     { key: 'recipes', label: 'Recipes', value: recipesCount ?? '—', icon: BookOpen, color: 'from-purple-500 to-fuchsia-600', accent: 'text-purple-600', bg: 'bg-purple-50', onClick: gotoRecipes },
+    { key: 'inv_value', label: 'Inventory Value', value: stats.totalValue > 0 ? `${CURRENCY_SYMBOL[currency] || ''}${stats.totalValue.toFixed(0)}` : '—', icon: Sparkles, color: 'from-emerald-500 to-emerald-700', accent: 'text-emerald-600', bg: 'bg-emerald-50' },
+    { key: 'reorder', label: 'Below Reorder', value: stats.belowReorder || 0, icon: PackageX, color: 'from-orange-500 to-orange-700', accent: 'text-orange-600', bg: 'bg-orange-50', filterKey: 'All' },
   ]
   const cards = cardsAll.filter(c => show(c.key))
   const isEmpty = stats.total === 0
@@ -2466,7 +2789,7 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
       </div>
 
       {/* Quick-scan action grid — 4 buttons in a row on desktop, 2×2 on mobile */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
         <button onClick={openVoice} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-300 transition text-purple-800">
           <span className="text-2xl">🎤</span>
           <span className="text-xs font-semibold">Voice</span>
@@ -2479,11 +2802,16 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
           <span className="text-2xl">📸</span>
           <span className="text-xs font-semibold">Snap Label</span>
         </button>
+        <button onClick={openReceipt} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-fuchsia-200 bg-fuchsia-50 hover:bg-fuchsia-100 hover:border-fuchsia-300 transition text-fuchsia-800 relative">
+          <span className="text-2xl">🧾</span>
+          <span className="text-xs font-semibold">Receipt</span>
+          <span className="absolute top-1 right-1 text-[8px] font-bold bg-fuchsia-600 text-white rounded px-1">NEW</span>
+        </button>
         <button onClick={openScan} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-teal-200 bg-teal-50 hover:bg-teal-100 hover:border-teal-300 transition text-teal-800">
           <span className="text-2xl">📋</span>
           <span className="text-xs font-semibold">Scan Logbook</span>
         </button>
-        <button onClick={printLogbook} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-amber-200 bg-amber-50 hover:bg-amber-100 hover:border-amber-300 transition text-amber-800 col-span-2 md:col-span-1">
+        <button onClick={printLogbook} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-amber-200 bg-amber-50 hover:bg-amber-100 hover:border-amber-300 transition text-amber-800">
           <span className="text-2xl">📒</span>
           <span className="text-xs font-semibold">Print Logbook</span>
         </button>
@@ -3123,7 +3451,23 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
                         </div>
                       )}
                     </TableCell>
-                    <TableCell className="font-medium">{p.name}</TableCell>
+                    <TableCell className="font-medium">
+                      <div>{p.name}</div>
+                      {Array.isArray(p.allergens) && p.allergens.length > 0 && (
+                        <div className="flex gap-0.5 flex-wrap mt-0.5">
+                          {p.allergens.slice(0, 5).map(a => {
+                            const meta = ALLERGENS.find(x => x.id === a)
+                            return meta ? (
+                              <span key={a} title={meta.label} className="text-[10px]">{meta.emoji}</span>
+                            ) : null
+                          })}
+                          {p.allergens.length > 5 && <span className="text-[9px] text-red-600 font-bold">+{p.allergens.length - 5}</span>}
+                        </div>
+                      )}
+                      {p.reorderPoint != null && Number(p.quantity) <= Number(p.reorderPoint) && (
+                        <span className="inline-block mt-0.5 text-[9px] font-bold text-orange-700 bg-orange-100 rounded px-1">⚠ REORDER</span>
+                      )}
+                    </TableCell>
                     <TableCell>{p.quantity} {p.unit}</TableCell>
                     <TableCell>{formatDate(p.expiryDate)}</TableCell>
                     <TableCell>{p.category || '—'}</TableCell>
@@ -3692,6 +4036,7 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
   const [testing, setTesting] = useState(false)
   const [widgets, setWidgets] = useState([])
   const [modules, setModules] = useState([])
+  const [currency, setCurrency] = useState('GBP')
   const ALL_WIDGETS = [
     { key: 'all_items', label: 'All Items count' },
     { key: 'expiring',  label: 'Expiring Soon' },
@@ -3721,6 +4066,7 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
       setFields(settings.customFields?.length ? [...settings.customFields] : [])
       setInviteCode(settings.inviteCode || '')
       setAlertEmail(settings.alertEmail || '')
+      setCurrency(settings.currency || 'GBP')
       setWidgets(Array.isArray(settings.dashboardWidgets) ? settings.dashboardWidgets : ALL_WIDGETS.map(w => w.key))
       setModules(Array.isArray(settings.modulesEnabled) ? settings.modulesEnabled : ['stock', 'recipes'])
     }
@@ -3762,7 +4108,7 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
       label: f.label.trim(),
       type: f.type || 'text'
     }))
-    await saveSettings({ kitchenName: name.trim(), kitchenType: type, customFields: cleanFields, inviteCode, alertEmail: alertEmail.trim(), dashboardWidgets: widgets, modulesEnabled: modules, onboarded: true })
+    await saveSettings({ kitchenName: name.trim(), kitchenType: type, customFields: cleanFields, inviteCode, alertEmail: alertEmail.trim(), currency, dashboardWidgets: widgets, modulesEnabled: modules, onboarded: true })
     onClose()
   }
 
@@ -3816,6 +4162,23 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>{kitchenTypes.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
                 </Select>
+              </div>
+              <div>
+                <Label>Currency</Label>
+                <Select value={currency || 'GBP'} onValueChange={setCurrency}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="GBP">🇬🇧 GBP (£)</SelectItem>
+                    <SelectItem value="USD">🇺🇸 USD ($)</SelectItem>
+                    <SelectItem value="EUR">🇪🇺 EUR (€)</SelectItem>
+                    <SelectItem value="INR">🇮🇳 INR (₹)</SelectItem>
+                    <SelectItem value="CAD">🇨🇦 CAD (C$)</SelectItem>
+                    <SelectItem value="AUD">🇦🇺 AUD (A$)</SelectItem>
+                    <SelectItem value="SGD">🇸🇬 SGD (S$)</SelectItem>
+                    <SelectItem value="AED">🇦🇪 AED</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">Used for cost tracking, waste value, receipt imports.</p>
               </div>
               <p className="text-xs text-muted-foreground">These appear in the header and your email alerts.</p>
 

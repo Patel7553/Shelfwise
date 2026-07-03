@@ -120,38 +120,40 @@ code {
         --sidebar-ring: 217.2 91.2% 59.8%;
     }
   .dark {
-        --background: 222.2 84% 4.9%;
-        --foreground: 210 40% 98%;
-        --card: 222.2 84% 4.9%;
-        --card-foreground: 210 40% 98%;
-        --popover: 222.2 84% 4.9%;
-        --popover-foreground: 210 40% 98%;
-        --primary: 210 40% 98%;
-        --primary-foreground: 222.2 47.4% 11.2%;
-        --secondary: 217.2 32.6% 17.5%;
-        --secondary-foreground: 210 40% 98%;
-        --muted: 217.2 32.6% 17.5%;
-        --muted-foreground: 215 20.2% 65.1%;
-        --accent: 217.2 32.6% 17.5%;
-        --accent-foreground: 210 40% 98%;
-        --destructive: 0 62.8% 30.6%;
-        --destructive-foreground: 210 40% 98%;
-        --border: 217.2 32.6% 17.5%;
-        --input: 217.2 32.6% 17.5%;
-        --ring: 212.7 26.8% 83.9%;
-        --chart-1: 220 70% 50%;
-        --chart-2: 160 60% 45%;
-        --chart-3: 30 80% 55%;
-        --chart-4: 280 65% 60%;
-        --chart-5: 340 75% 55%;
-        --sidebar-background: 240 5.9% 10%;
-        --sidebar-foreground: 240 4.8% 95.9%;
-        --sidebar-primary: 224.3 76.3% 48%;
-        --sidebar-primary-foreground: 0 0% 100%;
-        --sidebar-accent: 240 3.7% 15.9%;
-        --sidebar-accent-foreground: 240 4.8% 95.9%;
-        --sidebar-border: 240 3.7% 15.9%;
-        --sidebar-ring: 217.2 91.2% 59.8%;
+        /* Warmer, more polished dark palette — slightly blue-grey instead of pure black.
+           Emerald hint on accents to match ShelfWise brand. */
+        --background: 220 20% 8%;        /* page background — deep slate, not pitch black */
+        --foreground: 210 20% 95%;       /* off-white text (easier on eyes than pure white) */
+        --card: 220 18% 12%;             /* cards sit ABOVE bg → slightly lighter */
+        --card-foreground: 210 20% 95%;
+        --popover: 220 20% 10%;
+        --popover-foreground: 210 20% 95%;
+        --primary: 158 65% 55%;          /* brand emerald (brighter for dark bg) */
+        --primary-foreground: 220 20% 8%;
+        --secondary: 220 15% 18%;
+        --secondary-foreground: 210 20% 95%;
+        --muted: 220 15% 16%;
+        --muted-foreground: 215 15% 68%;
+        --accent: 220 15% 18%;
+        --accent-foreground: 210 20% 95%;
+        --destructive: 0 65% 55%;
+        --destructive-foreground: 210 20% 98%;
+        --border: 220 15% 22%;           /* visible but soft borders */
+        --input: 220 15% 18%;
+        --ring: 158 65% 55%;
+        --chart-1: 158 60% 55%;          /* emerald */
+        --chart-2: 210 70% 60%;          /* blue */
+        --chart-3: 35 85% 60%;           /* amber */
+        --chart-4: 280 60% 65%;          /* purple */
+        --chart-5: 0 70% 60%;            /* red */
+        --sidebar-background: 220 20% 6%;
+        --sidebar-foreground: 210 15% 90%;
+        --sidebar-primary: 158 65% 55%;
+        --sidebar-primary-foreground: 220 20% 8%;
+        --sidebar-accent: 220 15% 15%;
+        --sidebar-accent-foreground: 210 20% 95%;
+        --sidebar-border: 220 15% 20%;
+        --sidebar-ring: 158 65% 55%;
     }
 }
 
@@ -167,69 +169,107 @@ code {
 }
 
 /* ============================================================
-   Dark mode: bridge for hardcoded Tailwind colors used across
-   the app. Semantic tokens (bg-background, text-foreground, etc.)
-   flip automatically via CSS vars — but the app also uses many
-   raw utilities (bg-white, bg-slate-50, text-slate-900, etc.).
-   These rules re-map those to darker equivalents when .dark is set
-   on <html>, so the whole app becomes dark without touching JSX.
+   Dark mode overrides — polished slate/emerald palette
+   These re-map hardcoded Tailwind colors so the whole app looks
+   good in dark mode without touching JSX files.
    ============================================================ */
 .dark {
   color-scheme: dark;
 }
-.dark body {
-  background-color: hsl(222 47% 6%);
-  color: hsl(210 40% 96%);
-}
 
-/* Backgrounds */
-.dark .bg-white       { background-color: hsl(222 40% 11%) !important; }
-.dark .bg-white\/90   { background-color: hsl(222 40% 11% / 0.90) !important; }
-.dark .bg-white\/80   { background-color: hsl(222 40% 11% / 0.80) !important; }
-.dark .bg-slate-50    { background-color: hsl(222 40% 8%)  !important; }
-.dark .bg-slate-100   { background-color: hsl(222 30% 15%) !important; }
-.dark .bg-slate-200   { background-color: hsl(222 25% 20%) !important; }
-.dark .bg-slate-900   { background-color: hsl(222 40% 4%)  !important; }
-.dark .bg-slate-50\/40, .dark .bg-slate-50\/60 { background-color: hsl(222 40% 10%) !important; }
+/* Backgrounds — cards SLIGHTLY lighter than page bg for depth */
+.dark .bg-white       { background-color: hsl(220 18% 12%) !important; }
+.dark .bg-white\/90   { background-color: hsl(220 18% 12% / 0.92) !important; }
+.dark .bg-white\/80   { background-color: hsl(220 18% 12% / 0.85) !important; }
+.dark .bg-slate-50    { background-color: hsl(220 20% 10%) !important; }
+.dark .bg-slate-100   { background-color: hsl(220 15% 15%) !important; }
+.dark .bg-slate-200   { background-color: hsl(220 15% 20%) !important; }
+.dark .bg-slate-800   { background-color: hsl(220 15% 15%) !important; }
+.dark .bg-slate-900   { background-color: hsl(220 20% 8%)  !important; }
+.dark .bg-slate-50\/40, .dark .bg-slate-50\/60 { background-color: hsl(220 18% 12%) !important; }
 
-/* Coloured accent backgrounds — muted for dark bg */
-.dark .bg-emerald-50   { background-color: hsl(158 40% 12%) !important; }
-.dark .bg-emerald-50\/40 { background-color: hsl(158 40% 12% / 0.5) !important; }
-.dark .bg-amber-50     { background-color: hsl(45 60% 13%) !important; }
-.dark .bg-red-50       { background-color: hsl(0 55% 15%) !important; }
-.dark .bg-orange-50    { background-color: hsl(25 60% 14%) !important; }
-.dark .bg-purple-50    { background-color: hsl(270 40% 15%) !important; }
-.dark .bg-blue-50      { background-color: hsl(215 45% 14%) !important; }
+/* Colored accent surfaces — use warmer/darker tints so they don't glow */
+.dark .bg-emerald-50   { background-color: hsl(158 30% 14%) !important; }
+.dark .bg-emerald-50\/40 { background-color: hsl(158 30% 14% / 0.5) !important; }
+.dark .bg-emerald-100  { background-color: hsl(158 30% 18%) !important; }
+.dark .bg-amber-50     { background-color: hsl(38 40% 14%) !important; }
+.dark .bg-amber-100    { background-color: hsl(38 40% 18%) !important; }
+.dark .bg-red-50       { background-color: hsl(0 40% 15%) !important; }
+.dark .bg-red-100      { background-color: hsl(0 40% 20%) !important; }
+.dark .bg-orange-50    { background-color: hsl(25 45% 15%) !important; }
+.dark .bg-orange-100   { background-color: hsl(25 45% 20%) !important; }
+.dark .bg-purple-50    { background-color: hsl(270 30% 16%) !important; }
+.dark .bg-purple-100   { background-color: hsl(270 30% 20%) !important; }
+.dark .bg-blue-50      { background-color: hsl(215 40% 16%) !important; }
+.dark .bg-blue-100     { background-color: hsl(215 40% 20%) !important; }
+.dark .bg-teal-50      { background-color: hsl(180 30% 15%) !important; }
+.dark .bg-fuchsia-50, .dark .bg-rose-50 { background-color: hsl(320 30% 16%) !important; }
 
-/* Text — flip dark text to light in dark mode */
+/* Text colors — invert dark text to light, dim light text a bit */
 .dark .text-slate-900,
 .dark .text-slate-800,
-.dark .text-slate-700 { color: hsl(210 40% 96%) !important; }
-.dark .text-slate-600 { color: hsl(215 20% 78%) !important; }
-.dark .text-slate-500,
-.dark .text-slate-400 { color: hsl(215 15% 65%) !important; }
+.dark .text-slate-700 { color: hsl(210 20% 94%) !important; }
+.dark .text-slate-600 { color: hsl(215 15% 75%) !important; }
+.dark .text-slate-500 { color: hsl(215 12% 65%) !important; }
+.dark .text-slate-400 { color: hsl(215 12% 55%) !important; }
 
-/* Borders */
-.dark .border-slate-100, .dark .border-slate-200 { border-color: hsl(222 25% 20%) !important; }
-.dark .border-slate-300 { border-color: hsl(222 20% 25%) !important; }
-.dark .border-emerald-100, .dark .border-emerald-200 { border-color: hsl(158 30% 25%) !important; }
-.dark .border-amber-200 { border-color: hsl(45 40% 25%) !important; }
-.dark .border-red-100, .dark .border-red-200 { border-color: hsl(0 30% 25%) !important; }
+/* Colored text — brighten so it reads on dark bg */
+.dark .text-emerald-900, .dark .text-emerald-800 { color: hsl(158 65% 75%) !important; }
+.dark .text-emerald-700 { color: hsl(158 60% 70%) !important; }
+.dark .text-emerald-600 { color: hsl(158 60% 65%) !important; }
+.dark .text-red-900, .dark .text-red-800, .dark .text-red-700 { color: hsl(0 75% 78%) !important; }
+.dark .text-red-600 { color: hsl(0 70% 70%) !important; }
+.dark .text-amber-900, .dark .text-amber-800, .dark .text-amber-700 { color: hsl(38 75% 75%) !important; }
+.dark .text-amber-600 { color: hsl(38 70% 65%) !important; }
+.dark .text-orange-800, .dark .text-orange-700 { color: hsl(25 75% 75%) !important; }
+.dark .text-purple-900, .dark .text-purple-800, .dark .text-purple-700 { color: hsl(270 65% 78%) !important; }
+.dark .text-purple-600 { color: hsl(270 60% 72%) !important; }
+.dark .text-blue-900, .dark .text-blue-800, .dark .text-blue-700 { color: hsl(215 75% 78%) !important; }
+.dark .text-teal-900, .dark .text-teal-800, .dark .text-teal-700 { color: hsl(180 55% 75%) !important; }
 
-/* Card / shadow — soften on dark */
+/* Borders — subtle but visible */
+.dark .border-slate-100, .dark .border-slate-200 { border-color: hsl(220 15% 22%) !important; }
+.dark .border-slate-300 { border-color: hsl(220 15% 28%) !important; }
+.dark .border-emerald-100, .dark .border-emerald-200 { border-color: hsl(158 25% 25%) !important; }
+.dark .border-emerald-300 { border-color: hsl(158 40% 35%) !important; }
+.dark .border-amber-200, .dark .border-amber-300 { border-color: hsl(38 35% 28%) !important; }
+.dark .border-red-100, .dark .border-red-200, .dark .border-red-300 { border-color: hsl(0 35% 28%) !important; }
+.dark .border-orange-200, .dark .border-orange-300 { border-color: hsl(25 40% 28%) !important; }
+.dark .border-blue-200, .dark .border-blue-300 { border-color: hsl(215 40% 30%) !important; }
+.dark .border-purple-200, .dark .border-purple-300 { border-color: hsl(270 35% 30%) !important; }
+.dark .border-teal-200, .dark .border-teal-300 { border-color: hsl(180 30% 28%) !important; }
+
+/* Soft shadows in dark mode */
 .dark .shadow, .dark .shadow-sm, .dark .shadow-md, .dark .shadow-lg {
-  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.5), 0 1px 2px -1px rgb(0 0 0 / 0.5);
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.6), 0 1px 2px -1px rgb(0 0 0 / 0.4);
+}
+.dark .shadow-xl {
+  box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.7), 0 8px 10px -6px rgb(0 0 0 / 0.4);
 }
 
-/* Header/nav backdrop blur becomes darker */
-.dark .backdrop-blur-md.bg-white\/90 { background-color: hsl(222 40% 11% / 0.85) !important; }
+/* Header/nav backdrop */
+.dark .backdrop-blur-md.bg-white\/90 { background-color: hsl(220 20% 10% / 0.88) !important; }
 
-/* Input fields */
-.dark input, .dark textarea, .dark select {
-  background-color: hsl(222 30% 14%);
-  color: hsl(210 40% 96%);
-  border-color: hsl(222 25% 22%);
+/* Inputs — visible surface with clear border */
+.dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+.dark textarea,
+.dark select {
+  background-color: hsl(220 15% 14%) !important;
+  color: hsl(210 20% 94%) !important;
+  border-color: hsl(220 15% 25%) !important;
+}
+.dark input::placeholder, .dark textarea::placeholder { color: hsl(215 12% 55%) !important; }
+
+/* Table striping / hover */
+.dark tbody tr:hover td { background-color: hsl(220 15% 14%) !important; }
+
+/* Special: preserve the emerald gradient hero (looks great in both modes) */
+.dark .bg-gradient-to-br.from-emerald-500,
+.dark .bg-gradient-to-r.from-emerald-500 {
+  /* let the gradient show through — no override */
 }
 
-/* Table striping (used in Inventory) */
-.dark tbody tr:hover td { background-color: hsl(222 30% 14%) !important; }
+/* Divide utilities used in lists */
+.dark .divide-slate-100 > * + *, .dark .divide-slate-200 > * + * {
+  border-color: hsl(220 15% 22%) !important;
+}
