@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
@@ -89,7 +89,65 @@ function suggestExpiryDate(category = '', storageType = '') {
   return d.toISOString().slice(0, 10)
 }
 
+// ============================================================================
+// Theme (light / dark / system)
+// Stores user's choice in localStorage; falls back to OS preference.
+// Applied by toggling the `dark` class on <html>. Works with existing shadcn
+// vars AND our custom overrides in globals.css.
+// ============================================================================
+function useTheme() {
+  const [pref, setPref] = useState('system') // 'light' | 'dark' | 'system'
+
+  // Load saved preference on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const saved = localStorage.getItem('sw_theme') || 'system'
+    setPref(saved)
+  }, [])
+
+  // Apply the theme + listen to OS changes when in 'system' mode
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mql = window.matchMedia('(prefers-color-scheme: dark)')
+    const apply = () => {
+      const shouldBeDark = pref === 'dark' || (pref === 'system' && mql.matches)
+      document.documentElement.classList.toggle('dark', shouldBeDark)
+    }
+    apply()
+    if (pref === 'system') {
+      mql.addEventListener?.('change', apply)
+      return () => mql.removeEventListener?.('change', apply)
+    }
+  }, [pref])
+
+  const setTheme = (t) => {
+    setPref(t)
+    try { localStorage.setItem('sw_theme', t) } catch {}
+  }
+
+  return { theme: pref, setTheme }
+}
+
+function ThemeToggle({ theme, setTheme }) {
+  // Cycle: light → dark → system → light …
+  const next = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light'
+  const Icon = theme === 'dark' ? Moon : theme === 'system' ? Monitor : Sun
+  const label = theme === 'dark' ? 'Dark' : theme === 'system' ? 'System' : 'Light'
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={() => setTheme(next)}
+      title={`Theme: ${label} (click to switch to ${next})`}
+      className="relative"
+    >
+      <Icon className="h-4 w-4" />
+    </Button>
+  )
+}
+
 function App() {
+  const { theme, setTheme } = useTheme()
   const [initial] = useState(getInitialFromURL)
   const [view, setView] = useState(initial.view) // dashboard | inventory | recipes
   const [products, setProducts] = useState([])
@@ -1112,6 +1170,7 @@ function App() {
                 <ShieldCheck className="h-4 w-4 mr-1" /> Admin
               </Button>
             )}
+            <ThemeToggle theme={theme} setTheme={setTheme} />
             <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title="Settings">
               <Settings className="h-4 w-4" />
             </Button>
@@ -1161,6 +1220,25 @@ function App() {
                 <ShieldCheck className="h-4 w-4 mr-2" /> Admin Panel
               </Button>
             )}
+            <div className="flex items-center justify-between px-2 py-2 border rounded-md">
+              <span className="text-sm font-medium">Theme</span>
+              <div className="flex gap-1">
+                {[
+                  { id: 'light', Icon: Sun },
+                  { id: 'dark', Icon: Moon },
+                  { id: 'system', Icon: Monitor },
+                ].map(({ id, Icon }) => (
+                  <button
+                    key={id}
+                    onClick={() => setTheme(id)}
+                    className={`h-8 w-8 rounded-md flex items-center justify-center border ${theme === id ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-transparent hover:bg-slate-100'}`}
+                    title={id}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </button>
+                ))}
+              </div>
+            </div>
             <Button variant="ghost" className="w-full justify-start" onClick={() => { setSettingsOpen(true); setMobileNav(false) }}>
               <Settings className="h-4 w-4 mr-2" /> Settings
             </Button>
@@ -2351,38 +2429,64 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
   const cards = cardsAll.filter(c => show(c.key))
   const isEmpty = stats.total === 0
 
+  // Time-based greeting for the hero
+  const hour = new Date().getHours()
+  const greeting = hour < 5 ? 'Good night' : hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : hour < 21 ? 'Good evening' : 'Good night'
+  const greetingEmoji = hour < 5 ? '🌙' : hour < 12 ? '☀️' : hour < 17 ? '🌤️' : hour < 21 ? '🌆' : '🌙'
+
   return (
-    <div className="space-y-8">
-      <div className="flex items-start justify-between flex-wrap gap-4">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight">Dashboard</h2>
-          <p className="text-muted-foreground mt-1">A glance at what needs your attention today.</p>
-        </div>
-        <div className="flex gap-2 flex-wrap">
-          {isEmpty && (
-            <Button variant="outline" onClick={seedData}>
-              <Sparkles className="h-4 w-4 mr-2" /> Load sample data
+    <div className="space-y-6">
+      {/* Hero header — gradient card with greeting + quick stats + primary actions */}
+      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-500 via-emerald-600 to-teal-700 text-white p-6 md:p-8 shadow-lg">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_100%_0%,rgba(255,255,255,0.15)_0%,transparent_50%)]" />
+        <div className="relative flex items-start justify-between flex-wrap gap-4">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-emerald-100 uppercase tracking-wider">{greetingEmoji} {greeting}</p>
+            <h2 className="text-2xl md:text-3xl font-bold tracking-tight mt-1">Here's what needs your attention</h2>
+            {stats.total > 0 && (
+              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-sm text-emerald-50">
+                <span><b className="text-white">{stats.total}</b> total items</span>
+                {stats.expired > 0 && <span>🔴 <b className="text-white">{stats.expired}</b> expired</span>}
+                {stats.expiring > 0 && <span>🟠 <b className="text-white">{stats.expiring}</b> expiring soon</span>}
+                {stats.critical > 0 && <span>⚠️ <b className="text-white">{stats.critical}</b> low stock</span>}
+              </div>
+            )}
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            {isEmpty && (
+              <Button variant="secondary" size="sm" onClick={seedData} className="bg-white/95 text-emerald-700 hover:bg-white">
+                <Sparkles className="h-4 w-4 mr-2" /> Sample data
+              </Button>
+            )}
+            <Button size="sm" onClick={openAdd} className="bg-white text-emerald-700 hover:bg-emerald-50 font-semibold shadow-md">
+              <Plus className="h-4 w-4 mr-2" /> Add Product
             </Button>
-          )}
-          <Button variant="outline" onClick={openVoice} className="border-purple-300 bg-purple-50 text-purple-700 hover:bg-purple-100 font-semibold">
-            🎤 Voice
-          </Button>
-          <Button variant="outline" onClick={openBarcode} className="border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold">
-            <ScanLine className="h-4 w-4 mr-2" /> 🔢 Barcode
-          </Button>
-          <Button variant="outline" onClick={openSnap} className="border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-semibold">
-            <Sparkles className="h-4 w-4 mr-2" /> 📸 Snap Label
-          </Button>
-          <Button variant="outline" onClick={openScan} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50">
-            <ScanLine className="h-4 w-4 mr-2" /> Scan Logbook
-          </Button>
-          <Button variant="outline" onClick={printLogbook} className="border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100">
-            📒 Print Logbook
-          </Button>
-          <Button onClick={openAdd} className="bg-emerald-600 hover:bg-emerald-700">
-            <Plus className="h-4 w-4 mr-2" /> Add Product
-          </Button>
+          </div>
         </div>
+      </div>
+
+      {/* Quick-scan action grid — 4 buttons in a row on desktop, 2×2 on mobile */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+        <button onClick={openVoice} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-300 transition text-purple-800">
+          <span className="text-2xl">🎤</span>
+          <span className="text-xs font-semibold">Voice</span>
+        </button>
+        <button onClick={openBarcode} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 hover:border-blue-300 transition text-blue-800">
+          <span className="text-2xl">🔢</span>
+          <span className="text-xs font-semibold">Barcode</span>
+        </button>
+        <button onClick={openSnap} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-emerald-200 bg-emerald-50 hover:bg-emerald-100 hover:border-emerald-300 transition text-emerald-800">
+          <span className="text-2xl">📸</span>
+          <span className="text-xs font-semibold">Snap Label</span>
+        </button>
+        <button onClick={openScan} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-teal-200 bg-teal-50 hover:bg-teal-100 hover:border-teal-300 transition text-teal-800">
+          <span className="text-2xl">📋</span>
+          <span className="text-xs font-semibold">Scan Logbook</span>
+        </button>
+        <button onClick={printLogbook} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-amber-200 bg-amber-50 hover:bg-amber-100 hover:border-amber-300 transition text-amber-800 col-span-2 md:col-span-1">
+          <span className="text-2xl">📒</span>
+          <span className="text-xs font-semibold">Print Logbook</span>
+        </button>
       </div>
 
       <UseTodayPanel products={products} goToInventory={goToInventory} formatDate={(d) => new Date(d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} />

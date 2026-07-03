@@ -1,0 +1,105 @@
+════════════════════════════════════════════════════════
+  ShelfWise — Session 6 (Themes + Dashboard polish)
+════════════════════════════════════════════════════════
+
+WHAT'S NEW
+──────────
+
+1) 🎨 THEME TOGGLE — Light / Dark / System
+   • Small sun/moon/monitor icon in the top-right of the nav bar.
+   • Click to cycle: Light → Dark → System (matches OS setting)
+   • Choice persisted in localStorage — survives page reloads.
+   • Also available in the mobile nav drawer.
+
+2) 🌗 DARK MODE
+   • Full app support via CSS overrides — every screen (dashboard,
+     inventory, rota, waste, settings, modals) adapts automatically.
+   • Auto-detects your OS "dark mode" preference by default.
+
+3) 💫 BETTER DASHBOARD HERO
+   • New gradient hero card at the top: time-based greeting
+     ("Good morning" / "Good afternoon" / "Good evening" / "Good night")
+     with sun/moon emoji, quick counts inline (total items, expired,
+     expiring, low stock), and prominent "Add Product" button.
+   • Reworked scanner action grid: 5 chunky icon buttons in a row
+     (Voice / Barcode / Snap Label / Scan Logbook / Print Logbook)
+     replacing the crowded button row.
+
+FILES IN THIS ZIP
+─────────────────
+    app/page.js
+    app/globals.css
+
+INSTALL (2 min)
+───────────────
+1) Extract → drag both files onto their existing counterparts
+   in VS Code (Replace)
+2) Source Control → commit ("feat: theme toggle + dashboard hero") → Sync
+3) Wait ~1 min for Vercel to deploy
+4) Refresh → new dashboard + click the sun/moon icon top-right
+
+═══════════════════════════════════════════════════
+  📋 SESSION 5 FEATURE TESTING CHECKLIST
+═══════════════════════════════════════════════════
+Now that everything's polished, run through this to make sure all
+Session 5 features actually work in real life:
+
+■ ROTA
+  [ ] Nav → Rota tab loads a weekly grid
+  [ ] Click + on a cell → add "Anna" as Head Chef → Save
+  [ ] Click the shift → edit or delete
+  [ ] Type "OFF" as chef name → shows as greyed-out day off
+  [ ] Prev/Next week buttons work
+
+■ WASTE ANALYTICS
+  [ ] Inventory → 🗑️ on any item → new "Reason" dialog appears
+  [ ] Pick "Expired" → optionally add unit cost → Dispose & Log
+  [ ] Waste tab → entry appears in charts + recent list
+  [ ] Switch filter: 7 days / 30 days / All time
+
+■ BROWSER NOTIFICATIONS
+  [ ] Settings → Login & Alerts → 🔔 "Enable notifications" button
+  [ ] Click → browser prompts → Allow
+  [ ] Click "Send test" → notification appears
+  [ ] Load app fresh next day — should get an expiry alert
+
+■ EARLIER FIXES
+  [ ] Print Logbook → opens as in-app modal (no new tab)
+  [ ] Close button top-left works (especially on iPhone!)
+  [ ] Barcode scan → repeat scan of same code prefills from history
+  [ ] Voice modal → red X in top-right force-closes stuck sessions
+
+═══════════════════════════════════════════════════
+  💡 NEW FEATURE IDEAS (for future sessions)
+═══════════════════════════════════════════════════
+
+📈 Analytics & Reports
+   • Weekly email digest — auto-send Sunday summary of waste + expiries
+   • Compare weeks — "waste went up 12% vs last week"
+   • Cost per meal — track ingredient value used per recipe
+
+📱 UX Polish
+   • Refactor page.js (4700 lines → 10 smaller files, no user change)
+   • Swipe gestures on inventory list (swipe left to dispose, right to edit)
+   • Bulk actions — select multiple items and dispose together
+
+🔔 Push Notifications
+   • Proper server-side push (needs VAPID keys + backend push server)
+   • Chef gets pinged when a new shift is added to today's rota
+
+🤖 AI Enhancements
+   • Weekly menu planner — AI suggests recipes based on expiring items
+   • Photo of receipt → auto-import all products with prices
+   • Ingredient substitutions — "no butter? try oil/margarine"
+
+👥 Team & Multi-kitchen
+   • Invite specific team members by email (not just chef codes)
+   • Sub-locations — track stock across multiple fridges/rooms
+   • Chef activity log — see who added/disposed what
+
+🏢 Business Features
+   • Supplier management — link products to suppliers, auto-order thresholds
+   • HACCP compliance logs — temperature logs, cleaning schedules
+   • Cost report PDF — export monthly cost of waste for accountant
+
+Pick any that excites you and we'll build it next!

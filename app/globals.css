@@ -165,3 +165,71 @@ code {
     @apply bg-background text-foreground;
     }
 }
+
+/* ============================================================
+   Dark mode: bridge for hardcoded Tailwind colors used across
+   the app. Semantic tokens (bg-background, text-foreground, etc.)
+   flip automatically via CSS vars — but the app also uses many
+   raw utilities (bg-white, bg-slate-50, text-slate-900, etc.).
+   These rules re-map those to darker equivalents when .dark is set
+   on <html>, so the whole app becomes dark without touching JSX.
+   ============================================================ */
+.dark {
+  color-scheme: dark;
+}
+.dark body {
+  background-color: hsl(222 47% 6%);
+  color: hsl(210 40% 96%);
+}
+
+/* Backgrounds */
+.dark .bg-white       { background-color: hsl(222 40% 11%) !important; }
+.dark .bg-white\/90   { background-color: hsl(222 40% 11% / 0.90) !important; }
+.dark .bg-white\/80   { background-color: hsl(222 40% 11% / 0.80) !important; }
+.dark .bg-slate-50    { background-color: hsl(222 40% 8%)  !important; }
+.dark .bg-slate-100   { background-color: hsl(222 30% 15%) !important; }
+.dark .bg-slate-200   { background-color: hsl(222 25% 20%) !important; }
+.dark .bg-slate-900   { background-color: hsl(222 40% 4%)  !important; }
+.dark .bg-slate-50\/40, .dark .bg-slate-50\/60 { background-color: hsl(222 40% 10%) !important; }
+
+/* Coloured accent backgrounds — muted for dark bg */
+.dark .bg-emerald-50   { background-color: hsl(158 40% 12%) !important; }
+.dark .bg-emerald-50\/40 { background-color: hsl(158 40% 12% / 0.5) !important; }
+.dark .bg-amber-50     { background-color: hsl(45 60% 13%) !important; }
+.dark .bg-red-50       { background-color: hsl(0 55% 15%) !important; }
+.dark .bg-orange-50    { background-color: hsl(25 60% 14%) !important; }
+.dark .bg-purple-50    { background-color: hsl(270 40% 15%) !important; }
+.dark .bg-blue-50      { background-color: hsl(215 45% 14%) !important; }
+
+/* Text — flip dark text to light in dark mode */
+.dark .text-slate-900,
+.dark .text-slate-800,
+.dark .text-slate-700 { color: hsl(210 40% 96%) !important; }
+.dark .text-slate-600 { color: hsl(215 20% 78%) !important; }
+.dark .text-slate-500,
+.dark .text-slate-400 { color: hsl(215 15% 65%) !important; }
+
+/* Borders */
+.dark .border-slate-100, .dark .border-slate-200 { border-color: hsl(222 25% 20%) !important; }
+.dark .border-slate-300 { border-color: hsl(222 20% 25%) !important; }
+.dark .border-emerald-100, .dark .border-emerald-200 { border-color: hsl(158 30% 25%) !important; }
+.dark .border-amber-200 { border-color: hsl(45 40% 25%) !important; }
+.dark .border-red-100, .dark .border-red-200 { border-color: hsl(0 30% 25%) !important; }
+
+/* Card / shadow — soften on dark */
+.dark .shadow, .dark .shadow-sm, .dark .shadow-md, .dark .shadow-lg {
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.5), 0 1px 2px -1px rgb(0 0 0 / 0.5);
+}
+
+/* Header/nav backdrop blur becomes darker */
+.dark .backdrop-blur-md.bg-white\/90 { background-color: hsl(222 40% 11% / 0.85) !important; }
+
+/* Input fields */
+.dark input, .dark textarea, .dark select {
+  background-color: hsl(222 30% 14%);
+  color: hsl(210 40% 96%);
+  border-color: hsl(222 25% 22%);
+}
+
+/* Table striping (used in Inventory) */
+.dark tbody tr:hover td { background-color: hsl(222 30% 14%) !important; }
