@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
@@ -1090,6 +1090,7 @@ function App() {
   const hasStock = modulesEnabled.length === 0 || modulesEnabled.includes('stock')
   const hasRecipes = modulesEnabled.length === 0 || modulesEnabled.includes('recipes')
   const hasRota = modulesEnabled.includes('rota')
+  const hasHaccp = modulesEnabled.includes('haccp')
   const hasAnalytics = modulesEnabled.length === 0 || modulesEnabled.includes('analytics')
 
   return (
@@ -1150,6 +1151,11 @@ function App() {
                 <BarChart3 className="h-4 w-4 mr-2" /> Waste
               </Button>
             )}
+            {hasHaccp && (
+              <Button variant={view === 'haccp' ? 'default' : 'ghost'} size="sm" onClick={() => setView('haccp')}>
+                <ShieldCheck className="h-4 w-4 mr-2" /> Compliance
+              </Button>
+            )}
             {me?.isAdmin && (
               <Button
                 variant="outline"
@@ -1199,6 +1205,11 @@ function App() {
             {hasAnalytics && (
               <Button variant={view === 'analytics' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('analytics'); setMobileNav(false) }}>
                 <BarChart3 className="h-4 w-4 mr-2" /> Waste
+              </Button>
+            )}
+            {hasHaccp && (
+              <Button variant={view === 'haccp' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('haccp'); setMobileNav(false) }}>
+                <ShieldCheck className="h-4 w-4 mr-2" /> Compliance
               </Button>
             )}
             {me?.isAdmin && (
@@ -1263,6 +1274,9 @@ function App() {
         )}
         {view === 'analytics' && (
           <AnalyticsView products={products} />
+        )}
+        {view === 'haccp' && (
+          <HaccpView currentUser={me?.user?.email || me?.chef?.name || ''} />
         )}
       </main>
 
@@ -3547,6 +3561,7 @@ function SetupWizardV2({ settings, onComplete }) {
     { id: 'recipes',   title: 'Recipes',                 desc: 'Scan recipes & check ingredient availability.', icon: BookOpen, ready: true },
     { id: 'rota',      title: 'Rota (Staff Scheduling)', desc: 'Plan weekly shifts, roles and days off.',        icon: ChefHat,  ready: true },
     { id: 'analytics', title: 'Waste Analytics',         desc: 'Track disposed items, reasons and cost of waste.', icon: BarChart3, ready: true },
+    { id: 'haccp',     title: 'HACCP Compliance',        desc: 'Fridge temps, cleaning logs, delivery checks. Pass health inspections.', icon: ShieldCheck, ready: true },
   ]
 
   const WIDGETS_BY_MODULE = {
@@ -4071,6 +4086,7 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
     { key: 'recipes',   label: 'Recipes',          desc: 'AI recipe parsing & ingredient match' },
     { key: 'rota',      label: 'Rota',             desc: 'Weekly staff scheduling' },
     { key: 'analytics', label: 'Waste Analytics',  desc: 'Track disposals, reasons & cost' },
+    { key: 'haccp',     label: 'HACCP Compliance', desc: 'Fridge temps, cleaning, delivery checks' },
   ]
 
   useEffect(() => {
@@ -5228,3 +5244,613 @@ function AnalyticsView({ products }) {
 
 
 export default App
+
+// ============================================================================
+// HACCP Compliance View — Temperature logs, Cleaning schedule, Delivery checks
+// UK Food Standards Agency & EU Reg 852/2004 require these records to be kept.
+// ============================================================================
+function HaccpView({ currentUser }) {
+  const [tab, setTab] = useState('temperatures')
+  const [temps, setTemps] = useState([])
+  const [tasks, setTasks] = useState([])
+  const [cleanings, setCleanings] = useState([])
+  const [deliveries, setDeliveries] = useState([])
+  const [loading, setLoading] = useState(false)
+
+  // Modals
+  const [tempModal, setTempModal] = useState(null)      // {location?, temperatureC?}
+  const [taskModal, setTaskModal] = useState(null)      // {task?, taskName?, area?, frequency?}
+  const [cleanModal, setCleanModal] = useState(null)    // {task}
+  const [deliveryModal, setDeliveryModal] = useState(null) // {supplier?, ...}
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [t, k, l, d] = await Promise.all([
+        fetch('/api/haccp/temperatures').then(r => r.ok ? r.json() : []),
+        fetch('/api/haccp/cleaning-tasks').then(r => r.ok ? r.json() : []),
+        fetch('/api/haccp/cleaning-log').then(r => r.ok ? r.json() : []),
+        fetch('/api/haccp/deliveries').then(r => r.ok ? r.json() : []),
+      ])
+      setTemps(Array.isArray(t) ? t : [])
+      setTasks(Array.isArray(k) ? k : [])
+      setCleanings(Array.isArray(l) ? l : [])
+      setDeliveries(Array.isArray(d) ? d : [])
+    } catch (e) {
+      toast.error('Could not load compliance data — did you run migration-9?')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  // ---- Save handlers ------------------------------------------------------
+  const saveTemp = async (payload) => {
+    try {
+      const res = await fetch('/api/haccp/temperatures', { method: 'POST', body: JSON.stringify(payload) })
+      if (!res.ok) throw new Error('Save failed')
+      toast.success('Temperature logged')
+      setTempModal(null); load()
+    } catch (e) { toast.error(e.message) }
+  }
+
+  const saveTask = async (payload) => {
+    try {
+      const res = await fetch('/api/haccp/cleaning-tasks', { method: 'POST', body: JSON.stringify(payload) })
+      if (!res.ok) throw new Error('Save failed')
+      toast.success('Task saved')
+      setTaskModal(null); load()
+    } catch (e) { toast.error(e.message) }
+  }
+
+  const markTaskDone = async (task, notes = '') => {
+    try {
+      const res = await fetch('/api/haccp/cleaning-log', {
+        method: 'POST',
+        body: JSON.stringify({ taskId: task.id, taskName: task.taskName, completedBy: currentUser, notes }),
+      })
+      if (!res.ok) throw new Error('Save failed')
+      toast.success(`✓ ${task.taskName} — logged`)
+      setCleanModal(null); load()
+    } catch (e) { toast.error(e.message) }
+  }
+
+  const saveDelivery = async (payload) => {
+    try {
+      const res = await fetch('/api/haccp/deliveries', { method: 'POST', body: JSON.stringify(payload) })
+      if (!res.ok) throw new Error('Save failed')
+      toast.success('Delivery check saved')
+      setDeliveryModal(null); load()
+    } catch (e) { toast.error(e.message) }
+  }
+
+  const deleteRow = async (kind, id) => {
+    if (!confirm('Delete this record? This cannot be undone.')) return
+    const url = kind === 'temperatures' ? `/api/haccp/temperatures/${id}`
+              : kind === 'cleaning-tasks' ? `/api/haccp/cleaning-tasks/${id}`
+              : kind === 'cleaning-log' ? `/api/haccp/cleaning-log/${id}`
+              : `/api/haccp/deliveries/${id}`
+    try {
+      const res = await fetch(url, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Delete failed')
+      toast.success('Deleted')
+      load()
+    } catch (e) { toast.error(e.message) }
+  }
+
+  // ---- Report / Print ----------------------------------------------------
+  const printReport = async () => {
+    try {
+      const res = await fetch('/api/haccp/export?days=30')
+      if (!res.ok) throw new Error('Export failed')
+      const data = await res.json()
+      const w = window.open('', '_blank', 'width=900,height=700')
+      if (!w) { toast.error('Popup blocked — allow popups to print report'); return }
+      const fmt = (iso) => new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+      const html = `
+<!doctype html><html><head><title>HACCP Report — Last ${data.days} days</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; padding: 20px; color: #111; }
+  h1 { border-bottom: 3px solid #059669; padding-bottom: 8px; margin: 0 0 8px; }
+  h2 { color: #059669; margin-top: 30px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+  .meta { color: #666; font-size: 12px; margin-bottom: 20px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+  th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: #f5f5f5; font-weight: 600; }
+  .fail { color: #b91c1c; font-weight: 600; }
+  .pass { color: #059669; }
+  .empty { color: #888; font-style: italic; padding: 8px 0; }
+  @media print { body { padding: 10px; } h2 { break-before: auto; } table { break-inside: avoid; } }
+</style></head><body>
+<h1>HACCP Compliance Report</h1>
+<div class="meta">Generated ${fmt(data.generatedAt)} · Covers last ${data.days} days · Powered by ShelfWise</div>
+
+<h2>1) Temperature Log (${data.temperatures.length} records)</h2>
+${data.temperatures.length === 0 ? '<div class="empty">No records for this period.</div>' : `
+<table><thead><tr><th>Date/Time</th><th>Location</th><th>Temp (°C)</th><th>Result</th><th>Recorded by</th><th>Notes</th></tr></thead><tbody>
+${data.temperatures.map(t => `<tr><td>${fmt(t.recordedAt)}</td><td>${t.location}</td><td>${t.temperatureC}</td><td class="${t.isPass ? 'pass' : 'fail'}">${t.isPass ? 'PASS' : 'FAIL'}</td><td>${t.recordedBy || ''}</td><td>${t.notes || ''}</td></tr>`).join('')}
+</tbody></table>`}
+
+<h2>2) Cleaning Schedule (${data.cleaningTasks.length} active tasks, ${data.cleaningLog.length} completions)</h2>
+${data.cleaningLog.length === 0 ? '<div class="empty">No completions in this period.</div>' : `
+<table><thead><tr><th>Date/Time</th><th>Task</th><th>Completed by</th><th>Notes</th></tr></thead><tbody>
+${data.cleaningLog.map(c => `<tr><td>${fmt(c.completedAt)}</td><td>${c.taskName}</td><td>${c.completedBy || ''}</td><td>${c.notes || ''}</td></tr>`).join('')}
+</tbody></table>`}
+
+<h2>3) Delivery Inspections (${data.deliveries.length} records)</h2>
+${data.deliveries.length === 0 ? '<div class="empty">No records for this period.</div>' : `
+<table><thead><tr><th>Date/Time</th><th>Supplier</th><th>Temp (°C)</th><th>Temp OK</th><th>Pack OK</th><th>Labels OK</th><th>Result</th><th>Checked by</th><th>Notes</th></tr></thead><tbody>
+${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier || ''}</td><td>${d.temperatureC != null ? d.temperatureC : '—'}</td><td>${d.temperatureOk ? '✓' : '✗'}</td><td>${d.packagingOk ? '✓' : '✗'}</td><td>${d.labelsOk ? '✓' : '✗'}</td><td class="${d.overallPass ? 'pass' : 'fail'}">${d.overallPass ? 'PASS' : 'FAIL'}</td><td>${d.checkedBy || ''}</td><td>${d.notes || ''}</td></tr>`).join('')}
+</tbody></table>`}
+
+<div style="margin-top:40px; font-size:11px; color:#666; border-top:1px solid #ddd; padding-top:8px;">
+  This report was generated by ShelfWise · shelfwise.co.in · UK Food Standards Agency recommends retaining HACCP records for a minimum of 3 months.
+</div>
+<script>window.onload=()=>{setTimeout(()=>window.print(),400)}</script>
+</body></html>`
+      w.document.write(html); w.document.close()
+    } catch (e) { toast.error(e.message) }
+  }
+
+  // Group cleaning tasks by frequency, and check whether they're overdue today
+  const todayISO = new Date().toISOString().slice(0, 10)
+  const lastCompletionByTask = useMemo(() => {
+    const m = {}
+    for (const c of cleanings) {
+      if (!m[c.taskId] || c.completedAt > m[c.taskId]) m[c.taskId] = c.completedAt
+    }
+    return m
+  }, [cleanings])
+
+  const isTaskDue = (task) => {
+    const last = lastCompletionByTask[task.id]
+    if (!last) return true
+    const lastDate = new Date(last)
+    const now = new Date()
+    const days = (now - lastDate) / 86400000
+    if (task.frequency === 'daily') return days >= 1
+    if (task.frequency === 'weekly') return days >= 7
+    if (task.frequency === 'monthly') return days >= 30
+    return true
+  }
+
+  const formatDT = (iso) => {
+    try { return new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) }
+    catch { return iso }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h2 className="text-3xl font-bold tracking-tight">HACCP Compliance</h2>
+          <p className="text-muted-foreground mt-1">Health & safety records for inspections</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={printReport}>
+            <FileText className="h-4 w-4 mr-2" /> Print 30-day report
+          </Button>
+        </div>
+      </div>
+
+      {loading && <div className="text-sm text-muted-foreground"><Loader2 className="inline h-3 w-3 animate-spin mr-2" />Loading…</div>}
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Card className="border-2"><CardContent className="p-4">
+          <div className="flex items-center gap-2 text-emerald-700"><Thermometer className="h-4 w-4" /><span className="text-xs font-semibold uppercase tracking-wide">Temps (7d)</span></div>
+          <div className="text-2xl font-bold mt-1">{temps.filter(t => (Date.now() - new Date(t.recordedAt)) < 7*86400000).length}</div>
+          <div className="text-xs text-muted-foreground">{temps.filter(t => (Date.now() - new Date(t.recordedAt)) < 7*86400000 && !t.isPass).length} fails</div>
+        </CardContent></Card>
+        <Card className="border-2"><CardContent className="p-4">
+          <div className="flex items-center gap-2 text-emerald-700"><Droplets className="h-4 w-4" /><span className="text-xs font-semibold uppercase tracking-wide">Cleaning</span></div>
+          <div className="text-2xl font-bold mt-1">{tasks.filter(t => isTaskDue(t)).length}</div>
+          <div className="text-xs text-muted-foreground">due today</div>
+        </CardContent></Card>
+        <Card className="border-2"><CardContent className="p-4">
+          <div className="flex items-center gap-2 text-emerald-700"><Truck className="h-4 w-4" /><span className="text-xs font-semibold uppercase tracking-wide">Deliveries (7d)</span></div>
+          <div className="text-2xl font-bold mt-1">{deliveries.filter(d => (Date.now() - new Date(d.deliveryDate)) < 7*86400000).length}</div>
+          <div className="text-xs text-muted-foreground">{deliveries.filter(d => (Date.now() - new Date(d.deliveryDate)) < 7*86400000 && !d.overallPass).length} rejected</div>
+        </CardContent></Card>
+        <Card className="border-2"><CardContent className="p-4">
+          <div className="flex items-center gap-2 text-emerald-700"><ClipboardCheck className="h-4 w-4" /><span className="text-xs font-semibold uppercase tracking-wide">Total records</span></div>
+          <div className="text-2xl font-bold mt-1">{temps.length + cleanings.length + deliveries.length}</div>
+          <div className="text-xs text-muted-foreground">all time</div>
+        </CardContent></Card>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex items-center gap-1 border-b overflow-x-auto">
+        <Button variant={tab === 'temperatures' ? 'default' : 'ghost'} size="sm" onClick={() => setTab('temperatures')} className="rounded-b-none">
+          <Thermometer className="h-4 w-4 mr-2" /> Temperatures
+        </Button>
+        <Button variant={tab === 'cleaning' ? 'default' : 'ghost'} size="sm" onClick={() => setTab('cleaning')} className="rounded-b-none">
+          <Droplets className="h-4 w-4 mr-2" /> Cleaning
+        </Button>
+        <Button variant={tab === 'deliveries' ? 'default' : 'ghost'} size="sm" onClick={() => setTab('deliveries')} className="rounded-b-none">
+          <Truck className="h-4 w-4 mr-2" /> Deliveries
+        </Button>
+      </div>
+
+      {/* ==== TEMPERATURES TAB ==== */}
+      {tab === 'temperatures' && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={() => setTempModal({ location: 'Fridge 1', temperatureC: '' })}>
+              <Plus className="h-4 w-4 mr-1" /> Log temperature
+            </Button>
+            <p className="text-xs text-muted-foreground hidden sm:block">Log fridge/freezer temps at least twice daily. Safe range: 0–5°C fridge, ≤ -18°C freezer.</p>
+          </div>
+
+          {temps.length === 0 ? (
+            <Card><CardContent className="p-6 text-center text-muted-foreground">
+              <Thermometer className="h-8 w-8 mx-auto mb-2 opacity-40" />
+              No temperature readings yet. Log your first one to start building your compliance record.
+            </CardContent></Card>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>When</TableHead>
+                    <TableHead>Location</TableHead>
+                    <TableHead>Temp (°C)</TableHead>
+                    <TableHead>Result</TableHead>
+                    <TableHead>By</TableHead>
+                    <TableHead>Notes</TableHead>
+                    <TableHead className="w-12"></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {temps.slice(0, 100).map(t => (
+                    <TableRow key={t.id}>
+                      <TableCell className="text-xs">{formatDT(t.recordedAt)}</TableCell>
+                      <TableCell className="font-medium">{t.location}</TableCell>
+                      <TableCell>{t.temperatureC}</TableCell>
+                      <TableCell>
+                        {t.isPass
+                          ? <Badge className="bg-emerald-100 text-emerald-800 border-emerald-200">PASS</Badge>
+                          : <Badge className="bg-red-100 text-red-800 border-red-200">FAIL</Badge>}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{t.recordedBy || '—'}</TableCell>
+                      <TableCell className="text-xs">{t.notes || ''}</TableCell>
+                      <TableCell>
+                        <Button variant="ghost" size="icon" onClick={() => deleteRow('temperatures', t.id)}>
+                          <Trash2 className="h-4 w-4 text-red-600" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ==== CLEANING TAB ==== */}
+      {tab === 'cleaning' && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button size="sm" onClick={() => setTaskModal({ taskName: '', area: 'Kitchen', frequency: 'daily' })}>
+              <Plus className="h-4 w-4 mr-1" /> New cleaning task
+            </Button>
+            <p className="text-xs text-muted-foreground hidden sm:block">Create task templates once — then tick them off each day.</p>
+          </div>
+
+          {tasks.length === 0 ? (
+            <Card><CardContent className="p-6 text-center text-muted-foreground">
+              <Droplets className="h-8 w-8 mx-auto mb-2 opacity-40" />
+              No cleaning tasks yet. Add ones like "Sanitise prep surfaces", "Deep clean fryer", "Mop floors".
+            </CardContent></Card>
+          ) : (
+            <div className="grid gap-2 md:grid-cols-2">
+              {tasks.map(task => {
+                const due = isTaskDue(task)
+                const last = lastCompletionByTask[task.id]
+                return (
+                  <Card key={task.id} className={due ? 'border-2 border-amber-300 bg-amber-50/50' : ''}>
+                    <CardContent className="p-3 flex items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-semibold truncate">{task.taskName}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {task.area && <span>{task.area} · </span>}
+                          <span className="capitalize">{task.frequency}</span>
+                          {last ? <span> · last: {formatDT(last)}</span> : <span> · never done</span>}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button size="sm" variant={due ? 'default' : 'outline'} onClick={() => setCleanModal({ task })}>
+                          <Check className="h-4 w-4 mr-1" /> Done
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setTaskModal({ task, taskName: task.taskName, area: task.area, frequency: task.frequency })}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => deleteRow('cleaning-tasks', task.id)}>
+                          <Trash2 className="h-4 w-4 text-red-600" />
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )
+              })}
+            </div>
+          )}
+
+          {cleanings.length > 0 && (
+            <div>
+              <h3 className="text-sm font-semibold mt-6 mb-2">Recent completions</h3>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>When</TableHead>
+                      <TableHead>Task</TableHead>
+                      <TableHead>By</TableHead>
+                      <TableHead>Notes</TableHead>
+                      <TableHead className="w-12"></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {cleanings.slice(0, 30).map(c => (
+                      <TableRow key={c.id}>
+                        <TableCell className="text-xs">{formatDT(c.completedAt)}</TableCell>
+                        <TableCell className="font-medium">{c.taskName}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{c.completedBy || '—'}</TableCell>
+                        <TableCell className="text-xs">{c.notes || ''}</TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="icon" onClick={() => deleteRow('cleaning-log', c.id)}>
+                            <Trash2 className="h-4 w-4 text-red-600" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ==== DELIVERIES TAB ==== */}
+      {tab === 'deliveries' && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={() => setDeliveryModal({ supplier: '', temperatureC: '', temperatureOk: true, packagingOk: true, labelsOk: true, overallPass: true })}>
+              <Plus className="h-4 w-4 mr-1" /> Log delivery check
+            </Button>
+            <p className="text-xs text-muted-foreground hidden sm:block">Inspect chilled deliveries within 15 min of arrival. Chilled goods should be ≤ 8°C.</p>
+          </div>
+
+          {deliveries.length === 0 ? (
+            <Card><CardContent className="p-6 text-center text-muted-foreground">
+              <Truck className="h-8 w-8 mx-auto mb-2 opacity-40" />
+              No delivery checks yet.
+            </CardContent></Card>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>When</TableHead>
+                    <TableHead>Supplier</TableHead>
+                    <TableHead>°C</TableHead>
+                    <TableHead>Pack</TableHead>
+                    <TableHead>Labels</TableHead>
+                    <TableHead>Result</TableHead>
+                    <TableHead>By</TableHead>
+                    <TableHead className="w-12"></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {deliveries.slice(0, 100).map(d => (
+                    <TableRow key={d.id}>
+                      <TableCell className="text-xs">{formatDT(d.deliveryDate)}</TableCell>
+                      <TableCell className="font-medium">{d.supplier || '—'}</TableCell>
+                      <TableCell>
+                        {d.temperatureC != null ? <span>{d.temperatureC} {d.temperatureOk ? '✓' : <X className="inline h-3 w-3 text-red-600" />}</span> : '—'}
+                      </TableCell>
+                      <TableCell>{d.packagingOk ? <Check className="h-4 w-4 text-emerald-600" /> : <X className="h-4 w-4 text-red-600" />}</TableCell>
+                      <TableCell>{d.labelsOk ? <Check className="h-4 w-4 text-emerald-600" /> : <X className="h-4 w-4 text-red-600" />}</TableCell>
+                      <TableCell>
+                        {d.overallPass
+                          ? <Badge className="bg-emerald-100 text-emerald-800 border-emerald-200">ACCEPTED</Badge>
+                          : <Badge className="bg-red-100 text-red-800 border-red-200">REJECTED</Badge>}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{d.checkedBy || '—'}</TableCell>
+                      <TableCell>
+                        <Button variant="ghost" size="icon" onClick={() => deleteRow('deliveries', d.id)}>
+                          <Trash2 className="h-4 w-4 text-red-600" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ---- TEMPERATURE MODAL ---- */}
+      <Dialog open={!!tempModal} onOpenChange={o => !o && setTempModal(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Log temperature</DialogTitle></DialogHeader>
+          {tempModal && (
+            <div className="grid gap-3 py-2">
+              <div>
+                <Label>Location *</Label>
+                <Select value={tempModal.location} onValueChange={v => setTempModal({ ...tempModal, location: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {['Fridge 1','Fridge 2','Fridge 3','Freezer 1','Freezer 2','Walk-in Cold Room','Hot Hold','Display Cabinet'].map(l => (
+                      <SelectItem key={l} value={l}>{l}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Temperature (°C) *</Label>
+                <Input type="number" step="0.1" value={tempModal.temperatureC} onChange={e => setTempModal({ ...tempModal, temperatureC: e.target.value })} placeholder="e.g. 4.2" autoFocus />
+              </div>
+              <div>
+                <Label>Pass / Fail</Label>
+                <Select value={tempModal.isPass === false ? 'fail' : 'pass'} onValueChange={v => setTempModal({ ...tempModal, isPass: v === 'pass' })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pass">PASS — within safe range</SelectItem>
+                    <SelectItem value="fail">FAIL — out of range (needs action)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Notes (optional)</Label>
+                <Input value={tempModal.notes || ''} onChange={e => setTempModal({ ...tempModal, notes: e.target.value })} placeholder="e.g. door left open by delivery" />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTempModal(null)}>Cancel</Button>
+            <Button onClick={() => saveTemp({
+              location: tempModal.location,
+              temperatureC: Number(tempModal.temperatureC),
+              isPass: tempModal.isPass !== false,
+              recordedBy: currentUser,
+              notes: tempModal.notes || '',
+            })} disabled={!tempModal?.location || tempModal?.temperatureC === '' || tempModal?.temperatureC == null}>
+              <Check className="h-4 w-4 mr-1" /> Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---- CLEANING TASK MODAL (create/edit template) ---- */}
+      <Dialog open={!!taskModal} onOpenChange={o => !o && setTaskModal(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>{taskModal?.task ? 'Edit task' : 'New cleaning task'}</DialogTitle></DialogHeader>
+          {taskModal && (
+            <div className="grid gap-3 py-2">
+              <div>
+                <Label>Task name *</Label>
+                <Input value={taskModal.taskName} onChange={e => setTaskModal({ ...taskModal, taskName: e.target.value })} placeholder="e.g. Sanitise prep surfaces" autoFocus />
+              </div>
+              <div>
+                <Label>Area</Label>
+                <Select value={taskModal.area || 'Kitchen'} onValueChange={v => setTaskModal({ ...taskModal, area: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {['Kitchen','Storage','Cold room','Front of house','Toilets','Bins','Equipment'].map(l => (
+                      <SelectItem key={l} value={l}>{l}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Frequency</Label>
+                <Select value={taskModal.frequency || 'daily'} onValueChange={v => setTaskModal({ ...taskModal, frequency: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daily">Daily</SelectItem>
+                    <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="monthly">Monthly</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTaskModal(null)}>Cancel</Button>
+            <Button onClick={() => saveTask({
+              id: taskModal.task?.id,
+              taskName: taskModal.taskName,
+              area: taskModal.area,
+              frequency: taskModal.frequency,
+            })} disabled={!taskModal?.taskName?.trim()}>
+              <Check className="h-4 w-4 mr-1" /> Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---- MARK CLEANING TASK DONE MODAL ---- */}
+      <Dialog open={!!cleanModal} onOpenChange={o => !o && setCleanModal(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>Mark done: {cleanModal?.task?.taskName}</DialogTitle></DialogHeader>
+          {cleanModal && (
+            <div className="grid gap-3 py-2">
+              <p className="text-sm text-muted-foreground">Confirm this task has been completed. Time is auto-recorded.</p>
+              <div>
+                <Label>Notes (optional)</Label>
+                <Input value={cleanModal.notes || ''} onChange={e => setCleanModal({ ...cleanModal, notes: e.target.value })} placeholder="e.g. used bleach solution" />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCleanModal(null)}>Cancel</Button>
+            <Button onClick={() => markTaskDone(cleanModal.task, cleanModal.notes || '')}>
+              <Check className="h-4 w-4 mr-1" /> Confirm done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---- DELIVERY CHECK MODAL ---- */}
+      <Dialog open={!!deliveryModal} onOpenChange={o => !o && setDeliveryModal(null)}>
+        <DialogContent className="sm:max-w-md max-h-[92vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Delivery quality check</DialogTitle></DialogHeader>
+          {deliveryModal && (
+            <div className="grid gap-3 py-2">
+              <div>
+                <Label>Supplier</Label>
+                <Input value={deliveryModal.supplier} onChange={e => setDeliveryModal({ ...deliveryModal, supplier: e.target.value })} placeholder="e.g. Bidfood" />
+              </div>
+              <div>
+                <Label>Temperature at arrival (°C, optional)</Label>
+                <Input type="number" step="0.1" value={deliveryModal.temperatureC} onChange={e => setDeliveryModal({ ...deliveryModal, temperatureC: e.target.value })} placeholder="chilled ≤ 8°C" />
+              </div>
+              <div className="grid gap-2 pt-1">
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={deliveryModal.temperatureOk} onChange={e => setDeliveryModal({ ...deliveryModal, temperatureOk: e.target.checked })} />
+                  Temperature acceptable
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={deliveryModal.packagingOk} onChange={e => setDeliveryModal({ ...deliveryModal, packagingOk: e.target.checked })} />
+                  Packaging intact (no damage)
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={deliveryModal.labelsOk} onChange={e => setDeliveryModal({ ...deliveryModal, labelsOk: e.target.checked })} />
+                  Labels + use-by dates in order
+                </label>
+                <label className="flex items-center gap-2 text-sm font-semibold border-t pt-2 mt-1">
+                  <input type="checkbox" checked={deliveryModal.overallPass} onChange={e => setDeliveryModal({ ...deliveryModal, overallPass: e.target.checked })} />
+                  Delivery ACCEPTED (overall)
+                </label>
+              </div>
+              <div>
+                <Label>Notes (optional)</Label>
+                <Input value={deliveryModal.notes || ''} onChange={e => setDeliveryModal({ ...deliveryModal, notes: e.target.value })} placeholder="e.g. rejected 2 crates of prawns" />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeliveryModal(null)}>Cancel</Button>
+            <Button onClick={() => saveDelivery({
+              supplier: deliveryModal.supplier,
+              temperatureC: deliveryModal.temperatureC,
+              temperatureOk: deliveryModal.temperatureOk,
+              packagingOk: deliveryModal.packagingOk,
+              labelsOk: deliveryModal.labelsOk,
+              overallPass: deliveryModal.overallPass,
+              checkedBy: currentUser,
+              notes: deliveryModal.notes || '',
+            })}>
+              <Check className="h-4 w-4 mr-1" /> Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}

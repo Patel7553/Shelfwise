@@ -391,3 +391,42 @@ agent_communication:
 **Tested locally**: Playwright screenshot run confirms all 3 new steps render correctly (login form → kitchen type grid → widget cards). Code is packaged into `/app/public/shelfwise-supabase.zip` for the user to push to GitHub → Vercel.
 
 **Pending user action**: Replace files in local repo, `git add . && git commit && git push` to deploy.
+
+---
+
+## 2026-07-03 — HACCP Compliance Module (Migration 9)
+
+**Feature added by main agent**: Full HACCP food safety records module to support UK/EU legal compliance and pass health inspections. This is the app's biggest B2B selling point — kitchens are legally required to maintain 3+ months of these records.
+
+**DB changes** (`supabase/migration-9-haccp.sql`) — 4 new tables:
+1. `haccp_temperature_logs` — fridge/freezer/hot-hold readings, PASS/FAIL flag
+2. `haccp_cleaning_tasks` — task templates with frequency (daily/weekly/monthly), soft-deletable via `active=false`
+3. `haccp_cleaning_log` — completion audit trail
+4. `haccp_delivery_checks` — supplier goods-in inspection (temp, packaging, labels, overall pass)
+All indexed by `(kitchen_id, timestamp desc)`. All FK to `kitchens` with `on delete cascade`.
+
+**Backend changes** (`app/api/[[...path]]/route.js`):
+- New row-shape helpers: `haccpTempFromDb`, `haccpTaskFromDb`, `haccpCleaningLogFromDb`, `haccpDeliveryFromDb`
+- Added `'haccp'` to the `ownerOrChef` GET path allowlist
+- GET endpoints: `/api/haccp/temperatures`, `/api/haccp/cleaning-tasks`, `/api/haccp/cleaning-log`, `/api/haccp/deliveries`, `/api/haccp/export?days=N`
+- POST endpoints: same paths — log temp, create/edit cleaning task, mark cleaning complete, log delivery check
+- DELETE endpoints: `/api/haccp/temperatures/:id`, `/api/haccp/cleaning-tasks/:id` (soft-delete), `/api/haccp/cleaning-log/:id`, `/api/haccp/deliveries/:id`
+- All routes are kitchen-scoped via `requireOwnerOrChef` + `.eq('kitchen_id', kid)`; return `[]` gracefully if migration-9 not yet run.
+
+**Frontend changes** (`app/app/page.js`):
+- Added `Thermometer`, `Droplets`, `Truck`, `ClipboardCheck`, `FileText` icons from lucide-react
+- Added `'haccp'` to both `MODULES` (SetupWizardV2) and `ALL_MODULES` (SettingsDialog) so users can enable it
+- Added `hasHaccp` derived boolean + `Compliance` nav button (desktop + mobile) + `view === 'haccp'` render slot
+- New `HaccpView` component (~470 lines) with 3 tabs: **Temperatures | Cleaning | Deliveries**
+- Summary cards at top: 7-day temps count + fails, cleaning tasks due today, deliveries + rejections, total records
+- Per-tab: Add / Edit / Delete actions with modal dialogs, table view with PASS/FAIL badges
+- Cleaning tab intelligently highlights tasks that are OVERDUE based on their frequency + last completion timestamp
+- **Print 30-day report** button — opens a browser popup with a fully formatted HACCP audit report (auto-triggers `window.print()`); user saves as PDF for inspectors.
+
+**Testing**: Backend endpoints not tested by automated agent (require live Supabase auth) — user will validate end-to-end on Vercel after running migration-9-haccp.sql in Supabase SQL Editor.
+
+**Pending user action**:
+1. Run `supabase/migration-9-haccp.sql` in Supabase SQL Editor.
+2. Extract `shelfwise-session-haccp.zip` and drag-drop replace files in local repo.
+3. Commit + push → Vercel auto-deploys.
+4. Enable "HACCP Compliance" module in Settings → Modules for the desired kitchens.

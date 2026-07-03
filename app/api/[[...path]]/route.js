@@ -124,6 +124,57 @@ function wasteFromDb(w) {
   }
 }
 
+// ---- HACCP row shapers ----
+function haccpTempFromDb(r) {
+  if (!r) return null
+  return {
+    id: r.id,
+    location: r.location,
+    temperatureC: Number(r.temperature_c),
+    isPass: !!r.is_pass,
+    recordedAt: r.recorded_at,
+    recordedBy: r.recorded_by || '',
+    notes: r.notes || '',
+  }
+}
+function haccpTaskFromDb(r) {
+  if (!r) return null
+  return {
+    id: r.id,
+    taskName: r.task_name,
+    area: r.area || '',
+    frequency: r.frequency || 'daily',
+    active: r.active !== false,
+    createdAt: r.created_at,
+  }
+}
+function haccpCleaningLogFromDb(r) {
+  if (!r) return null
+  return {
+    id: r.id,
+    taskId: r.task_id || null,
+    taskName: r.task_name,
+    completedAt: r.completed_at,
+    completedBy: r.completed_by || '',
+    notes: r.notes || '',
+  }
+}
+function haccpDeliveryFromDb(r) {
+  if (!r) return null
+  return {
+    id: r.id,
+    supplier: r.supplier || '',
+    deliveryDate: r.delivery_date,
+    temperatureC: r.temperature_c != null ? Number(r.temperature_c) : null,
+    temperatureOk: !!r.temperature_ok,
+    packagingOk: !!r.packaging_ok,
+    labelsOk: !!r.labels_ok,
+    overallPass: !!r.overall_pass,
+    checkedBy: r.checked_by || '',
+    notes: r.notes || '',
+  }
+}
+
 // ISO week key like "2026-W27" — used to bucket waste-by-week analytics.
 function weekKey(dateIso) {
   const d = new Date(dateIso)
@@ -446,7 +497,7 @@ export async function GET(request, { params }) {
     }
 
     // ----- OWNER / CHEF endpoints (kitchen-scoped) -----
-    const ownerOrChef = ['products','settings','facets','stats','recipes','rota','waste'].some(p => path === p || path.startsWith(p + '/'))
+    const ownerOrChef = ['products','settings','facets','stats','recipes','rota','waste','haccp'].some(p => path === p || path.startsWith(p + '/'))
     if (ownerOrChef) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
@@ -591,6 +642,87 @@ export async function GET(request, { params }) {
           totals.byWeek[wk] = (totals.byWeek[wk] || 0) + 1
         }
         return json({ entries, summary: totals })
+      }
+
+      // ---- HACCP: list temperature logs ----
+      if (path === 'haccp/temperatures') {
+        const url = new URL(request.url)
+        const from = url.searchParams.get('from')
+        const to = url.searchParams.get('to')
+        let q = sb.from('haccp_temperature_logs').select('*').eq('kitchen_id', kid).order('recorded_at', { ascending: false }).limit(2000)
+        if (from) q = q.gte('recorded_at', from)
+        if (to) q = q.lte('recorded_at', to + 'T23:59:59Z')
+        const { data, error } = await q
+        if (error) {
+          if (/relation .* does not exist/i.test(error.message || '')) return json([])
+          throw error
+        }
+        return json((data || []).map(haccpTempFromDb))
+      }
+
+      // ---- HACCP: list cleaning task templates ----
+      if (path === 'haccp/cleaning-tasks') {
+        const { data, error } = await sb.from('haccp_cleaning_tasks')
+          .select('*').eq('kitchen_id', kid).eq('active', true).order('created_at', { ascending: true }).limit(500)
+        if (error) {
+          if (/relation .* does not exist/i.test(error.message || '')) return json([])
+          throw error
+        }
+        return json((data || []).map(haccpTaskFromDb))
+      }
+
+      // ---- HACCP: list cleaning completions ----
+      if (path === 'haccp/cleaning-log') {
+        const url = new URL(request.url)
+        const from = url.searchParams.get('from')
+        const to = url.searchParams.get('to')
+        let q = sb.from('haccp_cleaning_log').select('*').eq('kitchen_id', kid).order('completed_at', { ascending: false }).limit(2000)
+        if (from) q = q.gte('completed_at', from)
+        if (to) q = q.lte('completed_at', to + 'T23:59:59Z')
+        const { data, error } = await q
+        if (error) {
+          if (/relation .* does not exist/i.test(error.message || '')) return json([])
+          throw error
+        }
+        return json((data || []).map(haccpCleaningLogFromDb))
+      }
+
+      // ---- HACCP: list delivery inspection records ----
+      if (path === 'haccp/deliveries') {
+        const url = new URL(request.url)
+        const from = url.searchParams.get('from')
+        const to = url.searchParams.get('to')
+        let q = sb.from('haccp_delivery_checks').select('*').eq('kitchen_id', kid).order('delivery_date', { ascending: false }).limit(2000)
+        if (from) q = q.gte('delivery_date', from)
+        if (to) q = q.lte('delivery_date', to + 'T23:59:59Z')
+        const { data, error } = await q
+        if (error) {
+          if (/relation .* does not exist/i.test(error.message || '')) return json([])
+          throw error
+        }
+        return json((data || []).map(haccpDeliveryFromDb))
+      }
+
+      // ---- HACCP: consolidated export (last N days, default 30) ----
+      if (path === 'haccp/export') {
+        const url = new URL(request.url)
+        const days = Math.max(1, Math.min(365, Number(url.searchParams.get('days') || 30)))
+        const cutoff = new Date(Date.now() - days * 86400000).toISOString()
+        const [temps, tasks, cleanings, deliveries] = await Promise.all([
+          sb.from('haccp_temperature_logs').select('*').eq('kitchen_id', kid).gte('recorded_at', cutoff).order('recorded_at', { ascending: false }),
+          sb.from('haccp_cleaning_tasks').select('*').eq('kitchen_id', kid).eq('active', true),
+          sb.from('haccp_cleaning_log').select('*').eq('kitchen_id', kid).gte('completed_at', cutoff).order('completed_at', { ascending: false }),
+          sb.from('haccp_delivery_checks').select('*').eq('kitchen_id', kid).gte('delivery_date', cutoff).order('delivery_date', { ascending: false }),
+        ])
+        const missing = (r) => r.error && /relation .* does not exist/i.test(r.error.message || '')
+        return json({
+          days,
+          generatedAt: new Date().toISOString(),
+          temperatures: missing(temps) ? [] : (temps.data || []).map(haccpTempFromDb),
+          cleaningTasks: missing(tasks) ? [] : (tasks.data || []).map(haccpTaskFromDb),
+          cleaningLog: missing(cleanings) ? [] : (cleanings.data || []).map(haccpCleaningLogFromDb),
+          deliveries: missing(deliveries) ? [] : (deliveries.data || []).map(haccpDeliveryFromDb),
+        })
       }
     }
 
@@ -943,7 +1075,7 @@ Output strictly valid JSON with no other text.`
     }
 
     // -------- Kitchen-scoped mutations --------
-    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','rota','waste'].some(p => path === p)
+    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries'].some(p => path === p)
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
@@ -997,6 +1129,91 @@ Output strictly valid JSON with no other text.`
         const { data, error: e2 } = await sb.from('waste_log').insert(row).select().single()
         if (e2) throw e2
         return json(wasteFromDb(data), 201)
+      }
+
+      // ------- HACCP: log a temperature reading -------
+      if (path === 'haccp/temperatures') {
+        const body = await request.json()
+        const location = String(body.location || '').trim()
+        if (!location) return json({ error: 'location required' }, 400)
+        const temp = Number(body.temperatureC)
+        if (!Number.isFinite(temp)) return json({ error: 'temperatureC must be a number' }, 400)
+        const row = {
+          id: uuidv4(),
+          kitchen_id: kid,
+          location,
+          temperature_c: temp,
+          is_pass: body.isPass !== false,
+          recorded_at: body.recordedAt || new Date().toISOString(),
+          recorded_by: String(body.recordedBy || ctx.userEmail || '').trim(),
+          notes: String(body.notes || '').trim(),
+        }
+        const { data, error: e2 } = await sb.from('haccp_temperature_logs').insert(row).select().single()
+        if (e2) throw e2
+        return json(haccpTempFromDb(data), 201)
+      }
+
+      // ------- HACCP: create/update cleaning task template -------
+      if (path === 'haccp/cleaning-tasks') {
+        const body = await request.json()
+        const taskName = String(body.taskName || '').trim()
+        if (!taskName) return json({ error: 'taskName required' }, 400)
+        const row = {
+          kitchen_id: kid,
+          task_name: taskName,
+          area: String(body.area || '').trim(),
+          frequency: ['daily','weekly','monthly'].includes(body.frequency) ? body.frequency : 'daily',
+          active: body.active !== false,
+        }
+        if (body.id) {
+          const { data, error: e2 } = await sb.from('haccp_cleaning_tasks')
+            .update(row).eq('id', body.id).eq('kitchen_id', kid).select().single()
+          if (e2) throw e2
+          return json(haccpTaskFromDb(data))
+        }
+        const { data, error: e2 } = await sb.from('haccp_cleaning_tasks').insert({ id: uuidv4(), ...row }).select().single()
+        if (e2) throw e2
+        return json(haccpTaskFromDb(data), 201)
+      }
+
+      // ------- HACCP: mark a cleaning task complete -------
+      if (path === 'haccp/cleaning-log') {
+        const body = await request.json()
+        const taskName = String(body.taskName || '').trim()
+        if (!taskName) return json({ error: 'taskName required' }, 400)
+        const row = {
+          id: uuidv4(),
+          kitchen_id: kid,
+          task_id: body.taskId || null,
+          task_name: taskName,
+          completed_at: body.completedAt || new Date().toISOString(),
+          completed_by: String(body.completedBy || ctx.userEmail || '').trim(),
+          notes: String(body.notes || '').trim(),
+        }
+        const { data, error: e2 } = await sb.from('haccp_cleaning_log').insert(row).select().single()
+        if (e2) throw e2
+        return json(haccpCleaningLogFromDb(data), 201)
+      }
+
+      // ------- HACCP: record a delivery quality check -------
+      if (path === 'haccp/deliveries') {
+        const body = await request.json()
+        const row = {
+          id: uuidv4(),
+          kitchen_id: kid,
+          supplier: String(body.supplier || '').trim(),
+          delivery_date: body.deliveryDate || new Date().toISOString(),
+          temperature_c: body.temperatureC != null && body.temperatureC !== '' ? Number(body.temperatureC) : null,
+          temperature_ok: body.temperatureOk !== false,
+          packaging_ok: body.packagingOk !== false,
+          labels_ok: body.labelsOk !== false,
+          overall_pass: body.overallPass !== false,
+          checked_by: String(body.checkedBy || ctx.userEmail || '').trim(),
+          notes: String(body.notes || '').trim(),
+        }
+        const { data, error: e2 } = await sb.from('haccp_delivery_checks').insert(row).select().single()
+        if (e2) throw e2
+        return json(haccpDeliveryFromDb(data), 201)
       }
 
       if (path === 'products') {
@@ -1261,6 +1478,27 @@ export async function DELETE(request, { params }) {
     }
     if (segs[0] === 'waste' && segs[1]) {
       const { error } = await sb.from('waste_log').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
+      if (error) throw error
+      return json({ ok: true })
+    }
+    if (segs[0] === 'haccp' && segs[1] === 'temperatures' && segs[2]) {
+      const { error } = await sb.from('haccp_temperature_logs').delete().eq('id', segs[2]).eq('kitchen_id', ctx.kitchenId)
+      if (error) throw error
+      return json({ ok: true })
+    }
+    if (segs[0] === 'haccp' && segs[1] === 'cleaning-tasks' && segs[2]) {
+      // Soft-delete: mark inactive to keep historical log rows valid
+      const { error } = await sb.from('haccp_cleaning_tasks').update({ active: false }).eq('id', segs[2]).eq('kitchen_id', ctx.kitchenId)
+      if (error) throw error
+      return json({ ok: true })
+    }
+    if (segs[0] === 'haccp' && segs[1] === 'cleaning-log' && segs[2]) {
+      const { error } = await sb.from('haccp_cleaning_log').delete().eq('id', segs[2]).eq('kitchen_id', ctx.kitchenId)
+      if (error) throw error
+      return json({ ok: true })
+    }
+    if (segs[0] === 'haccp' && segs[1] === 'deliveries' && segs[2]) {
+      const { error } = await sb.from('haccp_delivery_checks').delete().eq('id', segs[2]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
       return json({ ok: true })
     }

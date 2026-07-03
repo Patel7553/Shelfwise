@@ -1,0 +1,146 @@
+╔══════════════════════════════════════════════════════════════════╗
+║  ShelfWise — Session HACCP: Compliance Module                    ║
+║  Fridge Temps + Cleaning Schedule + Delivery Checks + PDF Export ║
+╚══════════════════════════════════════════════════════════════════╝
+
+WHY THIS MATTERS:
+─────────────────
+UK Food Standards Agency and EU Reg 852/2004 REQUIRE food businesses
+to keep >= 3 months of HACCP records. Health inspectors WILL ask for
+these. Failing to produce them = warning notice / fine / closure.
+
+This module makes your kitchen inspection-ready with one click.
+Use this in your sales pitch: "Pass your health inspection with ShelfWise."
+
+═══════════════════════════════════════════════════════════════════
+DEPLOYMENT — 3 STEPS (10 minutes total)
+═══════════════════════════════════════════════════════════════════
+
+STEP 1 — RUN THE DATABASE MIGRATION (2 min)
+────────────────────────────────────────────
+  a) Go to https://supabase.com/dashboard → your ShelfWise project
+  b) Left sidebar → SQL Editor → "New query"
+  c) Open the file: supabase/migration-9-haccp.sql
+     Copy the ENTIRE contents.
+  d) Paste into SQL Editor → click "Run" (bottom right)
+  e) You should see "Success. No rows returned."
+     (This creates 4 new tables: haccp_temperature_logs,
+      haccp_cleaning_tasks, haccp_cleaning_log, haccp_delivery_checks)
+
+STEP 2 — REPLACE FILES IN YOUR LOCAL REPO (3 min)
+──────────────────────────────────────────────────
+  Open VS Code on the shelfwise folder.
+
+  Drag-and-drop these files from the zip → they will OVERWRITE:
+    ✓ app/page.js
+    ✓ app/api/[[...path]]/route.js
+    ✓ supabase/migration-9-haccp.sql  (NEW FILE)
+
+  VS Code should say "Do you want to overwrite?" → click "Yes to All"
+
+STEP 3 — DEPLOY TO VERCEL (5 min)
+──────────────────────────────────
+  In VS Code:
+    a) Left sidebar → Source Control icon (branch icon)
+    b) You should see 3 files changed
+    c) Type commit message: "Add HACCP compliance module"
+    d) Click the ✓ Commit button
+    e) Click "Sync Changes" (the cloud icon at bottom)
+    f) Wait 2-3 minutes → Vercel auto-deploys → refresh shelfwise.co.in
+
+═══════════════════════════════════════════════════════════════════
+HOW TO USE — FIRST TIME
+═══════════════════════════════════════════════════════════════════
+
+  1. Log in as owner
+  2. Click Settings (gear icon) → "Modules" tab
+  3. Toggle ON "HACCP Compliance" → Save
+  4. Refresh page → new "Compliance" button appears in top nav
+  5. Click Compliance → 3 tabs will appear
+
+  ─── TEMPERATURES TAB ───
+  Twice a day (morning + evening), log fridge/freezer temps.
+  Safe ranges:
+    • Fridge:  0 to 5°C
+    • Freezer: below -18°C
+    • Hot Hold: above 63°C
+  If out of range → tick "FAIL" and add a note (e.g. "door propped open").
+
+  ─── CLEANING TAB ───
+  Add task templates ONCE:
+    • Sanitise prep surfaces  (daily)
+    • Clean fryer            (daily)
+    • Deep clean walk-in     (weekly)
+    • Descale coffee machine (monthly)
+  Each day, tap "Done" to log completion. Overdue tasks glow amber.
+
+  ─── DELIVERIES TAB ───
+  When a delivery arrives, log:
+    • Supplier name
+    • Temperature at arrival (chilled should be ≤ 8°C)
+    • Packaging + Labels checks
+    • Overall PASS or REJECTED
+
+  ─── PRINT REPORT (KEY FEATURE) ───
+  Top-right "Print 30-day report" button:
+    → Opens formatted PDF-ready page with ALL your records
+    → Auto-triggers print dialog → "Save as PDF"
+    → Hand this to the inspector — done.
+
+═══════════════════════════════════════════════════════════════════
+YOUR NEW SALES PITCH (for those 5 kitchen visits)
+═══════════════════════════════════════════════════════════════════
+
+"Bhai, environmental health officer aata hai to fridge temp records
+ aur cleaning log dikhana padta hai — 3 mahine ka. Hai aapke paas?
+
+ [Wait for their answer — usually no, or scattered paper]
+
+ Dekho — ShelfWise mein daily temp log karna 5 second ka kaam hai.
+ 30 din baad ek button dabao → PDF ready, print karo, inspector ko do.
+
+ 30 din free trial hai, no card. Try karke dekho."
+
+═══════════════════════════════════════════════════════════════════
+WHAT'S NEW (technical changelog)
+═══════════════════════════════════════════════════════════════════
+
+Database:
+  + 4 new tables (see migration-9-haccp.sql)
+
+Backend (app/api/[[...path]]/route.js):
+  + GET  /api/haccp/temperatures    (list, filter by from/to date)
+  + GET  /api/haccp/cleaning-tasks  (list active templates)
+  + GET  /api/haccp/cleaning-log    (list completions)
+  + GET  /api/haccp/deliveries      (list delivery checks)
+  + GET  /api/haccp/export?days=30  (all-in-one for report)
+  + POST /api/haccp/temperatures
+  + POST /api/haccp/cleaning-tasks  (create or edit template)
+  + POST /api/haccp/cleaning-log    (mark done)
+  + POST /api/haccp/deliveries
+  + DELETE /api/haccp/(kind)/:id
+
+Frontend (app/page.js):
+  + HACCP module toggle in Setup Wizard + Settings
+  + "Compliance" nav button (desktop + mobile)
+  + New HaccpView with 3 tabs, summary cards, print-ready report
+  + Cleaning-task overdue detection based on frequency
+
+═══════════════════════════════════════════════════════════════════
+QUESTIONS OR ISSUES?
+═══════════════════════════════════════════════════════════════════
+
+If the Compliance button doesn't show up:
+  → Did you enable it in Settings → Modules? (see step above)
+
+If you see "Could not load compliance data — did you run migration-9?":
+  → You skipped Step 1. Go run the SQL migration.
+
+If the Print report button opens a blank page:
+  → Your browser blocked the popup. Look for a popup icon in the
+    address bar and click "Always allow".
+
+Everything else — WhatsApp me a screenshot.
+
+Good luck with your first 5 kitchens 🍅
+— ShelfWise
