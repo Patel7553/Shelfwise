@@ -1272,7 +1272,7 @@ function App() {
           <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
             <DialogTitle>{editing ? 'Edit Product' : 'Add Product'}</DialogTitle>
           </DialogHeader>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-2 px-6 overflow-y-auto flex-1">
+          <div className="grid grid-cols-1 gap-3 py-2 px-6 overflow-y-auto flex-1">
             <div className="col-span-2">
               <Label htmlFor="name">Name *</Label>
               <Input id="name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Whole Milk" />

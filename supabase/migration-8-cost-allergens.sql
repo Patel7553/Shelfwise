@@ -1,6 +1,18 @@
 -- ShelfWise — Migration 8: Cost tracking + allergens + reorder points
 -- Safe to run multiple times.
 
+-- Change quantity from integer → numeric so fractional values (e.g. 2.5 kg) are allowed.
+-- Prevents "invalid input syntax for type integer" errors on receipt/voice imports.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_name = 'products' and column_name = 'quantity' and data_type = 'integer'
+  ) then
+    alter table products alter column quantity type numeric using quantity::numeric;
+  end if;
+end $$;
+
 -- Currency preference on the kitchen row (GBP / USD / EUR / INR / etc.)
 alter table kitchens add column if not exists currency text not null default 'GBP';
 
