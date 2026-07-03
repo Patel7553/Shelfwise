@@ -2106,48 +2106,42 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
 
                   {/* Expanded editor */}
                   {r._expanded && (
-                    <div className="border-t px-3 py-3 space-y-2 bg-slate-50 rounded-b-xl">
+                    <div className="border-t px-3 py-3 space-y-3 bg-slate-50 rounded-b-xl">
                       <div>
                         <Label className="text-xs">Product name</Label>
-                        <Input value={r.name} onChange={e => updateRow(i, { name: e.target.value })} className="h-9 text-sm bg-white" />
+                        <Input value={r.name} onChange={e => updateRow(i, { name: e.target.value })} className="h-10 text-sm bg-white" />
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <Label className="text-xs">Quantity</Label>
-                          <Input type="number" step="0.1" min="0" value={r.quantity} onChange={e => updateRow(i, { quantity: e.target.value })} className="h-9 text-sm bg-white" />
-                        </div>
-                        <div>
-                          <Label className="text-xs">Unit</Label>
-                          <select value={r.unit} onChange={e => updateRow(i, { unit: e.target.value })} className="h-9 text-sm border rounded-md w-full bg-white px-2">
-                            {['ea', 'kg', 'g', 'L', 'mL', 'pack', 'box', 'bunch'].map(u => <option key={u} value={u}>{u}</option>)}
-                          </select>
-                        </div>
+                      <div>
+                        <Label className="text-xs">Quantity</Label>
+                        <Input type="number" step="0.1" min="0" value={r.quantity} onChange={e => updateRow(i, { quantity: e.target.value })} className="h-10 text-sm bg-white" />
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <Label className="text-xs">Cost per unit {currencySymbol && `(${currencySymbol})`}</Label>
-                          <Input type="number" step="0.01" min="0" value={r.unitCost} onChange={e => updateRow(i, { unitCost: e.target.value })} className="h-9 text-sm bg-white" placeholder="—" />
-                        </div>
-                        <div>
-                          <Label className="text-xs">Storage</Label>
-                          <select value={r.storageType} onChange={e => updateRow(i, { storageType: e.target.value })} className="h-9 text-sm border rounded-md w-full bg-white px-2">
-                            {['Fridge', 'Freezer', 'Dry', 'Ambient'].map(s => <option key={s} value={s}>{s}</option>)}
-                          </select>
-                        </div>
+                      <div>
+                        <Label className="text-xs">Unit</Label>
+                        <select value={r.unit} onChange={e => updateRow(i, { unit: e.target.value })} className="h-10 text-sm border rounded-md w-full bg-white px-2">
+                          {['ea', 'kg', 'g', 'L', 'mL', 'pack', 'box', 'bunch'].map(u => <option key={u} value={u}>{u}</option>)}
+                        </select>
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <Label className="text-xs">Category</Label>
-                          <Input value={r.category} onChange={e => updateRow(i, { category: e.target.value })} className="h-9 text-sm bg-white" placeholder="e.g. Dairy" />
-                        </div>
-                        <div>
-                          <Label className="text-xs">Expiry date</Label>
-                          <Input type="date" value={r.expiryDate} onChange={e => updateRow(i, { expiryDate: e.target.value })} className="h-9 text-sm bg-white" />
-                        </div>
+                      <div>
+                        <Label className="text-xs">Cost per unit {currencySymbol && `(${currencySymbol})`}</Label>
+                        <Input type="number" step="0.01" min="0" value={r.unitCost} onChange={e => updateRow(i, { unitCost: e.target.value })} className="h-10 text-sm bg-white" placeholder="—" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Storage</Label>
+                        <select value={r.storageType} onChange={e => updateRow(i, { storageType: e.target.value })} className="h-10 text-sm border rounded-md w-full bg-white px-2">
+                          {['Fridge', 'Freezer', 'Dry', 'Ambient'].map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <Label className="text-xs">Category</Label>
+                        <Input value={r.category} onChange={e => updateRow(i, { category: e.target.value })} className="h-10 text-sm bg-white" placeholder="e.g. Dairy" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Expiry date</Label>
+                        <Input type="date" value={r.expiryDate} onChange={e => updateRow(i, { expiryDate: e.target.value })} className="h-10 text-sm bg-white" />
                       </div>
                       <div>
                         <Label className="text-xs">Shelf / Location</Label>
-                        <Input value={r.location} onChange={e => updateRow(i, { location: e.target.value })} className="h-9 text-sm bg-white" placeholder="e.g. Shelf A2" />
+                        <Input value={r.location} onChange={e => updateRow(i, { location: e.target.value })} className="h-10 text-sm bg-white" placeholder="e.g. Shelf A2" />
                       </div>
                       <div>
                         <Label className="text-xs">Allergens ({r.allergens?.length || 0})</Label>
