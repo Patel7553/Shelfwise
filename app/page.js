@@ -717,6 +717,34 @@ function App() {
         } catch {}
       }
 
+      // 2b) Try Open Products Facts — same team as OFF but for non-food packaged goods
+      // (bakery, snacks, cleaning, general household). Often catches things OFF misses.
+      if (!found) {
+        try {
+          const res = await fetch(`https://world.openproductsfacts.org/api/v0/product/${encodeURIComponent(code)}.json`)
+          const data = await res.json()
+          if (data?.status === 1 && data?.product) {
+            const p = data.product
+            const nm = p.product_name || p.product_name_en || p.generic_name || ''
+            if (nm.trim()) {
+              detected.name = nm
+              detected.category = (p.categories || '').split(',')[0]?.trim() || ''
+              if (p.quantity) {
+                const m = String(p.quantity).match(/([\d.]+)\s*(kg|g|L|ml|mL|cl)/i)
+                if (m) {
+                  detected.quantity = Number(m[1])
+                  const u = m[2].toLowerCase()
+                  detected.unit = u === 'ml' ? 'mL' : (u === 'l' ? 'L' : u)
+                }
+              }
+              detected.storageType = 'Ambient'
+              toast.success(`Found: ${detected.name}. Please enter the expiry date from the package.`)
+              found = true
+            }
+          }
+        } catch {}
+      }
+
       // 3) Try UPCitemdb (free tier — global product database, retail/US products)
       if (!found) {
         try {
@@ -746,6 +774,28 @@ function App() {
             detected.expiryDate = ''
             toast.success(`Found: ${data.product.product_name}. Please enter the expiry date.`)
             found = true
+          }
+        } catch {}
+      }
+
+      // 5) Try our server-side commercial barcode lookup (Barcode Lookup API + Go-UPC).
+      // These are the paid DBs with strong UK own-brand coverage (Tesco, Sainsbury's).
+      // Only fires if the owner has configured BARCODELOOKUP_API_KEY or GO_UPC_API_KEY
+      // in Vercel env vars. Otherwise skips silently.
+      if (!found) {
+        try {
+          const res = await fetch(`/api/barcode-lookup?code=${encodeURIComponent(code)}`)
+          if (res.ok) {
+            const data = await res.json()
+            if (data?.found && data.name) {
+              detected.name = data.name
+              detected.category = data.category || (data.brand ? data.brand : '')
+              detected.storageType = data.storageType || 'Ambient'
+              detected.customFields = { ...detected.customFields, barcode: code, brand: data.brand || '' }
+              detected.expiryDate = ''
+              toast.success(`Found (${data.source}): ${data.name}. Please enter the expiry date.`)
+              found = true
+            }
           }
         } catch {}
       }
@@ -2853,7 +2903,7 @@ function BarcodeScanDialog({ open, onClose, onFound, loading, onManual }) {
             )}
           </div>
 
-          <p className="text-[11px] text-muted-foreground text-center">💡 Powered by Open Food Facts (2.8M+ products) — some barcodes may not be in the free database</p>
+          <p className="text-[11px] text-muted-foreground text-center">💡 Powered by 5 barcode databases + AI Vision fallback — works on almost any product</p>
         </div>
 
         <DialogFooter>

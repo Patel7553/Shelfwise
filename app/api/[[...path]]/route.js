@@ -724,6 +724,70 @@ export async function GET(request, { params }) {
     // ----- PUBLIC endpoints -----
     if (path === '' || path === 'health') return json({ ok: true, service: 'ShelfWise API (Supabase / multi-tenant)' })
 
+    // ---- Commercial barcode lookup fallback ----
+    // Queries paid barcode databases IF their API keys are set as env vars.
+    // Called from the frontend AFTER free public DBs (OFF, OpenProductsFacts,
+    // UPCitemdb, OpenBeautyFacts) fail. Returns null if no keys configured OR
+    // if all providers miss — frontend then falls back to AI Vision.
+    if (path === 'barcode-lookup') {
+      const url = new URL(request.url)
+      const code = String(url.searchParams.get('code') || '').trim()
+      if (!code) return json({ error: 'code required' }, 400)
+
+      let result = null
+
+      // Barcode Lookup API — https://www.barcodelookup.com/api
+      // Free tier: 100 lookups/day with signup. Excellent UK & US coverage.
+      const blKey = process.env.BARCODELOOKUP_API_KEY
+      if (blKey && !result) {
+        try {
+          const r = await fetch(`https://api.barcodelookup.com/v3/products?barcode=${encodeURIComponent(code)}&formatted=y&key=${blKey}`)
+          if (r.ok) {
+            const data = await r.json()
+            const p = Array.isArray(data?.products) && data.products[0]
+            const nm = p?.title || p?.product_name || ''
+            if (nm && nm.trim()) {
+              result = {
+                source: 'barcodelookup',
+                name: nm.trim(),
+                brand: p.brand || p.manufacturer || '',
+                category: (p.category || '').split(' > ').pop() || '',
+                storageType: 'Ambient',
+              }
+            }
+          }
+        } catch (e) { console.warn('barcodelookup failed', e.message) }
+      }
+
+      // Go-UPC — https://go-upc.com
+      // Free tier: 100 lookups/day with signup.
+      const goKey = process.env.GO_UPC_API_KEY
+      if (goKey && !result) {
+        try {
+          const r = await fetch(`https://go-upc.com/api/v1/code/${encodeURIComponent(code)}`, {
+            headers: { Authorization: `Bearer ${goKey}` }
+          })
+          if (r.ok) {
+            const data = await r.json()
+            const p = data?.product
+            const nm = p?.name || ''
+            if (nm && nm.trim()) {
+              result = {
+                source: 'goupc',
+                name: nm.trim(),
+                brand: p.brand || '',
+                category: p.category || '',
+                storageType: 'Ambient',
+              }
+            }
+          }
+        } catch (e) { console.warn('goupc failed', e.message) }
+      }
+
+      if (!result) return json({ found: false, hasKeys: !!(blKey || goKey) })
+      return json({ found: true, ...result })
+    }
+
     // ---- CRON: weekly digest — Vercel calls this every Monday 8am UTC ----
     // Auth: shared secret in Authorization header (Vercel Cron sets it automatically
     // to `Bearer $CRON_SECRET` when the env var is defined).
