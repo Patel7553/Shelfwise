@@ -1250,32 +1250,25 @@ function App() {
       )}
       {/* Top Nav */}
       <header className="border-b bg-white/90 backdrop-blur-md sticky top-0 z-30">
-        <div className="container mx-auto px-4 py-3 flex items-center justify-between gap-2">
+        <div className="container mx-auto px-3 sm:px-4 py-3 grid grid-cols-[auto_1fr_auto] items-center gap-2">
           {/* LEFT — logo (tap = go to Dashboard from any page) */}
           <button
             type="button"
             onClick={goToDashboard}
             title="Go to Dashboard"
-            className="flex items-center gap-2 min-w-0 rounded-lg hover:bg-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-400 px-1 py-0.5 transition"
+            className="flex items-center rounded-lg hover:bg-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-400 p-1 transition"
           >
-            <img src="/logo-icon.png?v=3" alt="ShelfWise" className="h-10 w-10 rounded-lg object-contain bg-white shadow-sm shrink-0" />
-            <div className="min-w-0 hidden sm:block md:hidden lg:hidden">
-              {/* On tablets we skip the mini-label so the centered name has room */}
-            </div>
-            <div className="min-w-0 md:hidden">
-              <h1 className="text-base font-bold tracking-tight truncate text-left">{settings.kitchenName || 'ShelfWise'}</h1>
-              <p className="text-[10px] text-muted-foreground -mt-0.5 truncate text-left">{settings.tagline || 'From shelf to plate.'}</p>
-            </div>
+            <img src="/logo-icon.png?v=3" alt="Home" className="h-9 w-9 sm:h-10 sm:w-10 rounded-lg object-contain bg-white shadow-sm shrink-0" />
           </button>
 
-          {/* CENTER — Kitchen name (desktop / tablet only, mobile shows it in the left cluster) */}
-          <div className="hidden md:flex flex-1 items-center justify-center min-w-0 px-4">
+          {/* CENTER — Kitchen name (always centered, always UPPERCASE) */}
+          <div className="flex items-center justify-center min-w-0 px-1 sm:px-4">
             <div className="text-center min-w-0">
-              <h1 className="text-lg font-bold tracking-tight truncate text-emerald-900">
+              <h1 className="text-base sm:text-lg font-bold tracking-tight truncate text-emerald-900 uppercase">
                 {settings.kitchenName || 'ShelfWise'}
               </h1>
               {settings.kitchenType && (
-                <p className="text-[11px] text-emerald-700/70 -mt-0.5 truncate">{settings.kitchenType}</p>
+                <p className="text-[10px] sm:text-[11px] text-emerald-700/70 -mt-0.5 truncate">{settings.kitchenType}</p>
               )}
             </div>
           </div>
@@ -2668,7 +2661,7 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
   }, [fromDate, toDate])
 
   const fmtDay = (d) => d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
-  const rows = Array.from({ length: Math.max(5, Math.min(50, Number(rowsPerDay) || 25)) })
+  const rows = Array.from({ length: Math.max(5, Math.min(100, Number(rowsPerDay) || 25)) })
 
   const handlePrint = () => {
     // Give the browser a tick to apply layout before printing
@@ -2738,7 +2731,7 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
             </div>
             <div className="min-w-[90px]">
               <Label className="text-[11px] text-slate-600">Rows / day</Label>
-              <Input type="number" min="5" max="50" value={rowsPerDay} onChange={e => setRowsPerDay(Number(e.target.value) || 25)} className="h-9" />
+              <Input type="number" min="5" max="100" value={rowsPerDay} onChange={e => setRowsPerDay(Number(e.target.value) || 25)} className="h-9" />
             </div>
             <div className="flex gap-1 ml-auto">
               <Button size="sm" variant="outline" onClick={() => applyQuick('today')} className="h-9 text-xs">Today only</Button>
@@ -2778,12 +2771,13 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
               <thead>
                 <tr>
                   <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px] w-6">#</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '24%' }}>Product</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '8%' }}>Qty</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '9%' }}>Unit</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '13%' }}>Expiry (DD/MM/YY)</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '11%' }}>Storage</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '14%' }}>Shelf / Loc.</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '22%' }}>Product</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '7%' }}>Qty</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '8%' }}>Unit</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '11%' }}>Expiry (DD/MM/YY)</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '10%' }}>Storage</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '12%' }}>Shelf / Loc.</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '10%' }}>Name / Initials</th>
                   <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]">Notes</th>
                 </tr>
               </thead>
@@ -2791,6 +2785,7 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
                 {rows.map((_, i) => (
                   <tr key={i}>
                     <td className="border border-slate-400 px-1.5 py-2 text-center text-slate-400">{i + 1}</td>
+                    <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
                     <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
                     <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
                     <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
@@ -5825,6 +5820,11 @@ function HaccpView({ currentUser }) {
 
   // Modals
   const [tempModal, setTempModal] = useState(null)      // {location?, temperatureC?}
+  const [scanTempOpen, setScanTempOpen] = useState(false)  // AI-photo temperature log scanner
+  const [scanTempImage, setScanTempImage] = useState(null) // data URL
+  const [scanTempRotation, setScanTempRotation] = useState(0)
+  const [scanTempBusy, setScanTempBusy] = useState(false)
+  const [scanTempReadings, setScanTempReadings] = useState([]) // editable rows
   const [taskModal, setTaskModal] = useState(null)      // {task?, taskName?, area?, frequency?}
   const [cleanModal, setCleanModal] = useState(null)    // {task}
   const [deliveryModal, setDeliveryModal] = useState(null) // {supplier?, ...}
@@ -5852,6 +5852,76 @@ function HaccpView({ currentUser }) {
   useEffect(() => { load() }, [load])
 
   // ---- Save handlers ------------------------------------------------------
+  // ---- AI-scan a physical HACCP temperature log sheet ----
+  const applyImgRotation = async (dataUrl, deg) => {
+    if (!deg) return dataUrl
+    return new Promise((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        const isSide = deg === 90 || deg === 270
+        canvas.width = isSide ? img.height : img.width
+        canvas.height = isSide ? img.width : img.height
+        const ctx = canvas.getContext('2d')
+        ctx.translate(canvas.width / 2, canvas.height / 2)
+        ctx.rotate((deg * Math.PI) / 180)
+        ctx.drawImage(img, -img.width / 2, -img.height / 2)
+        resolve(canvas.toDataURL('image/jpeg', 0.88))
+      }
+      img.onerror = reject; img.src = dataUrl
+    })
+  }
+  const runScanTemps = async () => {
+    if (!scanTempImage) return
+    setScanTempBusy(true)
+    try {
+      const send = await applyImgRotation(scanTempImage, scanTempRotation)
+      const res = await fetch('/api/haccp/scan-temperatures', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: send }),
+      })
+      if (!res.ok) throw new Error('AI failed to read the sheet')
+      const data = await res.json()
+      const list = Array.isArray(data.readings) ? data.readings : []
+      if (list.length === 0) throw new Error('No readings detected — try a clearer photo')
+      const sheetDate = data.sheetDate || new Date().toISOString().slice(0, 10)
+      setScanTempReadings(list.map(r => ({
+        ...r,
+        recordedAt: `${sheetDate}T${r.timeOfDay === 'morning' ? '08:00' : r.timeOfDay === 'evening' ? '17:00' : '12:00'}:00Z`,
+        _keep: true,
+      })))
+      toast.success(`\u2728 ${list.length} readings detected \u2014 review & save`)
+    } catch (e) { toast.error(e.message) }
+    finally { setScanTempBusy(false) }
+  }
+  const saveScannedTemps = async () => {
+    const keep = scanTempReadings.filter(r => r._keep && r.location && Number.isFinite(Number(r.temperatureC)))
+    if (!keep.length) { toast.error('Nothing to save'); return }
+    setScanTempBusy(true)
+    try {
+      let saved = 0
+      for (const r of keep) {
+        const res = await fetch('/api/haccp/temperatures', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            location: r.location,
+            temperatureC: Number(r.temperatureC),
+            isPass: r.isPass !== false,
+            recordedAt: r.recordedAt,
+            recordedBy: r.initials || currentUser,
+            notes: r.notes || '',
+          }),
+        })
+        if (res.ok) saved++
+      }
+      toast.success(`\u2705 Saved ${saved}/${keep.length} readings`)
+      setScanTempOpen(false); setScanTempImage(null); setScanTempRotation(0); setScanTempReadings([])
+      load()
+    } catch (e) { toast.error(e.message) }
+    finally { setScanTempBusy(false) }
+  }
+
+
   const saveTemp = async (payload) => {
     try {
       const res = await fetch('/api/haccp/temperatures', { method: 'POST', body: JSON.stringify(payload) })
@@ -6042,11 +6112,14 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
       {/* ==== TEMPERATURES TAB ==== */}
       {tab === 'temperatures' && (
         <div className="space-y-3">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Button size="sm" onClick={() => setTempModal({ location: 'Fridge 1', temperatureC: '' })}>
               <Plus className="h-4 w-4 mr-1" /> Log temperature
             </Button>
-            <p className="text-xs text-muted-foreground hidden sm:block">Log fridge/freezer temps at least twice daily. Safe range: 0–5°C fridge, ≤ -18°C freezer.</p>
+            <Button size="sm" variant="outline" onClick={() => setScanTempOpen(true)} className="border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100">
+              📸 Scan temp log <span className="ml-1 text-[9px] font-bold bg-emerald-600 text-white rounded px-1">AI</span>
+            </Button>
+            <p className="text-xs text-muted-foreground hidden sm:block">Log fridge/freezer temps twice daily. Safe: 0–5°C fridge, ≤ -18°C freezer.</p>
           </div>
 
           {temps.length === 0 ? (
@@ -6239,6 +6312,106 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
           )}
         </div>
       )}
+
+      {/* ---- AI TEMP-LOG SCANNER DIALOG ---- */}
+      <Dialog open={scanTempOpen} onOpenChange={o => { if (!o) { setScanTempOpen(false); setScanTempImage(null); setScanTempRotation(0); setScanTempReadings([]) } }}>
+        <DialogContent className="sm:max-w-2xl max-h-[92vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">📸 Scan Temperature Log <span className="text-[10px] bg-emerald-600 text-white rounded px-1.5 py-0.5 font-bold">AI</span></DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              Snap your paper temperature log sheet — AI reads every fridge/freezer row and adds all readings in one click.
+            </p>
+          </DialogHeader>
+          {!scanTempImage && (
+            <div className="grid grid-cols-2 gap-3 py-3">
+              <label className="border-2 border-dashed border-emerald-300 rounded-xl p-5 text-center hover:bg-emerald-50 hover:border-emerald-500 transition cursor-pointer">
+                <div className="text-4xl mb-1">📸</div>
+                <p className="font-semibold text-slate-700 text-sm">Take a photo</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">Snap the clipboard now</p>
+                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e => {
+                  const f = e.target.files?.[0]; if (!f) return
+                  const r = new FileReader(); r.onload = () => setScanTempImage(String(r.result)); r.readAsDataURL(f); e.target.value = ''
+                }} />
+              </label>
+              <label className="border-2 border-dashed border-blue-300 rounded-xl p-5 text-center hover:bg-blue-50 hover:border-blue-500 transition cursor-pointer">
+                <div className="text-4xl mb-1">🖼️</div>
+                <p className="font-semibold text-slate-700 text-sm">Upload from gallery</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">Photo, WhatsApp, scanned image</p>
+                <input type="file" accept="image/*" className="hidden" onChange={e => {
+                  const f = e.target.files?.[0]; if (!f) return
+                  const r = new FileReader(); r.onload = () => setScanTempImage(String(r.result)); r.readAsDataURL(f); e.target.value = ''
+                }} />
+              </label>
+            </div>
+          )}
+          {scanTempImage && scanTempReadings.length === 0 && (
+            <div className="py-2 space-y-3">
+              <div className="relative overflow-hidden rounded-lg border bg-slate-50">
+                <img src={scanTempImage} alt="temp log" className="w-full max-h-[340px] object-contain transition-transform" style={{ transform: `rotate(${scanTempRotation}deg)` }} />
+                <Button size="sm" variant="outline" className="absolute top-2 right-2 bg-white" onClick={() => { setScanTempImage(null); setScanTempRotation(0) }}>Retake</Button>
+              </div>
+              <div className="flex items-center justify-between gap-2 rounded-lg bg-blue-50 border border-blue-200 px-3 py-2">
+                <p className="text-xs text-blue-900">📐 Rotate first if sideways so text reads left→right.</p>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button size="sm" variant="outline" onClick={() => setScanTempRotation((scanTempRotation + 270) % 360)} className="bg-white">↺ 90°</Button>
+                  <Button size="sm" variant="outline" onClick={() => setScanTempRotation((scanTempRotation + 90) % 360)} className="bg-white">↻ 90°</Button>
+                  {scanTempRotation !== 0 && <span className="text-xs text-blue-700 font-medium">({scanTempRotation}°)</span>}
+                </div>
+              </div>
+              <Button onClick={runScanTemps} disabled={scanTempBusy} className="w-full bg-emerald-600 hover:bg-emerald-700">
+                {scanTempBusy ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> AI is reading (10-30 seconds)…</> : '✨ Extract readings with AI'}
+              </Button>
+            </div>
+          )}
+          {scanTempReadings.length > 0 && (
+            <div className="space-y-2 py-2">
+              <p className="text-xs bg-blue-50 border border-blue-200 rounded px-3 py-2">
+                💡 Review each reading. Untick to skip, edit any field if wrong. Save when done.
+              </p>
+              <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
+                {scanTempReadings.map((r, i) => (
+                  <div key={i} className={`border-2 rounded-lg p-2 ${r._keep ? (r.isPass ? 'border-emerald-200 bg-white' : 'border-red-200 bg-red-50/50') : 'border-slate-200 bg-slate-50 opacity-60'}`}>
+                    <div className="flex items-center gap-2">
+                      <input type="checkbox" checked={r._keep} onChange={e => setScanTempReadings(list => list.map((x, j) => j === i ? { ...x, _keep: e.target.checked } : x))} className="h-4 w-4 accent-emerald-600" />
+                      <Input value={r.location} onChange={e => setScanTempReadings(list => list.map((x, j) => j === i ? { ...x, location: e.target.value } : x))} className="h-8 text-sm flex-1" placeholder="Fridge 1" />
+                      <Input type="number" step="0.1" value={r.temperatureC} onChange={e => setScanTempReadings(list => list.map((x, j) => j === i ? { ...x, temperatureC: e.target.value } : x))} className="h-8 text-sm w-20" />
+                      <span className="text-xs text-slate-500 shrink-0">°C</span>
+                      <select value={r.isPass ? 'pass' : 'fail'} onChange={e => setScanTempReadings(list => list.map((x, j) => j === i ? { ...x, isPass: e.target.value === 'pass' } : x))} className={`h-8 text-xs rounded border px-1 ${r.isPass ? 'text-emerald-700 border-emerald-300' : 'text-red-700 border-red-300'}`}>
+                        <option value="pass">PASS</option>
+                        <option value="fail">FAIL</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <span className="w-4 shrink-0"></span>
+                      <select value={r.timeOfDay} onChange={e => {
+                        const tod = e.target.value
+                        const d = (r.recordedAt || '').slice(0, 10) || new Date().toISOString().slice(0,10)
+                        const t = tod === 'morning' ? '08:00' : tod === 'evening' ? '17:00' : '12:00'
+                        setScanTempReadings(list => list.map((x, j) => j === i ? { ...x, timeOfDay: tod, recordedAt: `${d}T${t}:00Z` } : x))
+                      }} className="h-7 text-[11px] rounded border px-1 border-slate-300">
+                        <option value="morning">🌅 Morning</option>
+                        <option value="evening">🌆 Evening</option>
+                        <option value="other">🕐 Other</option>
+                      </select>
+                      <Input value={r.initials} onChange={e => setScanTempReadings(list => list.map((x, j) => j === i ? { ...x, initials: e.target.value } : x))} className="h-7 text-[11px] w-20" placeholder="Initials" />
+                      <Input value={r.notes || ''} onChange={e => setScanTempReadings(list => list.map((x, j) => j === i ? { ...x, notes: e.target.value } : x))} className="h-7 text-[11px] flex-1" placeholder="Notes" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setScanTempOpen(false)}>Cancel</Button>
+            {scanTempReadings.length > 0 && (
+              <Button onClick={saveScannedTemps} disabled={scanTempBusy} className="bg-emerald-600 hover:bg-emerald-700">
+                <Check className="h-4 w-4 mr-1" /> Save {scanTempReadings.filter(r => r._keep).length} readings
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
 
       {/* ---- TEMPERATURE MODAL ---- */}
       <Dialog open={!!tempModal} onOpenChange={o => !o && setTempModal(null)}>

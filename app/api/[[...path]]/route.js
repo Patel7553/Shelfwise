@@ -662,6 +662,86 @@ Output strictly valid JSON with no other text.`
 }
 
 // ---- Generate recipes FROM a list of ingredients (uses what's expiring/in-stock) ----
+// ---- Parse a HACCP temperature log photo (physical clipboard sheet) ----
+// User has a paper log with multiple fridge names + morning/evening temps handwritten.
+// AI reads it and returns a list of temperature readings ready to bulk-insert.
+async function parseTemperatureLogPhoto(base64DataUrl) {
+  const key = process.env.EMERGENT_LLM_KEY
+  if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+  const today = new Date().toISOString().slice(0, 10)
+  const systemPrompt = `You are an expert at reading professional kitchen HACCP temperature log sheets.
+These are physical clipboard sheets where staff handwrite fridge/freezer temperatures at fixed times of day (morning + evening usually).
+
+The image may be ROTATED — read text in any orientation.
+Common layouts include:
+  - Rows = fridge/freezer/hot-hold locations (e.g. "Fridge 1", "Walk-in Cold Room", "Freezer 2", "Hot Hold")
+  - Columns = AM and PM (or specific times like "08:00" and "17:00")
+  - Cells contain the temperature reading in Celsius, possibly with initials next to it
+  - Some sheets have separate rows for each date
+
+Rules:
+1. Look at EVERY cell that has a number — that's a reading.
+2. For each reading, output ONE JSON entry with: location (fridge/freezer name), temperatureC (number), timeOfDay ("morning"|"evening"|"other"), initials (if visible), notes.
+3. Safe ranges (used for PASS/FAIL flag):
+   - Fridge / Chilled: 0 to 5°C → PASS. Outside this = FAIL.
+   - Freezer: at or below -18°C → PASS. Anything warmer than -15°C = FAIL.
+   - Hot Hold: at or above 63°C → PASS. Below = FAIL.
+   - Otherwise unclassified → default isPass=true.
+4. Ignore column headers, decorative text, kitchen name, signatures.
+5. If the sheet has a printed DATE, use it as the recordedAt date. Otherwise use today (${today}).
+
+Return ONLY valid JSON:
+{
+  "sheetDate": "YYYY-MM-DD" | null,
+  "readings": [
+    {
+      "location": "e.g. Fridge 1",
+      "temperatureC": number,
+      "isPass": true | false,
+      "timeOfDay": "morning" | "evening" | "other",
+      "initials": "e.g. JS" | "",
+      "notes": ""
+    }
+  ]
+}
+Output STRICT JSON — no prose, no markdown fences.`
+
+  const body = {
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: [
+        { type: 'text', text: 'Read this HACCP temperature log sheet. Extract every temperature reading. Return JSON.' },
+        { type: 'image_url', image_url: { url: base64DataUrl } }
+      ]}
+    ],
+    temperature: 0.05,
+    response_format: { type: 'json_object' },
+  }
+  const res = await fetch(EMERGENT_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`Emergent LLM ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  const content = data?.choices?.[0]?.message?.content || '{}'
+  let parsed
+  try { parsed = JSON.parse(content) } catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : {} }
+  const readings = Array.isArray(parsed.readings) ? parsed.readings : []
+  return {
+    sheetDate: parsed.sheetDate || null,
+    readings: readings.map(r => ({
+      location: String(r.location || '').trim(),
+      temperatureC: Number(r.temperatureC),
+      isPass: r.isPass !== false,
+      timeOfDay: ['morning','evening','other'].includes(r.timeOfDay) ? r.timeOfDay : 'other',
+      initials: String(r.initials || '').trim().slice(0, 6),
+      notes: String(r.notes || '').trim(),
+    })).filter(r => r.location && Number.isFinite(r.temperatureC)),
+  }
+}
+
 async function generateRecipesFromIngredients({ ingredients, servings = 4, cuisine = '', dietary = [], skillLevel = 'easy' }) {
   const key = process.env.EMERGENT_LLM_KEY
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
@@ -1484,7 +1564,7 @@ export async function POST(request, { params }) {
     }
 
     // -------- AI passthrough (still requires auth, but not kitchen scoping)
-    if (path === 'scan' || path === 'scan-receipt' || path === 'parse-voice' || path === 'recipe-instructions' || path === 'identify-product' || path === 'recipe/generate') {
+    if (path === 'scan' || path === 'scan-receipt' || path === 'parse-voice' || path === 'recipe-instructions' || path === 'identify-product' || path === 'recipe/generate' || path === 'haccp/scan-temperatures') {
       const { ctx, error } = await requireAuth(request)
       if (error) return error
       const body = await request.json()
@@ -1521,6 +1601,13 @@ export async function POST(request, { params }) {
           skillLevel: ['easy','medium','hard'].includes(body.skillLevel) ? body.skillLevel : 'easy',
         }
         const parsed = await generateRecipesFromIngredients(opts)
+        return json(parsed)
+      }
+
+      // ---- HACCP: scan a physical temperature log sheet (photo) ----
+      if (path === 'haccp/scan-temperatures') {
+        if (!body.image || !body.image.startsWith('data:image/')) return json({ error: 'Invalid or missing image' }, 400)
+        const parsed = await parseTemperatureLogPhoto(body.image)
         return json(parsed)
       }
       if (path === 'parse-voice') {
