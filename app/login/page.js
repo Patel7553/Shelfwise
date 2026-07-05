@@ -12,6 +12,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { toast, Toaster } from 'sonner'
 import { ChefHat, Loader2, LogIn } from 'lucide-react'
+import InstallAppPrompt from '@/components/InstallAppPrompt'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -152,6 +153,9 @@ export default function LoginPage() {
             </Tabs>
           </CardContent>
         </Card>
+
+        {/* PWA install prompt — detects platform and offers appropriate CTA */}
+        <InstallAppPrompt />
 
         <p className="text-[11px] text-center text-slate-400 mt-4">© {new Date().getFullYear()} ShelfWise</p>
       </div>
