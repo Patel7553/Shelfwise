@@ -2284,6 +2284,26 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
 
   const updateRow = (i, patch) => setRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r))
   const removeRow = (i) => setRows(rs => rs.filter((_, idx) => idx !== i))
+  const addBlankRow = () => {
+    setRows(rs => [...rs, {
+      name: '',
+      quantity: 1,
+      unit: 'ea',
+      unitCost: '',
+      category: '',
+      storageType: 'Fridge',
+      expiryDate: '',
+      location: '',
+      allergens: [],
+      _include: true,
+      _expanded: true,   // open the new row immediately so user can type
+    }])
+    // Scroll to the new row after render
+    setTimeout(() => {
+      const container = document.getElementById('receipt-rows-list')
+      if (container) container.scrollTop = container.scrollHeight
+    }, 100)
+  }
 
   const included = rows.filter(r => r._include && r.name.trim())
   const totalCost = included.reduce((sum, r) => sum + (Number(r.unitCost) || 0) * (Number(r.quantity) || 0), 0)
@@ -2394,10 +2414,18 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
             </div>
 
             <p className="text-xs text-slate-600 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
-              💡 <b>Tap any item to edit</b> — fix name, price, category, storage, expiry, allergens. Untick to skip.
+              💡 <b>Tap any item to edit</b> — fix name, price, category, storage, expiry, allergens. Untick to skip. Missing an item? Use the <b>+ Add row</b> button below.
             </p>
 
-            <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+            {rows.length === 0 && (
+              <div className="rounded-lg border-2 border-dashed border-amber-300 bg-amber-50 p-4 text-center">
+                <div className="text-3xl mb-2">🤔</div>
+                <p className="text-sm font-semibold text-amber-900">AI couldn't detect any items</p>
+                <p className="text-xs text-amber-800 mt-1">Try retaking with better light, or add items manually below.</p>
+              </div>
+            )}
+
+            <div id="receipt-rows-list" className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
               {rows.map((r, i) => (
                 <div key={i} className={`border-2 rounded-xl transition ${r._include ? 'border-emerald-200 bg-white' : 'border-slate-200 bg-slate-50 opacity-60'}`}>
                   {/* Collapsed row — tap to expand */}
@@ -2506,9 +2534,19 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
                 </div>
               ))}
               {rows.length === 0 && (
-                <p className="p-6 text-center text-slate-500 text-sm">No items to import.</p>
+                <p className="p-6 text-center text-slate-500 text-sm">No items to import — tap <b>+ Add row</b> below to type items manually.</p>
               )}
             </div>
+
+            {/* Manual "add row" button — Level-4 safety net for anything the AI missed */}
+            <Button
+              type="button"
+              variant="outline"
+              onClick={addBlankRow}
+              className="w-full border-dashed border-2 border-emerald-300 text-emerald-700 hover:bg-emerald-50 py-6"
+            >
+              <Plus className="h-4 w-4 mr-2" /> Add row manually (for items AI missed)
+            </Button>
           </div>
         )}
 
