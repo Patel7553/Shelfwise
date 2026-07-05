@@ -194,6 +194,9 @@ function App() {
   const [recipeImage, setRecipeImage] = useState(null)
   const [recipeLoading, setRecipeLoading] = useState(false)
   const [recipeResult, setRecipeResult] = useState(null)
+  // AI Recipe Generator (from ingredients) — new feature
+  const [recipeGenOpen, setRecipeGenOpen] = useState(false)
+  const [recipeGenSeed, setRecipeGenSeed] = useState([])   // pre-fill list of ingredient names
   const [recipeSaving, setRecipeSaving] = useState(false)
 
   // Saved Recipes state
@@ -502,6 +505,26 @@ function App() {
   }
 
   // Open Barcode scanner
+  // Open AI Recipe Generator — optionally pre-filled from expiring items
+  const openRecipeGen = (seed = []) => {
+    setRecipeGenSeed(Array.isArray(seed) ? seed : [])
+    setRecipeGenOpen(true)
+  }
+  const openRecipeGenFromExpiring = () => {
+    const today = new Date(); today.setHours(0,0,0,0)
+    const soon = new Date(today); soon.setDate(soon.getDate() + 3)
+    const seed = (products || [])
+      .filter(p => p.expiryDate && new Date(p.expiryDate) <= soon && new Date(p.expiryDate) >= new Date(today.getTime() - 86400000))
+      .map(p => p.name)
+      .filter(Boolean)
+      .slice(0, 15)
+    if (!seed.length) {
+      toast.info('Nothing expiring in the next 3 days — pick ingredients manually.')
+    }
+    openRecipeGen(seed)
+  }
+
+
   const openBarcode = () => {
     setBarcodeValue('')
     setBarcodeOpen(true)
@@ -1343,7 +1366,7 @@ function App() {
 
       <main className="container mx-auto px-4 py-8">
         {view === 'dashboard' && (
-          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} currency={settings.currency} />
+          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -1377,6 +1400,7 @@ function App() {
             openRecipe={openRecipe}
             onView={setViewRecipe}
             onDelete={deleteRecipe}
+            openRecipeGen={openRecipeGen}
           />
         )}
         {view === 'rota' && (
@@ -1811,6 +1835,15 @@ function App() {
         }}
         settings={settings}
       />
+
+      {/* AI Recipe Generator — creates recipes from a list of ingredients */}
+      <RecipeGenDialog
+        open={recipeGenOpen}
+        onClose={() => setRecipeGenOpen(false)}
+        seed={recipeGenSeed}
+        inventoryNames={(products || []).map(p => p.name).filter(Boolean)}
+      />
+
 
       {/* Barcode Scanner Dialog */}
       <BarcodeScanDialog
@@ -3121,7 +3154,7 @@ function UseTodayPanel({ products, goToInventory, formatDate }) {
   )
 }
 
-function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, openReceipt, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes, currency }) {
+function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, openReceipt, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes, currency, openRecipeGen, openRecipeGenFromExpiring }) {
   const [quickSearch, setQuickSearch] = useState('')
   const [globalResults, setGlobalResults] = useState(null)
   const [globalLoading, setGlobalLoading] = useState(false)
@@ -3225,6 +3258,11 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
         <button onClick={printLogbook} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-amber-200 bg-amber-50 hover:bg-amber-100 hover:border-amber-300 transition text-amber-800">
           <span className="text-2xl">📒</span>
           <span className="text-xs font-semibold">Print Logbook</span>
+        </button>
+        <button onClick={openRecipeGenFromExpiring} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-rose-200 bg-rose-50 hover:bg-rose-100 hover:border-rose-300 transition text-rose-800 relative">
+          <span className="text-2xl">🧑‍🍳</span>
+          <span className="text-xs font-semibold">Cook Expiring</span>
+          <span className="absolute top-1 right-1 text-[8px] font-bold bg-rose-600 text-white rounded px-1">AI</span>
         </button>
       </div>
 
@@ -3595,18 +3633,18 @@ function RecipeResult({ result, setResult, onBack, onClose, goToInventory, onSav
   )
 }
 
-function RecipesView({ recipes, search, setSearch, openRecipe, onView, onDelete }) {
+function RecipesView({ recipes, search, setSearch, openRecipe, onView, onDelete, openRecipeGen }) {
   const [tab, setTab] = useState('saved') // 'saved' | 'scan'
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-3xl font-bold tracking-tight">Recipes</h2>
-        <p className="text-muted-foreground mt-1">Browse saved recipes or scan a new one</p>
+        <p className="text-muted-foreground mt-1">Browse saved recipes, scan an existing one, or generate a new one from ingredients with AI</p>
       </div>
 
-      {/* Two-tab toggle */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      {/* Three-tab toggle */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <button onClick={() => setTab('saved')}
           className={`text-left rounded-xl border-2 p-5 transition ${tab === 'saved' ? 'border-purple-500 bg-purple-50' : 'border-slate-200 hover:border-purple-300 bg-white'}`}>
           <div className="flex items-center gap-3">
@@ -3628,6 +3666,19 @@ function RecipesView({ recipes, search, setSearch, openRecipe, onView, onDelete 
             <div>
               <p className="font-semibold">Scan or Upload Recipe</p>
               <p className="text-xs text-muted-foreground">Paste text or upload a recipe photo</p>
+            </div>
+          </div>
+        </button>
+        <button onClick={() => { openRecipeGen && openRecipeGen([]) }}
+          className="text-left rounded-xl border-2 p-5 transition border-rose-200 hover:border-rose-400 bg-rose-50 relative">
+          <span className="absolute top-2 right-2 text-[9px] font-bold bg-rose-600 text-white rounded px-1.5 py-0.5">AI</span>
+          <div className="flex items-center gap-3">
+            <div className="h-11 w-11 rounded-lg flex items-center justify-center bg-rose-600 text-white">
+              <Sparkles className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="font-semibold">Generate Recipe from Ingredients</p>
+              <p className="text-xs text-muted-foreground">Pick ingredients → AI creates 3 recipes with allergens + timing</p>
             </div>
           </div>
         </button>
@@ -6274,4 +6325,282 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
       </Dialog>
     </div>
   )
+}
+
+
+// ============================================================================
+// AI Recipe Generator Dialog
+// - Takes a list of ingredients (seeded from expiring items or manually added)
+// - Calls /api/recipe/generate → returns 3 AI recipes
+// - Displays as expandable cards with allergen badges, prep/cook time, steps
+// ============================================================================
+function RecipeGenDialog({ open, onClose, seed = [], inventoryNames = [] }) {
+  const [ingredients, setIngredients] = useState([])
+  const [current, setCurrent] = useState('')
+  const [servings, setServings] = useState(4)
+  const [cuisine, setCuisine] = useState('Any')
+  const [dietary, setDietary] = useState([])
+  const [skillLevel, setSkillLevel] = useState('easy')
+  const [loading, setLoading] = useState(false)
+  const [recipes, setRecipes] = useState([])
+  const [expandedIdx, setExpandedIdx] = useState(0)
+
+  // Reset every time the dialog opens; seed with expiring items if provided.
+  useEffect(() => {
+    if (open) {
+      setIngredients(Array.isArray(seed) ? [...new Set(seed)] : [])
+      setCurrent('')
+      setServings(4)
+      setCuisine('Any')
+      setDietary([])
+      setSkillLevel('easy')
+      setRecipes([])
+      setExpandedIdx(0)
+    }
+  }, [open, seed])
+
+  const addFromInput = () => {
+    const val = current.trim()
+    if (!val) return
+    // Support comma-separated bulk paste
+    const parts = val.split(',').map(s => s.trim()).filter(Boolean)
+    setIngredients(list => [...new Set([...list, ...parts])])
+    setCurrent('')
+  }
+
+  const removeIngredient = (name) => setIngredients(list => list.filter(x => x !== name))
+
+  const toggleDietary = (d) => setDietary(list => list.includes(d) ? list.filter(x => x !== d) : [...list, d])
+
+  const generate = async () => {
+    if (ingredients.length === 0) { toast.error('Add at least one ingredient'); return }
+    setLoading(true)
+    setRecipes([])
+    try {
+      const res = await fetch('/api/recipe/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ingredients,
+          servings,
+          cuisine: cuisine === 'Any' ? '' : cuisine,
+          dietary,
+          skillLevel,
+        }),
+      })
+      if (!res.ok) throw new Error('AI failed — try again')
+      const data = await res.json()
+      const list = Array.isArray(data.recipes) ? data.recipes : []
+      if (list.length === 0) throw new Error('AI returned no recipes')
+      setRecipes(list)
+      setExpandedIdx(0)
+      toast.success(`✨ ${list.length} recipe${list.length !== 1 ? 's' : ''} generated`)
+    } catch (e) {
+      toast.error(e.message || 'Could not generate')
+    } finally { setLoading(false) }
+  }
+
+  const printRecipe = (r) => {
+    const w = window.open('', '_blank', 'width=700,height=800')
+    if (!w) return toast.error('Popup blocked')
+    const html = `<!doctype html><html><head><title>${escapeText(r.title)}</title>
+<style>
+  body { font-family: -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif; padding: 24px; color: #111; max-width: 720px; margin: 0 auto; }
+  h1 { border-bottom: 3px solid #059669; padding-bottom: 8px; margin: 0 0 8px; }
+  .meta { color: #64748b; font-size: 13px; margin-bottom: 6px; }
+  .badges { margin: 8px 0 16px; }
+  .badge { display:inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-right: 4px; }
+  .b-allergen { background: #fef3c7; color: #92400e; }
+  .b-time { background: #dcfce7; color: #166534; }
+  h2 { color: #059669; margin-top: 20px; border-bottom: 1px solid #ddd; padding-bottom: 3px; }
+  ul, ol { padding-left: 20px; }
+  li { margin: 4px 0; }
+  @media print { body { padding: 12px; } }
+</style></head><body>
+<h1>${escapeText(r.title)}</h1>
+<div class="meta">${escapeText(r.description || '')}</div>
+<div class="badges">
+  <span class="badge b-time">⏱ Prep ${r.prepMinutes || 0} min</span>
+  <span class="badge b-time">🔥 Cook ${r.cookMinutes || 0} min</span>
+  <span class="badge b-time">🍽 Serves ${r.servings || servings}</span>
+  <span class="badge b-time">📋 ${r.difficulty || 'easy'}</span>
+  ${(r.allergens || []).map(a => `<span class="badge b-allergen">⚠ ${escapeText(a)}</span>`).join('')}
+</div>
+<h2>Ingredients</h2>
+<ul>${(r.ingredients || []).map(i => `<li>${i.quantity || ''} ${escapeText(i.unit || '')} — <b>${escapeText(i.name || '')}</b>${i.pantry ? ' <em>(pantry)</em>' : ''}</li>`).join('')}</ul>
+<h2>Method</h2>
+<ol>${(r.steps || []).map(s => `<li>${escapeText(String(s).replace(/^\d+\.\s*/, ''))}</li>`).join('')}</ol>
+${r.notes ? `<h2>Chef's Note</h2><p>${escapeText(r.notes)}</p>` : ''}
+<div style="margin-top: 32px; font-size: 11px; color: #94a3b8; border-top: 1px solid #eee; padding-top: 8px">Generated by ShelfWise · shelfwise.co.in</div>
+<script>window.onload=()=>setTimeout(()=>window.print(),400)</script>
+</body></html>`
+    w.document.write(html); w.document.close()
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-2xl max-h-[92vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">✨ AI Recipe Generator</DialogTitle>
+          <p className="text-sm text-muted-foreground">
+            Pick ingredients → we suggest 3 recipes. Prioritises using what's expiring first.
+          </p>
+        </DialogHeader>
+
+        <div className="space-y-4 py-2">
+          {/* Ingredients input */}
+          <div>
+            <Label className="text-sm font-semibold">🥕 Ingredients ({ingredients.length})</Label>
+            <div className="flex gap-2 mt-1">
+              <Input
+                value={current}
+                placeholder="Type an ingredient (or paste multiple, comma-separated)"
+                onChange={e => setCurrent(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addFromInput() } }}
+                list="rg-inv-suggest"
+              />
+              <datalist id="rg-inv-suggest">
+                {inventoryNames.slice(0, 200).map(n => <option key={n} value={n} />)}
+              </datalist>
+              <Button type="button" onClick={addFromInput} disabled={!current.trim()}><Plus className="h-4 w-4" /></Button>
+            </div>
+            {ingredients.length === 0 && (
+              <p className="text-xs text-slate-500 mt-2">💡 Tap into the box to see suggestions from your inventory. Or use the "Cook Expiring" button on the Dashboard to auto-fill.</p>
+            )}
+            {ingredients.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {ingredients.map(ing => (
+                  <span key={ing} className="inline-flex items-center gap-1 rounded-full bg-emerald-100 text-emerald-900 px-2.5 py-1 text-xs font-medium">
+                    {ing}
+                    <button type="button" onClick={() => removeIngredient(ing)} className="hover:text-red-700"><X className="h-3 w-3" /></button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Options row */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div>
+              <Label className="text-xs">Servings</Label>
+              <Input type="number" min="1" max="20" value={servings} onChange={e => setServings(Math.max(1, Math.min(20, Number(e.target.value) || 4)))} />
+            </div>
+            <div>
+              <Label className="text-xs">Cuisine</Label>
+              <Select value={cuisine} onValueChange={setCuisine}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {['Any','Indian','Italian','Chinese','Mexican','British','French','Thai','Japanese','Mediterranean','Middle Eastern','American','Vegetarian','Bakery'].map(c => (
+                    <SelectItem key={c} value={c}>{c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs">Difficulty</Label>
+              <Select value={skillLevel} onValueChange={setSkillLevel}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="easy">Easy (≤ 30 min)</SelectItem>
+                  <SelectItem value="medium">Medium (30-60 min)</SelectItem>
+                  <SelectItem value="hard">Hard (60+ min)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs">Dietary</Label>
+              <div className="flex flex-wrap gap-1 mt-1">
+                {['Vegetarian','Vegan','Gluten-free','Halal','Dairy-free'].map(d => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => toggleDietary(d)}
+                    className={`text-[11px] px-2 py-0.5 rounded-full border ${dietary.includes(d) ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-300'}`}
+                  >{d}</button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <Button onClick={generate} disabled={loading || ingredients.length === 0} className="w-full bg-emerald-600 hover:bg-emerald-700 py-6 text-base">
+            {loading ? <><Loader2 className="h-5 w-5 animate-spin mr-2" /> Generating (15-30 sec)…</> : <>✨ Generate {ingredients.length > 0 ? `${Math.min(3, 5)} recipes` : 'recipes'}</>}
+          </Button>
+
+          {/* Results */}
+          {recipes.length > 0 && (
+            <div className="space-y-3 pt-2">
+              <p className="text-sm font-semibold text-emerald-700">🍳 {recipes.length} recipe{recipes.length !== 1 ? 's' : ''} generated — tap any to see full details</p>
+              {recipes.map((r, i) => {
+                const expanded = expandedIdx === i
+                return (
+                  <div key={i} className={`rounded-xl border-2 transition ${expanded ? 'border-emerald-400 bg-emerald-50/30' : 'border-slate-200 bg-white'}`}>
+                    <button type="button" onClick={() => setExpandedIdx(expanded ? -1 : i)} className="w-full text-left p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-bold text-slate-900">{r.title}</p>
+                          {r.description && <p className="text-xs text-slate-600 mt-0.5">{r.description}</p>}
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            <Badge variant="outline" className="bg-emerald-50 text-emerald-800 border-emerald-200 text-[10px]">⏱ {r.prepMinutes || 0}+{r.cookMinutes || 0} min</Badge>
+                            <Badge variant="outline" className="bg-blue-50 text-blue-800 border-blue-200 text-[10px]">🍽 {r.servings || servings}</Badge>
+                            <Badge variant="outline" className="bg-slate-50 text-slate-700 border-slate-200 text-[10px] capitalize">{r.difficulty || 'easy'}</Badge>
+                            {r.cuisine && <Badge variant="outline" className="bg-purple-50 text-purple-800 border-purple-200 text-[10px]">{r.cuisine}</Badge>}
+                            {(r.allergens || []).slice(0, 4).map(a => (
+                              <Badge key={a} variant="outline" className="bg-amber-50 text-amber-800 border-amber-200 text-[10px]">⚠ {a}</Badge>
+                            ))}
+                          </div>
+                        </div>
+                        <ArrowRight className={`h-4 w-4 shrink-0 mt-1 transition-transform ${expanded ? 'rotate-90 text-emerald-600' : 'text-slate-400'}`} />
+                      </div>
+                    </button>
+
+                    {expanded && (
+                      <div className="border-t px-3 py-3 space-y-3">
+                        <div>
+                          <p className="text-xs font-bold uppercase text-slate-500 mb-1">Ingredients</p>
+                          <ul className="text-sm space-y-1">
+                            {(r.ingredients || []).map((ing, j) => (
+                              <li key={j} className="flex items-baseline gap-2">
+                                <span className="text-slate-400 shrink-0 w-16">{ing.quantity || ''} {ing.unit || ''}</span>
+                                <span className={ing.pantry ? 'text-slate-500 italic' : 'text-slate-900 font-medium'}>{ing.name}{ing.pantry ? ' (pantry)' : ''}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold uppercase text-slate-500 mb-1">Method</p>
+                          <ol className="text-sm space-y-1.5 list-decimal pl-5">
+                            {(r.steps || []).map((s, j) => (
+                              <li key={j}>{String(s).replace(/^\d+\.\s*/, '')}</li>
+                            ))}
+                          </ol>
+                        </div>
+                        {r.notes && (
+                          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2 text-xs text-emerald-900">
+                            💡 <b>Chef's note:</b> {r.notes}
+                          </div>
+                        )}
+                        <div className="flex gap-2 pt-2">
+                          <Button size="sm" variant="outline" onClick={() => printRecipe(r)} className="flex-1">
+                            <Printer className="h-4 w-4 mr-1" /> Print
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function escapeText(s) {
+  return String(s || '').replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]))
 }

@@ -1,0 +1,112 @@
+╔══════════════════════════════════════════════════════════════════╗
+║  ShelfWise — AI Recipe Generator                                 ║
+║  Turn ingredients (or what's expiring) into 3 real recipes       ║
+╚══════════════════════════════════════════════════════════════════╝
+
+WHAT'S NEW:
+───────────
+Two new AI-powered ways to reduce waste and inspire cooking:
+
+  🧑‍🍳 "Cook Expiring" — one tap on Dashboard
+     - Auto-picks items expiring in next 3 days
+     - AI generates 3 recipes using them
+     - Prioritises using the MOST expiring items (max waste reduction)
+
+  ✨ "Generate Recipe from Ingredients" — Recipes tab
+     - Type any ingredients (with autocomplete from your inventory)
+     - Pick options: servings, cuisine, difficulty, dietary (Veg/Vegan/GF/Halal/Dairy-free)
+     - AI returns 3 different recipes, each with:
+         • Prep + cook time (minutes)
+         • Servings + difficulty
+         • Full ingredient list (marks pantry staples separately)
+         • 4-10 numbered cooking steps
+         • Allergen warnings (14 UK/EU allergens per Natasha's Law)
+         • Chef's notes / substitution tips
+         • Print button → clean PDF for the kitchen wall
+
+═══════════════════════════════════════════════════════════════════
+DEPLOYMENT — 2 STEPS (3 min)
+═══════════════════════════════════════════════════════════════════
+
+STEP 1 — REPLACE FILES IN VS CODE
+  Drag-drop into local repo (OVERWRITE):
+    ✓ app/page.js
+    ✓ app/api/[[...path]]/route.js
+
+  IF you haven't deployed prior sessions yet, ALSO include:
+    ✓ supabase/migration-9-haccp.sql          (NEW)
+    ✓ supabase/migration-10-weekly-digest.sql (NEW)
+    ✓ vercel.json                             (NEW at repo root)
+  And run those 2 SQL migrations in Supabase.
+
+STEP 2 — COMMIT + SYNC
+  Commit message: "Add AI Recipe Generator (from ingredients + expiring items)"
+  Sync Changes → Vercel deploys in 2-3 min
+
+═══════════════════════════════════════════════════════════════════
+HOW TO USE
+═══════════════════════════════════════════════════════════════════
+
+USE CASE 1 — "The 3 things expiring this week"
+──────────────────────────────────────────────
+  1. Dashboard → look for the new rose-coloured 🧑‍🍳 "Cook Expiring" button
+  2. Tap it → dialog opens with expiring items pre-filled as ingredient chips
+  3. Adjust servings + cuisine + dietary if needed
+  4. Tap "✨ Generate 3 recipes"
+  5. Wait 15-30 seconds → 3 recipe cards appear
+  6. Tap any card to expand → see ingredients + steps + allergens
+  7. Print if you want a hard copy for the kitchen wall
+
+USE CASE 2 — "What can I make with these leftovers?"
+──────────────────────────────────────────────────────
+  1. Recipes tab (top nav)
+  2. Third card at the top: "✨ Generate Recipe from Ingredients"
+  3. Tap it → dialog opens EMPTY
+  4. Type "chicken, tomatoes, rice, onion, spinach" (comma-separated OK)
+     - As you type, autocomplete suggests items from YOUR inventory
+     - Enter or "+" adds to the chip list
+  5. Pick options → Generate → done
+
+═══════════════════════════════════════════════════════════════════
+COST NOTE
+═══════════════════════════════════════════════════════════════════
+
+Each "Generate" call uses ~1 GPT-4o request (~£0.02).
+Realistic monthly cost:
+  • Chef generates 20 recipes/month → £0.40/month
+  • This is a small drop in the bucket. Emergent LLM key handles billing.
+
+═══════════════════════════════════════════════════════════════════
+WHY THIS MATTERS FOR YOUR GTM PITCH
+═══════════════════════════════════════════════════════════════════
+
+New sales line:
+  "Bhai, aapke fridge mein Friday ko 3 items expire ho rahe hain →
+   button dabao → AI 3 recipes bata dega jo unhe use kare. Waste ZERO."
+
+This directly ties to your #1 promise: STOP THROWING FOOD AWAY.
+Barcode scanner is about DATA ENTRY.
+Recipe generator is about ACTION — actually using what's there.
+
+Combined with the Weekly Digest email showing wasted £, this is a
+powerful weekly loop:
+  Sunday email says "£127 wasted" → Owner opens app → Cook Expiring →
+  Saves next week's would-be waste → Next Sunday's email shows lower £.
+
+═══════════════════════════════════════════════════════════════════
+QUESTIONS?
+═══════════════════════════════════════════════════════════════════
+
+"Cook Expiring" button says nothing to cook?
+  → You have no items expiring in next 3 days. Add some, or use the
+    Recipes tab's manual generator instead.
+
+Recipes look weird / repetitive?
+  → Try different cuisine or dietary options. Also try adding more
+    ingredients (5-8 works better than 2-3).
+
+Recipe uses ingredients I don't have?
+  → Items marked "(pantry)" are assumed available (salt/pepper/oil).
+    The AI targets max use of what's in your list first.
+
+— ShelfWise

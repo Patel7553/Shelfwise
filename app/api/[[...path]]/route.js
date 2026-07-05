@@ -661,6 +661,76 @@ Output strictly valid JSON with no other text.`
   return Array.isArray(parsed.items) ? parsed.items : []
 }
 
+// ---- Generate recipes FROM a list of ingredients (uses what's expiring/in-stock) ----
+async function generateRecipesFromIngredients({ ingredients, servings = 4, cuisine = '', dietary = [], skillLevel = 'easy' }) {
+  const key = process.env.EMERGENT_LLM_KEY
+  if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+  const dietaryLine = Array.isArray(dietary) && dietary.length ? `Dietary requirements: ${dietary.join(', ')}.\n` : ''
+  const cuisineLine = cuisine ? `Preferred cuisine: ${cuisine}.\n` : ''
+  const skillLine = `Difficulty level: ${skillLevel}.\n`
+
+  const systemPrompt = `You are a professional chef. Generate 3 different practical recipes using the ingredients provided.
+
+Ingredients on hand: ${ingredients.join(', ')}
+Servings target: ${servings}
+${cuisineLine}${dietaryLine}${skillLine}
+Rules:
+- Prioritise recipes that use the MOST of the listed ingredients (to reduce waste).
+- Recipes must be REALISTIC and cookable — no obscure techniques or rare equipment.
+- Common pantry staples (salt, pepper, oil, water, basic spices) can be assumed available.
+- Any ingredient NOT in the provided list should be marked with "pantry": true in the JSON.
+- Detect allergens using UK/EU Natasha's Law 14 list: gluten, crustaceans, eggs, fish, peanuts, soy, dairy, nuts, celery, mustard, sesame, sulphites, lupin, molluscs.
+- Skill levels: "easy" (<=30 min, few steps), "medium" (30-60 min), "hard" (60+ min or advanced techniques).
+- 4-10 numbered cooking steps, each 12-30 words, mention temperatures, times, and pans/tools.
+
+Return ONLY a JSON object of this shape (no prose, no markdown):
+{
+  "recipes": [
+    {
+      "title": "Recipe name",
+      "description": "1-sentence enticing description",
+      "servings": ${servings},
+      "prepMinutes": number,
+      "cookMinutes": number,
+      "difficulty": "easy" | "medium" | "hard",
+      "cuisine": "cuisine type",
+      "allergens": ["gluten","dairy",...],
+      "ingredients": [
+        { "name": "Chicken breast", "quantity": 400, "unit": "g", "pantry": false, "usesInStock": true },
+        { "name": "Salt", "quantity": 1, "unit": "tsp", "pantry": true, "usesInStock": false }
+      ],
+      "steps": ["1. Preheat oven to 200°C...", "2. Dice the chicken..."],
+      "notes": "Optional serving suggestion or substitution tip"
+    }
+  ]
+}
+
+Output STRICT JSON. No trailing commas.`
+
+  const body = {
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: `Please generate 3 recipe suggestions using these ingredients: ${ingredients.join(', ')}. Return JSON.` }
+    ],
+    temperature: 0.6,
+    response_format: { type: 'json_object' },
+  }
+  const res = await fetch(EMERGENT_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`Emergent LLM ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  const content = data?.choices?.[0]?.message?.content || '{}'
+  let parsed
+  try { parsed = JSON.parse(content) } catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : {} }
+  const recipes = Array.isArray(parsed.recipes) ? parsed.recipes : []
+  return { recipes: recipes.slice(0, 5) }
+}
+
+
 async function scanRecipe({ image, text }) {
   const key = process.env.EMERGENT_LLM_KEY
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
@@ -1414,7 +1484,7 @@ export async function POST(request, { params }) {
     }
 
     // -------- AI passthrough (still requires auth, but not kitchen scoping)
-    if (path === 'scan' || path === 'scan-receipt' || path === 'parse-voice' || path === 'recipe-instructions' || path === 'identify-product') {
+    if (path === 'scan' || path === 'scan-receipt' || path === 'parse-voice' || path === 'recipe-instructions' || path === 'identify-product' || path === 'recipe/generate') {
       const { ctx, error } = await requireAuth(request)
       if (error) return error
       const body = await request.json()
@@ -1434,6 +1504,23 @@ export async function POST(request, { params }) {
         if (!body.image || !body.image.startsWith('data:image/')) return json({ error: 'Invalid or missing image' }, 400)
         const barcode = String(body.barcode || '').trim().slice(0, 40)
         const parsed = await identifyProductFromPhoto(body.image, barcode)
+        return json(parsed)
+      }
+
+      // ---- Generate recipes from a list of ingredients ----
+      if (path === 'recipe/generate') {
+        const ingredients = Array.isArray(body.ingredients)
+          ? body.ingredients.map(s => String(s || '').trim()).filter(Boolean).slice(0, 40)
+          : []
+        if (ingredients.length === 0) return json({ error: 'ingredients (array) required' }, 400)
+        const opts = {
+          ingredients,
+          servings: Math.max(1, Math.min(20, Number(body.servings) || 4)),
+          cuisine: String(body.cuisine || '').slice(0, 40),
+          dietary: Array.isArray(body.dietary) ? body.dietary.slice(0, 8) : [],
+          skillLevel: ['easy','medium','hard'].includes(body.skillLevel) ? body.skillLevel : 'easy',
+        }
+        const parsed = await generateRecipesFromIngredients(opts)
         return json(parsed)
       }
       if (path === 'parse-voice') {
