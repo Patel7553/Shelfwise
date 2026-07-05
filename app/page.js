@@ -2202,7 +2202,8 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
   const [parsing, setParsing] = useState(false)
   const [result, setResult] = useState(null) // { supplier, items, ... }
   const [rows, setRows] = useState([])       // editable table
-  const fileRef = useRef(null)
+  const fileRef = useRef(null)       // camera-capture input (mobile opens camera directly)
+  const galleryRef = useRef(null)    // gallery-picker input (opens Photos / Files)
 
   const reset = () => { setImage(null); setRotation(0); setResult(null); setRows([]); setParsing(false) }
 
@@ -2341,23 +2342,45 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
         </DialogHeader>
 
         {!image && (
-          <div className="py-4">
-            <button
-              onClick={() => fileRef.current?.click()}
-              className="w-full border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:bg-slate-50 hover:border-emerald-400 transition"
-            >
-              <div className="text-5xl mb-2">📸</div>
-              <p className="font-semibold text-slate-700">Tap to snap or upload delivery note / invoice</p>
-              <p className="text-xs text-slate-500 mt-1">JPG / PNG / HEIC — clear, well-lit shot works best</p>
-            </button>
+          <div className="py-4 space-y-3">
+            {/* Two clear options: take a fresh photo OR pick an existing image from gallery */}
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => fileRef.current?.click()}
+                className="border-2 border-dashed border-emerald-300 rounded-xl p-5 text-center hover:bg-emerald-50 hover:border-emerald-500 transition"
+              >
+                <div className="text-4xl mb-1">📸</div>
+                <p className="font-semibold text-slate-700 text-sm">Take a photo</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">Snap the delivery note now</p>
+              </button>
+              <button
+                onClick={() => galleryRef.current?.click()}
+                className="border-2 border-dashed border-blue-300 rounded-xl p-5 text-center hover:bg-blue-50 hover:border-blue-500 transition"
+              >
+                <div className="text-4xl mb-1">🖼️</div>
+                <p className="font-semibold text-slate-700 text-sm">Upload from gallery</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">Photo, WhatsApp, Email PDF-screenshot</p>
+              </button>
+            </div>
+
+            {/* Camera-only input — mobile opens camera directly */}
             <input
               ref={fileRef}
               type="file"
               accept="image/*"
               capture="environment"
               className="hidden"
-              onChange={e => onFile(e.target.files?.[0])}
+              onChange={e => { onFile(e.target.files?.[0]); e.target.value = '' }}
             />
+            {/* Gallery/File input — no `capture` attribute → user picks from Photos / Files */}
+            <input
+              ref={galleryRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={e => { onFile(e.target.files?.[0]); e.target.value = '' }}
+            />
+
             <div className="mt-4 text-xs text-slate-500 space-y-1">
               <p>💡 <b>Tips for the best result:</b></p>
               <ul className="list-disc pl-5 space-y-0.5">
