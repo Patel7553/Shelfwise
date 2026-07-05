@@ -13,8 +13,11 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { toast, Toaster } from 'sonner'
 import { ChefHat, Loader2, LogIn } from 'lucide-react'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
+import LanguageSwitcher from '@/components/LanguageSwitcher'
+import { useT } from '@/lib/i18n'
 
 export default function LoginPage() {
+  const T = useT()
   const router = useRouter()
   const [tab, setTab] = useState('owner')
 
@@ -116,19 +119,19 @@ export default function LoginPage() {
               <TabsContent value="owner">
                 <form onSubmit={submitOwner} className="space-y-3">
                   <div>
-                    <Label htmlFor="email">Email</Label>
+                    <Label htmlFor="email">{T('login_email')}</Label>
                     <Input id="email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@kitchen.com" required autoFocus />
                   </div>
                   <div>
-                    <Label htmlFor="password">Password</Label>
+                    <Label htmlFor="password">{T('login_password')}</Label>
                     <Input id="password" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" required />
                   </div>
                   <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700" disabled={ownerBusy}>
                     {ownerBusy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <LogIn className="h-4 w-4 mr-2" />}
-                    Log In
+                    {T('login_signin')}
                   </Button>
                   <p className="text-xs text-center text-slate-500 pt-2">
-                    New kitchen? <Link href="/signup" className="text-emerald-700 font-semibold hover:underline">Sign up</Link>
+                    {T('login_signup')}? <Link href="/signup" className="text-emerald-700 font-semibold hover:underline">{T('login_signup')}</Link>
                   </p>
                 </form>
               </TabsContent>
@@ -156,6 +159,11 @@ export default function LoginPage() {
 
         {/* PWA install prompt — detects platform and offers appropriate CTA */}
         <InstallAppPrompt />
+
+        {/* Language switcher — pre-auth language selection */}
+        <div className="flex justify-center mt-4">
+          <LanguageSwitcher compact />
+        </div>
 
         <p className="text-[11px] text-center text-slate-400 mt-4">© {new Date().getFullYear()} ShelfWise</p>
       </div>

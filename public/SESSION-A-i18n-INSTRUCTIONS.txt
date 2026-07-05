@@ -1,0 +1,116 @@
+========================================
+ShelfWise — Delivery A (June 2026)
+Multi-language UI + Android Install Fix
+========================================
+
+WHAT'S IN THIS ZIP
+------------------
+
+NEW FILES:
+  • app/lib/i18n.js                     — Translation dictionary + useT() hook
+  • app/components/LanguageSwitcher.js  — Reusable language dropdown
+
+CHANGED FILES:
+  • app/components/InstallAppPrompt.js  — Android manual-fallback modal
+  • app/app/page.js                     — Nav labels translated, LanguageSwitcher in Settings
+  • app/app/login/page.js               — Email/Password/Sign-in translated + switcher
+
+
+==============================
+HOW TO INSTALL (Drag & Drop)
+==============================
+
+1. Unzip this file.
+2. In your VS Code, open the ShelfWise project.
+3. Drag & drop each file INTO THE MATCHING PATH:
+     - lib/i18n.js                       → app/lib/i18n.js       (create new folder if missing)
+     - components/LanguageSwitcher.js    → app/components/LanguageSwitcher.js
+     - components/InstallAppPrompt.js    → OVERWRITE existing
+     - app/page.js                       → OVERWRITE existing
+     - app/login/page.js                 → OVERWRITE existing
+4. VS Code will ask "Overwrite?" — click YES for all.
+5. Commit & push to GitHub → Vercel auto-deploys in 1–2 minutes.
+
+
+==============================
+WHAT'S NEW
+==============================
+
+1. MULTI-LANGUAGE (5 languages)
+   • English (default) 🇬🇧
+   • Hindi हिन्दी 🇮🇳
+   • Gujarati ગુજરાતી 🇮🇳
+   • Punjabi ਪੰਜਾਬੀ 🇮🇳
+   • Spanish Español 🇪🇸
+
+   Where to switch language:
+   • On the LOGIN page — small dropdown below the install card
+   • Inside the APP — Settings ⚙️ → Profile tab → 🌍 App Language
+
+   What's translated in this delivery:
+   • Top navigation (Dashboard, Inventory, Recipes, Rota, Waste, Compliance, Admin, Settings, Sign out)
+   • Mobile navigation drawer
+   • Install App prompt (all text)
+   • Login page (Email, Password, Sign in labels)
+
+   Future expansion:
+   • Dashboard tiles, dialog titles, and form labels can be translated in
+     "Delivery B" by adding more entries to app/lib/i18n.js. The framework
+     is already in place — every new string you wrap in T('key') gets
+     translated automatically.
+
+
+2. ANDROID INSTALL BUTTON — FIXED
+   Previously the "Install" button only appeared when Chrome fired the
+   native `beforeinstallprompt` event. Because ShelfWise has no service
+   worker yet, Chrome NEVER fires that event → Android users saw nothing.
+
+   NOW: Android is detected by user-agent. The Install button ALWAYS
+   appears. If Chrome offers the native one-tap install, we use it.
+   Otherwise, tapping opens a friendly step-by-step modal:
+     ① Tap the ⋮ 3-dot menu
+     ② Tap "Install app" or "Add to Home screen"
+     ③ Confirm
+
+   Result: 100% of Android users now see an install option.
+
+
+==============================
+HOW TO TEST
+==============================
+
+TEST #1 — Language switching
+   1. Open https://shelfwise.co.in (or your Vercel preview URL).
+   2. On the login page, click the 🌍 English dropdown at bottom.
+   3. Pick हिन्दी (Hindi) — Email/Password/Sign-in labels should change.
+   4. Log in. Go to top nav — Dashboard, Inventory, Recipes should be Hindi.
+   5. Open Settings ⚙️ → Profile → check "🌍 App Language" is present.
+   6. Change to Español — everything switches to Spanish instantly.
+   7. Refresh the page — language is remembered (stored in browser).
+
+TEST #2 — Android install
+   1. Open https://shelfwise.co.in on your Android phone.
+   2. Scroll to the "Install ShelfWise" green card (login page).
+   3. You should see "Install on Android" button — TAP IT.
+   4. Chrome either offers a native install, or shows the 3-step modal.
+   5. Follow the steps → ShelfWise icon appears on your home screen.
+
+TEST #3 — iOS install (unchanged, still works)
+   1. Open https://shelfwise.co.in in iPhone Safari.
+   2. Tap "iPhone steps" button → 3-step modal appears.
+   3. Follow Share → Add to Home Screen.
+
+
+==============================
+NOTES
+==============================
+
+• Language preference is stored in browser localStorage (per-device).
+• If you want language to sync across devices, we'd need to store it
+  in Supabase user profile — happy to add that in a future delivery.
+• Adding more languages later = add a new column to the DICT in i18n.js.
+• Adding more translated strings later = wrap them in T('some_key') and
+  add the key to the DICT.
+
+
+For questions or a Delivery B (page.js refactor into components), just ask!

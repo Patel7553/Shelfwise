@@ -15,6 +15,8 @@ import { toast } from 'sonner'
 import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
+import LanguageSwitcher from '@/components/LanguageSwitcher'
+import { useT } from '@/lib/i18n'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
 const fetch = apiFetch
@@ -131,6 +133,7 @@ function useTheme() {
 function ThemeToggle() { return null }
 
 function App() {
+  const T = useT()  // language-aware translator — re-renders whole app when user changes language
   const { theme, setTheme } = useTheme()
   const [initial] = useState(getInitialFromURL)
   const [view, setView] = useState(initial.view) // dashboard | inventory | recipes
@@ -1277,31 +1280,31 @@ function App() {
           {/* Desktop nav */}
           <nav className="hidden md:flex items-center gap-1">
             <Button variant={view === 'dashboard' ? 'default' : 'ghost'} size="sm" onClick={goToDashboard}>
-              <LayoutDashboard className="h-4 w-4 mr-2" /> Dashboard
+              <LayoutDashboard className="h-4 w-4 mr-2" /> {T('nav_dashboard')}
             </Button>
             {hasStock && (
               <Button variant={view === 'inventory' ? 'default' : 'ghost'} size="sm" onClick={() => { setStatusFilter('All'); setView('inventory') }}>
-                <Package className="h-4 w-4 mr-2" /> Inventory
+                <Package className="h-4 w-4 mr-2" /> {T('nav_inventory')}
               </Button>
             )}
             {hasRecipes && (
               <Button variant={view === 'recipes' ? 'default' : 'ghost'} size="sm" onClick={() => setView('recipes')}>
-                <BookOpen className="h-4 w-4 mr-2" /> Recipes
+                <BookOpen className="h-4 w-4 mr-2" /> {T('nav_recipes')}
               </Button>
             )}
             {hasRota && (
               <Button variant={view === 'rota' ? 'default' : 'ghost'} size="sm" onClick={() => setView('rota')}>
-                <ChefHat className="h-4 w-4 mr-2" /> Rota
+                <ChefHat className="h-4 w-4 mr-2" /> {T('nav_rota')}
               </Button>
             )}
             {hasAnalytics && (
               <Button variant={view === 'analytics' ? 'default' : 'ghost'} size="sm" onClick={() => setView('analytics')}>
-                <BarChart3 className="h-4 w-4 mr-2" /> Waste
+                <BarChart3 className="h-4 w-4 mr-2" /> {T('nav_waste')}
               </Button>
             )}
             {hasHaccp && (
               <Button variant={view === 'haccp' ? 'default' : 'ghost'} size="sm" onClick={() => setView('haccp')}>
-                <ShieldCheck className="h-4 w-4 mr-2" /> Compliance
+                <ShieldCheck className="h-4 w-4 mr-2" /> {T('nav_compliance')}
               </Button>
             )}
             {me?.isAdmin && (
@@ -1312,13 +1315,13 @@ function App() {
                 className="border-emerald-500 text-emerald-700 hover:bg-emerald-50 font-semibold"
                 title="Open admin panel"
               >
-                <ShieldCheck className="h-4 w-4 mr-1" /> Admin
+                <ShieldCheck className="h-4 w-4 mr-1" /> {T('nav_admin')}
               </Button>
             )}
-            <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title="Settings">
+            <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title={T('nav_settings')}>
               <Settings className="h-4 w-4" />
             </Button>
-            <Button variant="ghost" size="icon" onClick={async () => { await signOutAll(); router.replace('/login') }} title="Sign out" className="text-red-600 hover:text-red-700 hover:bg-red-50">
+            <Button variant="ghost" size="icon" onClick={async () => { await signOutAll(); router.replace('/login') }} title={T('nav_signout')} className="text-red-600 hover:text-red-700 hover:bg-red-50">
               <LogOut className="h-4 w-4" />
             </Button>
           </nav>
@@ -1333,31 +1336,31 @@ function App() {
         {mobileNav && (
           <div className="md:hidden border-t bg-white px-4 py-3 space-y-2">
             <Button variant={view === 'dashboard' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { goToDashboard(); setMobileNav(false) }}>
-              <LayoutDashboard className="h-4 w-4 mr-2" /> Dashboard
+              <LayoutDashboard className="h-4 w-4 mr-2" /> {T('nav_dashboard')}
             </Button>
             {hasStock && (
               <Button variant={view === 'inventory' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setStatusFilter('All'); setView('inventory'); setMobileNav(false) }}>
-                <Package className="h-4 w-4 mr-2" /> Inventory
+                <Package className="h-4 w-4 mr-2" /> {T('nav_inventory')}
               </Button>
             )}
             {hasRecipes && (
               <Button variant={view === 'recipes' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('recipes'); setMobileNav(false) }}>
-                <BookOpen className="h-4 w-4 mr-2" /> Recipes
+                <BookOpen className="h-4 w-4 mr-2" /> {T('nav_recipes')}
               </Button>
             )}
             {hasRota && (
               <Button variant={view === 'rota' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('rota'); setMobileNav(false) }}>
-                <ChefHat className="h-4 w-4 mr-2" /> Rota
+                <ChefHat className="h-4 w-4 mr-2" /> {T('nav_rota')}
               </Button>
             )}
             {hasAnalytics && (
               <Button variant={view === 'analytics' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('analytics'); setMobileNav(false) }}>
-                <BarChart3 className="h-4 w-4 mr-2" /> Waste
+                <BarChart3 className="h-4 w-4 mr-2" /> {T('nav_waste')}
               </Button>
             )}
             {hasHaccp && (
               <Button variant={view === 'haccp' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('haccp'); setMobileNav(false) }}>
-                <ShieldCheck className="h-4 w-4 mr-2" /> Compliance
+                <ShieldCheck className="h-4 w-4 mr-2" /> {T('nav_compliance')}
               </Button>
             )}
             {me?.isAdmin && (
@@ -1366,14 +1369,14 @@ function App() {
                 className="w-full justify-start border-emerald-500 text-emerald-700 hover:bg-emerald-50 font-semibold"
                 onClick={() => { setMobileNav(false); router.push('/admin') }}
               >
-                <ShieldCheck className="h-4 w-4 mr-2" /> Admin Panel
+                <ShieldCheck className="h-4 w-4 mr-2" /> {T('nav_admin')}
               </Button>
             )}
             <Button variant="ghost" className="w-full justify-start" onClick={() => { setSettingsOpen(true); setMobileNav(false) }}>
-              <Settings className="h-4 w-4 mr-2" /> Settings
+              <Settings className="h-4 w-4 mr-2" /> {T('nav_settings')}
             </Button>
             <Button variant="ghost" className="w-full justify-start text-red-600" onClick={async () => { await signOutAll(); setMobileNav(false); router.replace('/login') }}>
-              <LogOut className="h-4 w-4 mr-2" /> Sign out
+              <LogOut className="h-4 w-4 mr-2" /> {T('nav_signout')}
             </Button>
           </div>
         )}
@@ -4756,6 +4759,16 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
                 </Select>
                 <p className="text-xs text-muted-foreground mt-1">Used for cost tracking, waste value, invoice imports.</p>
               </div>
+
+              {/* App Language — persisted in browser (localStorage), reactive across the whole UI */}
+              <div>
+                <Label>🌍 App Language</Label>
+                <div className="mt-1">
+                  <LanguageSwitcher />
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">Menus, buttons and messages will use this language.</p>
+              </div>
+
               <p className="text-xs text-muted-foreground">These appear in the header and your email alerts.</p>
 
               {openWizard && (

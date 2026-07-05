@@ -1,24 +1,29 @@
 'use client'
-// InstallAppPrompt — smart PWA install banner.
-// - Android/Chrome: catches `beforeinstallprompt` → one-tap native install
-// - iOS Safari: shows step-by-step instructions (Apple blocks programmatic install)
-// - Desktop Chrome/Edge: same as Android
-// - Hides itself if the app is already installed (standalone display mode)
-// - Remembers dismissal in localStorage for 30 days
+// InstallAppPrompt — smart PWA install banner with reliable Android fallback.
+// - Android/Chrome: uses `beforeinstallprompt` for one-tap install; if the browser
+//   doesn't fire it (no service worker / already prompted), shows step-by-step
+//   "Chrome menu → Install app" instructions instead. Never hides on Android.
+// - iOS Safari: shows Share-sheet instructions (Apple blocks programmatic install).
+// - Desktop Chrome/Edge: same as Android.
+// - Hides itself if already installed (standalone mode).
+// - Remembers dismissal in localStorage for 30 days.
 
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
-import { X, Download, Share, Plus, Smartphone } from 'lucide-react'
+import { X, Download, Share, Plus, Smartphone, MoreVertical } from 'lucide-react'
+import { useT } from '@/lib/i18n'
 
-const DISMISS_KEY = 'shelfwise-install-dismissed-at'
+const DISMISS_KEY  = 'shelfwise-install-dismissed-at'
 const DISMISS_DAYS = 30
 
 export default function InstallAppPrompt({ compact = false }) {
-  const [platform, setPlatform] = useState(null)   // 'android' | 'ios' | 'desktop' | 'installed'
+  const T = useT()
+  const [platform, setPlatform] = useState(null)         // 'android' | 'ios' | 'desktop' | 'installed'
   const [deferredPrompt, setDeferredPrompt] = useState(null)
   const [visible, setVisible] = useState(false)
   const [showIosSteps, setShowIosSteps] = useState(false)
+  const [showAndroidSteps, setShowAndroidSteps] = useState(false)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -26,7 +31,6 @@ export default function InstallAppPrompt({ compact = false }) {
     // Already installed?
     const isStandalone =
       window.matchMedia('(display-mode: standalone)').matches ||
-      // iOS-specific check
       // eslint-disable-next-line
       (window.navigator).standalone === true
     if (isStandalone) { setPlatform('installed'); return }
@@ -41,20 +45,26 @@ export default function InstallAppPrompt({ compact = false }) {
     const isIOS = /iPhone|iPad|iPod/i.test(ua) && !/CriOS|FxiOS/.test(ua)  // must be Safari to install
     const isAndroid = /Android/i.test(ua)
 
-    // Android / Desktop Chrome: capture the install prompt when browser offers it
-    const beforeInstallHandler = (e) => {
-      e.preventDefault()
-      setDeferredPrompt(e)
-      setPlatform(isAndroid ? 'android' : 'desktop')
-      setVisible(true)
-    }
-    window.addEventListener('beforeinstallprompt', beforeInstallHandler)
-
-    // iOS: never fires beforeinstallprompt, so we detect and show right away
+    // Detect base platform IMMEDIATELY (don't wait for beforeinstallprompt).
+    // This is the key fix — Android users always see the Install button even
+    // if the browser never fires the native prompt event.
     if (isIOS) {
       setPlatform('ios')
       setVisible(true)
+    } else if (isAndroid) {
+      setPlatform('android')
+      setVisible(true)
+    } else {
+      setPlatform('desktop')
+      setVisible(true)
     }
+
+    // Try to capture native install prompt if browser offers it (best UX)
+    const beforeInstallHandler = (e) => {
+      e.preventDefault()
+      setDeferredPrompt(e)
+    }
+    window.addEventListener('beforeinstallprompt', beforeInstallHandler)
 
     return () => window.removeEventListener('beforeinstallprompt', beforeInstallHandler)
   }, [])
@@ -64,15 +74,23 @@ export default function InstallAppPrompt({ compact = false }) {
     setVisible(false)
   }
 
-  const handleAndroidInstall = async () => {
-    if (!deferredPrompt) return
-    deferredPrompt.prompt()
-    const { outcome } = await deferredPrompt.userChoice
-    if (outcome === 'accepted') {
-      setVisible(false)
-      localStorage.setItem(DISMISS_KEY, String(Date.now()))
+  const handleInstallClick = async () => {
+    // If browser has offered a native prompt → use it (Android/Desktop Chrome, one-tap)
+    if (deferredPrompt) {
+      try {
+        deferredPrompt.prompt()
+        const { outcome } = await deferredPrompt.userChoice
+        if (outcome === 'accepted') {
+          setVisible(false)
+          localStorage.setItem(DISMISS_KEY, String(Date.now()))
+        }
+        setDeferredPrompt(null)
+        return
+      } catch (_) { /* fall through to manual steps */ }
     }
-    setDeferredPrompt(null)
+    // No native prompt available → show step-by-step instructions
+    if (platform === 'android') setShowAndroidSteps(true)
+    else if (platform === 'desktop') setShowAndroidSteps(true)  // instructions are similar
   }
 
   if (!visible || platform === 'installed' || !platform) return null
@@ -85,13 +103,13 @@ export default function InstallAppPrompt({ compact = false }) {
           <div className="flex items-center gap-2 min-w-0">
             <Smartphone className="h-4 w-4 text-emerald-700 shrink-0" />
             <p className="text-emerald-900 text-xs sm:text-sm truncate">
-              <b>Add ShelfWise to home screen</b> — works like an app
+              <b>{T('install_compact_msg')}</b>
             </p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
             {platform === 'ios'
-              ? <Button size="sm" onClick={() => setShowIosSteps(true)} className="h-7 text-xs px-2 bg-emerald-600 hover:bg-emerald-700">Show me</Button>
-              : <Button size="sm" onClick={handleAndroidInstall} className="h-7 text-xs px-2 bg-emerald-600 hover:bg-emerald-700"><Download className="h-3 w-3 mr-1" /> Install</Button>
+              ? <Button size="sm" onClick={() => setShowIosSteps(true)} className="h-7 text-xs px-2 bg-emerald-600 hover:bg-emerald-700">{T('install_show_me')}</Button>
+              : <Button size="sm" onClick={handleInstallClick} className="h-7 text-xs px-2 bg-emerald-600 hover:bg-emerald-700"><Download className="h-3 w-3 mr-1" /> {T('lbl_add')}</Button>
             }
             <button onClick={dismiss} className="h-7 w-7 flex items-center justify-center rounded text-emerald-800 hover:bg-emerald-100" title="Dismiss for 30 days">
               <X className="h-4 w-4" />
@@ -99,6 +117,7 @@ export default function InstallAppPrompt({ compact = false }) {
           </div>
         </div>
         <IosStepsModal open={showIosSteps} onClose={() => setShowIosSteps(false)} />
+        <AndroidStepsModal open={showAndroidSteps} onClose={() => setShowAndroidSteps(false)} isDesktop={platform === 'desktop'} />
       </>
     )
   }
@@ -112,8 +131,8 @@ export default function InstallAppPrompt({ compact = false }) {
             <Smartphone className="h-5 w-5" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="font-bold text-slate-900">Install ShelfWise on your phone</p>
-            <p className="text-xs text-slate-600 mt-0.5">Works like an app — one-tap from your home screen. No app store needed.</p>
+            <p className="font-bold text-slate-900">{T('install_title')}</p>
+            <p className="text-xs text-slate-600 mt-0.5">{T('install_desc')}</p>
           </div>
           <button onClick={dismiss} className="h-7 w-7 flex items-center justify-center rounded text-slate-500 hover:bg-slate-100 shrink-0" title="Dismiss">
             <X className="h-4 w-4" />
@@ -121,29 +140,32 @@ export default function InstallAppPrompt({ compact = false }) {
         </div>
 
         <div className="mt-3 grid grid-cols-2 gap-2">
-          {/* Android / Desktop button (works if the browser has fired the prompt) */}
-          {(platform === 'android' || platform === 'desktop') && (
-            <Button onClick={handleAndroidInstall} className="w-full bg-emerald-600 hover:bg-emerald-700">
-              <Download className="h-4 w-4 mr-2" />
-              {platform === 'android' ? 'Install on Android' : 'Install on Desktop'}
+          {platform === 'android' && (
+            <Button onClick={handleInstallClick} className="w-full bg-emerald-600 hover:bg-emerald-700">
+              <Download className="h-4 w-4 mr-2" /> {T('install_btn_android')}
             </Button>
           )}
-          {/* iOS button — opens step-by-step modal */}
+          {platform === 'desktop' && (
+            <Button onClick={handleInstallClick} className="w-full bg-emerald-600 hover:bg-emerald-700">
+              <Download className="h-4 w-4 mr-2" /> {T('install_btn_desktop')}
+            </Button>
+          )}
           {platform === 'ios' && (
             <Button onClick={() => setShowIosSteps(true)} className="w-full bg-slate-900 hover:bg-slate-800 col-span-2">
-              <Share className="h-4 w-4 mr-2" /> Add to iPhone home screen
+              <Share className="h-4 w-4 mr-2" /> {T('install_btn_ios')}
             </Button>
           )}
-          {/* Show BOTH buttons on desktop so people can share the site with a phone user */}
+          {/* Cross-platform: always offer both help modals */}
           {(platform === 'desktop' || platform === 'android') && (
             <Button onClick={() => setShowIosSteps(true)} variant="outline" className="w-full">
-              🍎 iPhone steps
+              🍎 {T('install_btn_ios')}
             </Button>
           )}
         </div>
       </div>
 
       <IosStepsModal open={showIosSteps} onClose={() => setShowIosSteps(false)} />
+      <AndroidStepsModal open={showAndroidSteps} onClose={() => setShowAndroidSteps(false)} isDesktop={platform === 'desktop'} />
     </>
   )
 }
@@ -187,6 +209,75 @@ function IosStepsModal({ open, onClose }) {
 
           <div className="mt-2 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900">
             💡 <b>Important:</b> This only works in <b>Safari</b>. If you're using Chrome/Firefox on iPhone, tap the ↕ icon → "Open in Safari" first.
+          </div>
+        </div>
+        <DialogFooter>
+          <Button onClick={onClose} className="w-full">Got it</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---- Android / Desktop step-by-step fallback (used when browser doesn't fire beforeinstallprompt) ----
+function AndroidStepsModal({ open, onClose, isDesktop }) {
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            {isDesktop ? '💻 Install on Desktop' : '🤖 Install on Android'}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="py-2 space-y-3">
+          <p className="text-sm text-slate-600">
+            {isDesktop
+              ? 'Chrome or Edge makes this a two-step install:'
+              : 'In Chrome on Android, just tap the menu — it only takes 3 taps:'}
+          </p>
+
+          <div className="space-y-3">
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-emerald-50 border border-emerald-200">
+              <div className="h-8 w-8 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center shrink-0">1</div>
+              <div>
+                <p className="text-sm font-semibold text-slate-900">
+                  Tap the <MoreVertical className="inline h-4 w-4 text-emerald-700" /> <b>3-dot menu</b>
+                </p>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  {isDesktop
+                    ? 'Top-right corner of Chrome / Edge'
+                    : 'Top-right corner of Chrome'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-emerald-50 border border-emerald-200">
+              <div className="h-8 w-8 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center shrink-0">2</div>
+              <div>
+                <p className="text-sm font-semibold text-slate-900">
+                  Tap <Download className="inline h-4 w-4 text-emerald-700" /> <b>Install app</b>
+                  <span className="text-slate-500"> or </span>
+                  <b>Add to Home screen</b>
+                </p>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Some Chrome versions call it <b>"Install app"</b>, others <b>"Add to Home screen"</b> — either works.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-emerald-50 border border-emerald-200">
+              <div className="h-8 w-8 rounded-full bg-emerald-600 text-white font-bold flex items-center justify-center shrink-0">3</div>
+              <div>
+                <p className="text-sm font-semibold text-slate-900">Tap <b>Install</b> to confirm</p>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  ShelfWise 🍅 icon will land on your {isDesktop ? 'desktop / taskbar' : 'home screen'} — tap to open like any app.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-2 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900">
+            💡 <b>Tip:</b> If you don't see "Install app", scroll the menu — it's usually below "History" and "Downloads".
           </div>
         </div>
         <DialogFooter>
