@@ -1802,7 +1802,7 @@ function App() {
             })
             const data = await res.json().catch(() => ({}))
             if (!res.ok) throw new Error(data?.error || `Bulk save failed (${res.status})`)
-            toast.success(`Imported ${data.inserted || rows.length} items from receipt 🧾`)
+            toast.success(`Imported ${data.inserted || rows.length} items from invoice 🧾`)
             fetchProducts()
             fetchStats()
           } catch (e) {
@@ -2333,9 +2333,9 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
     <Dialog open={open} onOpenChange={(v) => { if (!v && !parsing) onClose() }}>
       <DialogContent className="sm:max-w-[720px] max-h-[92vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">🧾 Receipt / Delivery Note Scanner</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">🧾 Supplier Invoice Scanner</DialogTitle>
           <p className="text-sm text-muted-foreground">
-            Snap a photo of a supplier delivery note, invoice or shop receipt →
+            Snap a photo of a <b>supplier delivery note</b> (Bidfood, Brakes, JJ, Booker, Makro, 3663, local wholesalers) or a shop receipt →
             AI extracts every line item with prices → you review → we import.
           </p>
         </DialogHeader>
@@ -2347,7 +2347,7 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
               className="w-full border-2 border-dashed border-slate-300 rounded-xl p-8 text-center hover:bg-slate-50 hover:border-emerald-400 transition"
             >
               <div className="text-5xl mb-2">📸</div>
-              <p className="font-semibold text-slate-700">Tap to snap or upload receipt</p>
+              <p className="font-semibold text-slate-700">Tap to snap or upload delivery note / invoice</p>
               <p className="text-xs text-slate-500 mt-1">JPG / PNG / HEIC — clear, well-lit shot works best</p>
             </button>
             <input
@@ -2361,11 +2361,12 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
             <div className="mt-4 text-xs text-slate-500 space-y-1">
               <p>💡 <b>Tips for the best result:</b></p>
               <ul className="list-disc pl-5 space-y-0.5">
-                <li>Lay the receipt <b>flat</b> on a table, camera directly above</li>
+                <li>Lay the delivery note <b>flat</b> on a table, camera directly above</li>
                 <li>Hold your phone <b>upright</b> (portrait, not sideways) so text reads left→right</li>
-                <li>Include the header (supplier name) and all line items</li>
+                <li>Include the header (supplier name, invoice #, date) and all line items</li>
                 <li>Good light + not blurry = fewer errors to fix</li>
                 <li>If it comes out sideways, use the ↻ rotate button on the next screen</li>
+                <li>Works with Bidfood, Brakes, JJ Foodservice, Booker, Makro, 3663, Costco Business, and most local wholesalers</li>
               </ul>
             </div>
           </div>
@@ -2407,7 +2408,7 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
               <img src={image} alt="" className="w-16 h-16 object-cover rounded border" />
               <div className="flex-1 min-w-0">
                 <p><b>Supplier:</b> {result.supplier || '—'}</p>
-                <p><b>Receipt total:</b> {result.totalCost != null ? `${currencySymbol}${Number(result.totalCost).toFixed(2)}` : '—'}</p>
+                <p><b>Invoice total:</b> {result.totalCost != null ? `${currencySymbol}${Number(result.totalCost).toFixed(2)}` : '—'}</p>
                 <p className="text-slate-500">{included.length} of {rows.length} items selected · Σ <b>{currencySymbol}{totalCost.toFixed(2)}</b></p>
               </div>
               <Button variant="outline" size="sm" onClick={() => { setImage(null); setResult(null); setRows([]) }}>Retake</Button>
@@ -3191,7 +3192,7 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
         </button>
         <button onClick={openReceipt} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-fuchsia-200 bg-fuchsia-50 hover:bg-fuchsia-100 hover:border-fuchsia-300 transition text-fuchsia-800 relative">
           <span className="text-2xl">🧾</span>
-          <span className="text-xs font-semibold">Receipt</span>
+          <span className="text-xs font-semibold">Invoice</span>
           <span className="absolute top-1 right-1 text-[8px] font-bold bg-fuchsia-600 text-white rounded px-1">NEW</span>
         </button>
         <button onClick={openScan} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-teal-200 bg-teal-50 hover:bg-teal-100 hover:border-teal-300 transition text-teal-800">
@@ -4585,7 +4586,7 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
                     <SelectItem value="AED">🇦🇪 AED</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground mt-1">Used for cost tracking, waste value, receipt imports.</p>
+                <p className="text-xs text-muted-foreground mt-1">Used for cost tracking, waste value, invoice imports.</p>
               </div>
               <p className="text-xs text-muted-foreground">These appear in the header and your email alerts.</p>
 
