@@ -480,39 +480,68 @@ async function parseReceiptImage(base64DataUrl) {
   const key = process.env.EMERGENT_LLM_KEY
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
   const today = new Date().toISOString().slice(0, 10)
-  const systemPrompt = `You are an expert at reading supplier delivery notes, invoices and shop receipts for professional kitchens.
+  const systemPrompt = `You are an expert at reading UK/EU professional catering supplier delivery notes, restaurant invoices and shop receipts (Bidfood, Brakes, JJ Foodservice, 3663, Booker, Costco, supermarket receipts, etc). Read the image carefully.
 
-Return ONLY valid JSON:
+CRITICAL READING RULES:
+1. The image may be ROTATED 90/180/270 degrees. Read text in ANY orientation — mentally rotate it if needed.
+2. Look for the multi-column layout common on catering delivery notes: Description | Pack Size | Line No | Product Code | Net Price.
+3. IGNORE lines that are NOT real products:
+   - "SPECIAL PRICE ####" (promo indicator)
+   - Subtotal / VAT / Total / Discount / Delivery charge lines
+   - Handwritten annotations, signatures, dates written by hand
+   - Column headers ("DESCRIPTION", "PACK SIZE", "PRICE", etc)
+   - Page footer text like "Catering provisions"
+
+4. EXPAND UK trade abbreviations to full readable product names. Common examples:
+   - BAKRY→Bakery, CROISNT→Croissant, CONCE→Concentrate
+   - MLHSE→Mill House, EVFAV→Everyday Favourites (or Ev'Favourites)
+   - VEGN→Vegan, GLAMORG→Glamorgan, SAUSAGS→Sausages
+   - PNPL→Pineapple, ORG→Organic, RSP→Rosepot (or brand)
+   - MTHR→Mother, DTHR→Daughter, DLHT→Delight, C/DLHT→County Delight
+   - COL→Colour, TWIN→Twin, JUCE→Juice
+   - GRK→Greek, YOG→Yogurt, CHZ→Cheese, BTTR→Butter, PNCK→Pancake
+   - VEG→Vegetable, FRT→Fruit, CHIK→Chicken, BF→Beef
+   - Use context + food knowledge to guess sensibly. Preserve pack sizes in the name where helpful.
+
+5. PACK SIZE parsing — the format "12-800g" or "12x800g" means a CASE of 12 units × 800g each:
+   - Set quantity = 12 (number of individual packs delivered)
+   - Set unit = "pack" (each pack contains 800g)
+   - Include the size in the name: e.g. "Tomato Paste Concentrate (12x800g)"
+   The format "1-300m" means 1 roll of 300 metres → quantity=1, unit="roll".
+   The format "40-60ml" means 40 units × 60ml each → quantity=40, unit="pack", size in name.
+   The format "150g" alone means quantity=1, unit="pack" (with 150g in the name).
+
+6. PRICE: The Net Price column is usually total for the entire case delivered. Set totalLineCost to that number.
+   Set unitCost = totalLineCost ÷ quantity if you can compute it.
+
+Return ONLY valid JSON — no prose, no markdown fences:
 {
-  "supplier": "supplier / shop name from the header (or '')",
-  "receiptDate": "YYYY-MM-DD if visible, else null. Today is ${today}",
-  "currency": "GBP / USD / EUR / INR / '' if unclear",
-  "totalCost": number or null,
+  "supplier": "supplier / shop name from the header if visible, else ''",
+  "receiptDate": "YYYY-MM-DD if visible on the invoice, else null. Today is ${today}",
+  "currency": "GBP" | "USD" | "EUR" | "INR" | "",
+  "totalCost": overall invoice total as number if visible, else null,
   "items": [
     {
-      "name": "clean product name",
-      "quantity": number (default 1),
-      "unit": one of "ea"|"kg"|"g"|"L"|"mL"|"pack"|"box"|"bunch",
+      "name": "clean expanded product name including pack size in parentheses",
+      "quantity": number (units delivered — usually the FIRST number in pack size),
+      "unit": "ea" | "kg" | "g" | "L" | "mL" | "pack" | "box" | "bunch" | "roll",
       "unitCost": price per single unit as a number, else null,
-      "totalLineCost": total for the line item if printed, else null,
-      "category": "Dairy" | "Meat" | "Produce" | "Dry Goods" | "Frozen" | "Cleaning" | "Beverages" | "Other",
+      "totalLineCost": Net Price for the whole line if printed, else null,
+      "category": "Dairy" | "Meat" | "Produce" | "Dry Goods" | "Frozen" | "Cleaning" | "Beverages" | "Bakery" | "Snacks" | "Other",
       "storageType": "Fridge" | "Freezer" | "Dry" | "Ambient",
       "expiryDate": "YYYY-MM-DD" if visible next to the line, else null
     }
   ]
 }
 
-Rules:
-- Ignore subtotals, VAT lines, delivery charges, discounts (do NOT list them as items).
-- Do NOT invent expiry dates. Only fill if visible.
-- Output STRICT JSON.`
+Output STRICT JSON. No comments. No trailing commas.`
 
   const body = {
     model: 'gpt-4o',
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: [
-        { type: 'text', text: 'Read this receipt / delivery note and return the JSON described.' },
+        { type: 'text', text: 'Read this catering/restaurant delivery note carefully. Rotate the image mentally if it appears sideways. Expand ALL abbreviations to full readable names. Return the JSON described.' },
         { type: 'image_url', image_url: { url: base64DataUrl } }
       ]}
     ],

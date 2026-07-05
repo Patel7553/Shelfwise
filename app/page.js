@@ -2198,30 +2198,56 @@ function App() {
 // ============================================================================
 function ReceiptScanDialog({ open, onClose, onImport, settings }) {
   const [image, setImage] = useState(null)   // data URL
+  const [rotation, setRotation] = useState(0) // 0, 90, 180, 270 — user-controlled
   const [parsing, setParsing] = useState(false)
   const [result, setResult] = useState(null) // { supplier, items, ... }
   const [rows, setRows] = useState([])       // editable table
   const fileRef = useRef(null)
 
-  const reset = () => { setImage(null); setResult(null); setRows([]); setParsing(false) }
+  const reset = () => { setImage(null); setRotation(0); setResult(null); setRows([]); setParsing(false) }
 
   useEffect(() => { if (!open) reset() }, [open])
 
   const onFile = async (file) => {
     if (!file) return
     const reader = new FileReader()
-    reader.onload = () => setImage(String(reader.result))
+    reader.onload = () => { setImage(String(reader.result)); setRotation(0) }
     reader.readAsDataURL(file)
+  }
+
+  // Apply the current rotation to the image via <canvas> before sending.
+  // Vision models are much more accurate on upright text.
+  const applyRotation = async (dataUrl, deg) => {
+    if (!deg) return dataUrl
+    return new Promise((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas')
+          const isSide = deg === 90 || deg === 270
+          canvas.width  = isSide ? img.height : img.width
+          canvas.height = isSide ? img.width  : img.height
+          const ctx = canvas.getContext('2d')
+          ctx.translate(canvas.width / 2, canvas.height / 2)
+          ctx.rotate((deg * Math.PI) / 180)
+          ctx.drawImage(img, -img.width / 2, -img.height / 2)
+          resolve(canvas.toDataURL('image/jpeg', 0.88))
+        } catch (e) { reject(e) }
+      }
+      img.onerror = reject
+      img.src = dataUrl
+    })
   }
 
   const runParse = async () => {
     if (!image) return
     setParsing(true)
     try {
+      const sendImage = await applyRotation(image, rotation)
       const res = await fetch('/api/scan-receipt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image }),
+        body: JSON.stringify({ image: sendImage }),
       })
       const raw = await res.text()
       let data = null
@@ -2313,11 +2339,13 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
               onChange={e => onFile(e.target.files?.[0])}
             />
             <div className="mt-4 text-xs text-slate-500 space-y-1">
-              <p>💡 <b>Tips:</b></p>
+              <p>💡 <b>Tips for the best result:</b></p>
               <ul className="list-disc pl-5 space-y-0.5">
-                <li>Lay the receipt flat on a table, camera directly above</li>
+                <li>Lay the receipt <b>flat</b> on a table, camera directly above</li>
+                <li>Hold your phone <b>upright</b> (portrait, not sideways) so text reads left→right</li>
                 <li>Include the header (supplier name) and all line items</li>
                 <li>Good light + not blurry = fewer errors to fix</li>
+                <li>If it comes out sideways, use the ↻ rotate button on the next screen</li>
               </ul>
             </div>
           </div>
@@ -2325,10 +2353,28 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
 
         {image && !result && (
           <div className="py-2 space-y-3">
-            <div className="relative">
-              <img src={image} alt="receipt" className="w-full max-h-[300px] object-contain rounded-lg border" />
-              <Button size="sm" variant="outline" className="absolute top-2 right-2" onClick={() => setImage(null)}>Retake</Button>
+            <div className="relative overflow-hidden rounded-lg border bg-slate-50">
+              <img
+                src={image}
+                alt="receipt"
+                className="w-full max-h-[340px] object-contain transition-transform"
+                style={{ transform: `rotate(${rotation}deg)` }}
+              />
+              <Button size="sm" variant="outline" className="absolute top-2 right-2 bg-white" onClick={() => setImage(null)}>Retake</Button>
             </div>
+
+            {/* Rotation controls — critical for sideways-photographed receipts */}
+            <div className="flex items-center justify-between gap-2 rounded-lg bg-blue-50 border border-blue-200 px-3 py-2">
+              <p className="text-xs text-blue-900">
+                📐 Text should read <b>left → right, top → down</b>. Rotate first if sideways.
+              </p>
+              <div className="flex items-center gap-1 shrink-0">
+                <Button size="sm" variant="outline" onClick={() => setRotation((rotation + 270) % 360)} title="Rotate left 90°" className="bg-white">↺ 90°</Button>
+                <Button size="sm" variant="outline" onClick={() => setRotation((rotation + 90) % 360)} title="Rotate right 90°" className="bg-white">↻ 90°</Button>
+                {rotation !== 0 && <span className="text-xs text-blue-700 font-medium">({rotation}°)</span>}
+              </div>
+            </div>
+
             <Button onClick={runParse} disabled={parsing} className="w-full bg-emerald-600 hover:bg-emerald-700">
               {parsing ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Parsing (this can take 10-30 seconds)…</> : '✨ Extract items with AI'}
             </Button>
