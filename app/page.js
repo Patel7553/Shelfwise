@@ -1251,11 +1251,32 @@ function App() {
       {/* Top Nav */}
       <header className="border-b bg-white/90 backdrop-blur-md sticky top-0 z-30">
         <div className="container mx-auto px-4 py-3 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
+          {/* LEFT — logo (tap = go to Dashboard from any page) */}
+          <button
+            type="button"
+            onClick={goToDashboard}
+            title="Go to Dashboard"
+            className="flex items-center gap-2 min-w-0 rounded-lg hover:bg-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-400 px-1 py-0.5 transition"
+          >
             <img src="/logo-icon.png?v=3" alt="ShelfWise" className="h-10 w-10 rounded-lg object-contain bg-white shadow-sm shrink-0" />
-            <div className="min-w-0">
-              <h1 className="text-lg font-bold tracking-tight truncate">{settings.kitchenName || 'ShelfWise'}</h1>
-              <p className="text-xs text-muted-foreground -mt-0.5 truncate hidden sm:block">{settings.tagline || 'From shelf to plate — never lose track.'}{settings.kitchenType ? ' · ' + settings.kitchenType : ''}</p>
+            <div className="min-w-0 hidden sm:block md:hidden lg:hidden">
+              {/* On tablets we skip the mini-label so the centered name has room */}
+            </div>
+            <div className="min-w-0 md:hidden">
+              <h1 className="text-base font-bold tracking-tight truncate text-left">{settings.kitchenName || 'ShelfWise'}</h1>
+              <p className="text-[10px] text-muted-foreground -mt-0.5 truncate text-left">{settings.tagline || 'From shelf to plate.'}</p>
+            </div>
+          </button>
+
+          {/* CENTER — Kitchen name (desktop / tablet only, mobile shows it in the left cluster) */}
+          <div className="hidden md:flex flex-1 items-center justify-center min-w-0 px-4">
+            <div className="text-center min-w-0">
+              <h1 className="text-lg font-bold tracking-tight truncate text-emerald-900">
+                {settings.kitchenName || 'ShelfWise'}
+              </h1>
+              {settings.kitchenType && (
+                <p className="text-[11px] text-emerald-700/70 -mt-0.5 truncate">{settings.kitchenType}</p>
+              )}
             </div>
           </div>
 
@@ -2621,100 +2642,171 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
 }
 
 function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
-  const today = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
-  const rows = Array.from({ length: 25 })
+  // Default: just today, single sheet
+  const todayISO = new Date().toISOString().slice(0, 10)
+  const [fromDate, setFromDate] = useState(todayISO)
+  const [toDate, setToDate] = useState(todayISO)
+  const [rowsPerDay, setRowsPerDay] = useState(25)
+
+  // Compute list of dates in the [fromDate .. toDate] inclusive range
+  const dates = React.useMemo(() => {
+    try {
+      const start = new Date(fromDate)
+      const end = new Date(toDate)
+      if (isNaN(start) || isNaN(end)) return [new Date()]
+      // Guard against reversed range
+      if (end < start) return [start]
+      // Hard cap: 31 days (a full month) to prevent runaway prints
+      const list = []
+      const cursor = new Date(start)
+      while (cursor <= end && list.length < 31) {
+        list.push(new Date(cursor))
+        cursor.setDate(cursor.getDate() + 1)
+      }
+      return list
+    } catch { return [new Date()] }
+  }, [fromDate, toDate])
+
+  const fmtDay = (d) => d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+  const rows = Array.from({ length: Math.max(5, Math.min(50, Number(rowsPerDay) || 25)) })
 
   const handlePrint = () => {
     // Give the browser a tick to apply layout before printing
     setTimeout(() => window.print(), 100)
   }
 
+  // Quick-set helpers
+  const applyQuick = (kind) => {
+    const now = new Date(); now.setHours(0,0,0,0)
+    if (kind === 'today') { setFromDate(todayISO); setToDate(todayISO); return }
+    if (kind === 'week') {
+      const end = new Date(now); end.setDate(end.getDate() + 6)
+      setFromDate(todayISO); setToDate(end.toISOString().slice(0, 10)); return
+    }
+    if (kind === 'month') {
+      const end = new Date(now); end.setDate(end.getDate() + 30)
+      setFromDate(todayISO); setToDate(end.toISOString().slice(0, 10)); return
+    }
+  }
+
   if (!open) return null
 
   return (
     <>
-      {/* Print-only CSS: hide everything except .print-logbook-sheet when printing */}
+      {/* Print-only CSS: hide everything except the sheets when printing.
+          Each sheet has a page-break-after so multi-day prints paginate cleanly. */}
       <style dangerouslySetInnerHTML={{ __html: `
         @media print {
           body * { visibility: hidden !important; }
           .print-logbook-sheet, .print-logbook-sheet * { visibility: visible !important; }
-          .print-logbook-sheet { position: absolute; left: 0; top: 0; width: 100%; padding: 0 !important; }
+          .print-logbook-sheet { position: relative !important; page-break-after: always; break-after: page; }
+          .print-logbook-sheet:last-child { page-break-after: auto; break-after: auto; }
           .print-hide { display: none !important; }
           @page { size: A4; margin: 14mm; }
         }
       `}} />
       <div className="fixed inset-0 z-[100] bg-slate-50 overflow-y-auto">
-        {/* Top bar with Close + Print (hidden when printing) */}
-        <div className="print-hide sticky top-0 z-10 bg-white border-b shadow-sm px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        {/* Top bar with Close + Date pickers + Print */}
+        <div className="print-hide sticky top-0 z-10 bg-white border-b shadow-sm px-4 py-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <button
               onClick={onClose}
-              className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg"
+              className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 rounded-lg shrink-0"
             >
               <X className="h-4 w-4" /> Close
             </button>
+            <div className="text-sm font-semibold text-slate-700 shrink-0">
+              📋 Daily Logbook — {dates.length} day{dates.length !== 1 ? 's' : ''}
+            </div>
+            <button
+              onClick={handlePrint}
+              className="flex items-center gap-1 px-4 py-2 text-sm font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 shrink-0"
+            >
+              <Printer className="h-4 w-4" /> Print / Save PDF
+            </button>
           </div>
-          <div className="text-sm font-semibold text-slate-700">📋 Daily Logbook</div>
-          <button
-            onClick={handlePrint}
-            className="flex items-center gap-1 px-4 py-2 text-sm font-semibold bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
-          >
-            <Printer className="h-4 w-4" /> Print / Save PDF
-          </button>
+
+          {/* Date range picker row */}
+          <div className="mt-3 flex flex-wrap items-end gap-2 border-t pt-3">
+            <div className="min-w-[130px]">
+              <Label className="text-[11px] text-slate-600">From</Label>
+              <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="h-9" />
+            </div>
+            <div className="min-w-[130px]">
+              <Label className="text-[11px] text-slate-600">To</Label>
+              <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="h-9" />
+            </div>
+            <div className="min-w-[90px]">
+              <Label className="text-[11px] text-slate-600">Rows / day</Label>
+              <Input type="number" min="5" max="50" value={rowsPerDay} onChange={e => setRowsPerDay(Number(e.target.value) || 25)} className="h-9" />
+            </div>
+            <div className="flex gap-1 ml-auto">
+              <Button size="sm" variant="outline" onClick={() => applyQuick('today')} className="h-9 text-xs">Today only</Button>
+              <Button size="sm" variant="outline" onClick={() => applyQuick('week')} className="h-9 text-xs">Next 7 days</Button>
+              <Button size="sm" variant="outline" onClick={() => applyQuick('month')} className="h-9 text-xs">Next 30 days</Button>
+            </div>
+          </div>
+          {dates.length > 7 && (
+            <div className="mt-2 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+              ⚠️ You're about to print <b>{dates.length} sheets</b>. Make sure your printer has enough paper — or use "Save as PDF" first to review.
+            </div>
+          )}
         </div>
 
-        {/* The printable sheet */}
-        <div className="print-logbook-sheet max-w-[820px] mx-auto bg-white p-6 md:p-10 my-4 shadow print:shadow-none print:my-0 print:max-w-none">
-          <div className="flex items-start justify-between border-b-[3px] border-emerald-500 pb-3 mb-3">
-            <div>
-              <div className="text-[22px] font-extrabold text-emerald-800">🍳 {kitchenName}</div>
-              <div className="text-[11px] text-slate-500">
-                {kitchenType ? `${kitchenType} • ` : ''}Daily Inventory Logbook — powered by ShelfWise
+        {/* Render ONE printable sheet per date */}
+        {dates.map((d, idx) => (
+          <div key={idx} className="print-logbook-sheet max-w-[820px] mx-auto bg-white p-6 md:p-10 my-4 shadow print:shadow-none print:my-0 print:max-w-none">
+            <div className="flex items-start justify-between border-b-[3px] border-emerald-500 pb-3 mb-3">
+              <div>
+                <div className="text-[22px] font-extrabold text-emerald-800">🍳 {kitchenName}</div>
+                <div className="text-[11px] text-slate-500">
+                  {kitchenType ? `${kitchenType} • ` : ''}Daily Inventory Logbook — powered by ShelfWise
+                </div>
+              </div>
+              <div className="text-right text-xs text-slate-600">
+                <div className="text-sm font-semibold text-slate-900">{fmtDay(d)}</div>
+                <div>Shift: ___________________</div>
+                <div>Logged by: _______________</div>
               </div>
             </div>
-            <div className="text-right text-xs text-slate-600">
-              <div className="text-sm font-semibold text-slate-900">{today}</div>
-              <div>Shift: ___________________</div>
-              <div>Logged by: _______________</div>
+
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-[11px] text-emerald-800 mb-3">
+              📸 <b>End of shift:</b> Snap a photo of this completed sheet using ShelfWise → "Scan Logbook" and all items get added automatically. Write clearly!
+            </div>
+
+            <table className="w-full border-collapse text-[11.5px]">
+              <thead>
+                <tr>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px] w-6">#</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '24%' }}>Product</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '8%' }}>Qty</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '9%' }}>Unit</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '13%' }}>Expiry (DD/MM/YY)</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '11%' }}>Storage</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '14%' }}>Shelf / Loc.</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]">Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((_, i) => (
+                  <tr key={i}>
+                    <td className="border border-slate-400 px-1.5 py-2 text-center text-slate-400">{i + 1}</td>
+                    <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
+                    <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
+                    <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
+                    <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
+                    <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
+                    <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
+                    <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="text-[10px] text-slate-400 text-center mt-2">
+              Units: ea / kg / g / L / mL / pack / bunch / box • Storage: Fridge (F) / Freezer (Fr) / Dry (D) / Ambient (A) • Sheet {idx + 1} of {dates.length}
             </div>
           </div>
-
-          <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-[11px] text-emerald-800 mb-3">
-            📸 <b>End of shift:</b> Snap a photo of this completed sheet using ShelfWise → "Scan Logbook" and all items get added automatically. Write clearly!
-          </div>
-
-          <table className="w-full border-collapse text-[11.5px]">
-            <thead>
-              <tr>
-                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px] w-6">#</th>
-                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '24%' }}>Product</th>
-                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '8%' }}>Qty</th>
-                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '9%' }}>Unit</th>
-                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '13%' }}>Expiry (DD/MM/YY)</th>
-                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '11%' }}>Storage</th>
-                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '14%' }}>Shelf / Loc.</th>
-                <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]">Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((_, i) => (
-                <tr key={i}>
-                  <td className="border border-slate-400 px-1.5 py-2 text-center text-slate-400">{i + 1}</td>
-                  <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
-                  <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
-                  <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
-                  <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
-                  <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
-                  <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
-                  <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="text-[10px] text-slate-400 text-center mt-2">
-            Units: ea / kg / g / L / mL / pack / bunch / box • Storage: Fridge (F) / Freezer (Fr) / Dry (D) / Ambient (A)
-          </div>
-        </div>
+        ))}
 
         {/* Bottom close button (mobile-friendly) */}
         <div className="print-hide max-w-[820px] mx-auto px-6 pb-8">
@@ -3238,10 +3330,12 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
           <span className="text-2xl">🎤</span>
           <span className="text-xs font-semibold">Voice</span>
         </button>
+        {/* Barcode scanner — hidden temporarily. Will be re-enabled with premium DB coverage.
         <button onClick={openBarcode} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 hover:border-blue-300 transition text-blue-800">
           <span className="text-2xl">🔢</span>
           <span className="text-xs font-semibold">Barcode</span>
         </button>
+        */}
         <button onClick={openSnap} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-emerald-200 bg-emerald-50 hover:bg-emerald-100 hover:border-emerald-300 transition text-emerald-800">
           <span className="text-2xl">📸</span>
           <span className="text-xs font-semibold">Snap Label</span>
@@ -3832,7 +3926,7 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
         <div className="flex gap-2 flex-wrap">
           <Button variant="outline" onClick={exportCSV}><Download className="h-4 w-4 mr-2" /> Export CSV</Button>
           <Button variant="outline" onClick={openVoice} className="border-purple-300 bg-purple-50 text-purple-700 hover:bg-purple-100 font-semibold">🎤 Voice</Button>
-          <Button variant="outline" onClick={openBarcode} className="border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold"><ScanLine className="h-4 w-4 mr-2" /> 🔢 Barcode</Button>
+          {/* <Button variant="outline" onClick={openBarcode} className="border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold"><ScanLine className="h-4 w-4 mr-2" /> 🔢 Barcode</Button> */}
           <Button variant="outline" onClick={openSnap} className="border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-semibold"><Sparkles className="h-4 w-4 mr-2" /> 📸 Snap Label</Button>
           <Button variant="outline" onClick={openScan} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"><ScanLine className="h-4 w-4 mr-2" /> Scan Logbook</Button>
           <Button variant="outline" onClick={printLogbook} className="border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100">📒 Print Logbook</Button>

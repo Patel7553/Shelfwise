@@ -1,0 +1,106 @@
+╔══════════════════════════════════════════════════════════════════╗
+║  ShelfWise — UX Polish Bundle                                    ║
+║  Kitchen name in header · Logo → Home · Multi-day logbook print  ║
+║  Barcode hidden temporarily · Close buttons audited              ║
+╚══════════════════════════════════════════════════════════════════╝
+
+CHANGES IN THIS UPDATE
+────────────────────────
+Five improvements from your feedback:
+
+  1) 🏠 Kitchen name is now CENTERED in the header (visible on every page)
+     Old: kitchen name was small, on left, next to logo
+     New: big bold emerald name in the middle of the header, everywhere
+
+  2) 🍅 Logo is now a "Home" button
+     Tap the ShelfWise logo (top-left) FROM ANY PAGE →
+     you're taken back to the Dashboard
+     Works on both desktop and mobile
+
+  3) 📋 MULTI-DAY LOGBOOK PRINTING
+     Print → pick a date range → print/save PDF of all sheets at once
+     Quick-set buttons: "Today only", "Next 7 days", "Next 30 days"
+     Custom rows-per-day (5 to 50)
+     Sheet numbering: "Sheet 3 of 7" etc.
+     Warning banner if you're about to print more than 7 sheets
+
+  4) ✕ Close buttons audited
+     Every dialog now has a clear close/cancel button:
+       • Shadcn Dialogs → auto X in top-right corner (always visible)
+       • Print Logbook → "Close" button top-left + bottom
+       • Camera scanners → "Close" button visible
+       • Setup Wizard → intentionally no skip (owner must finish first-time)
+
+  5) 🔢 BARCODE SCANNER HIDDEN (as agreed)
+     Removed the Barcode button from Dashboard + Inventory
+     Code is commented out (not deleted) — easy to re-enable later
+     when the app is earning and we can pay for premium DBs
+
+═══════════════════════════════════════════════════════════════════
+DEPLOYMENT — 2 STEPS (3 min)
+═══════════════════════════════════════════════════════════════════
+
+STEP 1 — REPLACE FILES IN VS CODE
+  Just 1 file changed:
+    ✓ app/page.js
+
+  If you haven't deployed prior sessions yet, ALSO include:
+    ✓ app/api/[[...path]]/route.js
+    ✓ supabase/migration-9-haccp.sql          (NEW)
+    ✓ supabase/migration-10-weekly-digest.sql (NEW)
+    ✓ vercel.json                             (NEW at repo root)
+
+STEP 2 — COMMIT + SYNC
+  Commit message: "UX: kitchen name in header + logo home + multi-day logbook + hide barcode"
+  Sync → Vercel deploys in 2-3 min
+
+═══════════════════════════════════════════════════════════════════
+HOW TO TEST EACH CHANGE
+═══════════════════════════════════════════════════════════════════
+
+TEST 1 — Kitchen name in header
+  Log in as owner → look at top of the page →
+  Big emerald kitchen name should be centred (with kitchen type below).
+  Navigate to Inventory, Recipes, Compliance, etc — same name shows.
+
+TEST 2 — Logo → Home
+  Go to Inventory (or any non-Dashboard page) →
+  Tap the ShelfWise logo (top-left) →
+  You should be back on Dashboard.
+
+TEST 3 — Multi-day logbook
+  Dashboard → 📒 Print Logbook →
+  You'll see the top bar now has "From" and "To" date pickers +
+  quick buttons "Today only" / "Next 7 days" / "Next 30 days".
+  Try "Next 7 days" → you'll see 7 sheets stacked vertically.
+  Tap "Print / Save PDF" → each sheet prints on its own page.
+
+TEST 4 — Barcode is gone
+  Dashboard → the Barcode button should no longer appear in the
+  scanner row. Should now show: Voice · Snap Label · Invoice ·
+  Scan Logbook · Print Logbook · Cook Expiring.
+
+TEST 5 — Close buttons everywhere
+  Open any dialog (Add Product, Voice, Snap Label, Invoice Scan,
+  Print Logbook, Recipe Gen, HACCP modals) →
+  You should see an X in the top-right (shadcn) AND/OR a Close/Cancel
+  button at the bottom. Tap either → dialog closes cleanly.
+
+═══════════════════════════════════════════════════════════════════
+QUESTIONS?
+═══════════════════════════════════════════════════════════════════
+
+Kitchen name is not showing?
+  → Settings → Kitchen Profile → confirm "Kitchen Name" is filled in
+  → Refresh the page
+
+Multi-day print prints just one page instead of many?
+  → Modern browsers respect the CSS `page-break-after: always` we added.
+    On some browsers you may need to enable "Background Graphics"
+    in the print dialog. Chrome/Safari work best.
+
+Want the barcode button back?
+  → Tell me and I'll ship a 1-line patch (uncomment the two blocks
+    marked with `// Barcode scanner — hidden temporarily`)
+
+— ShelfWise
