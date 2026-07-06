@@ -2694,9 +2694,7 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
 
   return (
     <>
-      {/* Print-only CSS: hide everything except the sheets when printing.
-          Each sheet has a page-break-after so multi-day prints paginate cleanly.
-          Force the table to fit A4 width using table-layout: fixed. */}
+      {/* Print-only CSS — SCOPED to the data table only so it doesn't affect the header info block. */}
       <style dangerouslySetInnerHTML={{ __html: `
         @media print {
           body * { visibility: hidden !important; }
@@ -2712,21 +2710,27 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
             box-shadow: none !important;
           }
           .print-logbook-sheet:last-child { page-break-after: auto; break-after: auto; }
-          .print-logbook-sheet table {
+          /* Only the DATA table gets forced layout + borders */
+          .print-logbook-sheet .logbook-data-table {
             width: 100% !important;
             table-layout: fixed !important;
             font-size: 9pt !important;
             border-collapse: collapse !important;
           }
-          .print-logbook-sheet th,
-          .print-logbook-sheet td {
+          .print-logbook-sheet .logbook-data-table th,
+          .print-logbook-sheet .logbook-data-table td {
             padding: 3px 4px !important;
             overflow: hidden !important;
             word-wrap: break-word !important;
-            word-break: break-word !important;
             border: 1px solid #64748b !important;
           }
-          .print-logbook-sheet tr {
+          .print-logbook-sheet .logbook-data-table th {
+            word-break: keep-all !important;
+            hyphens: none !important;
+            font-size: 8.5pt !important;
+            line-height: 1.15 !important;
+          }
+          .print-logbook-sheet .logbook-data-table tr {
             page-break-inside: avoid !important;
             break-inside: avoid !important;
           }
@@ -2785,35 +2789,29 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
         {/* Render ONE printable sheet per date */}
         {dates.map((d, idx) => (
           <div key={idx} className="print-logbook-sheet max-w-[820px] mx-auto bg-white p-6 md:p-10 my-4 shadow print:shadow-none print:my-0 print:max-w-none">
-            {/* Header — 2 balanced columns with fixed widths so date never wraps */}
-            <div className="border-b-[3px] border-emerald-500 pb-3 mb-3">
-              <div className="grid grid-cols-[1fr_auto] gap-4 items-start">
-                {/* LEFT — brand block */}
-                <div className="min-w-0">
-                  <div className="text-[22px] font-extrabold text-emerald-800 leading-tight truncate">🍳 {kitchenName}</div>
-                  <div className="text-[11px] text-slate-500 mt-0.5">
-                    {kitchenType ? `${kitchenType} • ` : ''}Daily Inventory Logbook
-                  </div>
-                  <div className="text-[10px] text-slate-400 mt-0.5">powered by ShelfWise</div>
+            {/* Header — simple 2-column flex layout, no nested tables so nothing can overlap */}
+            <div className="border-b-[3px] border-emerald-500 pb-3 mb-3 flex items-start justify-between gap-6">
+              {/* LEFT — brand block */}
+              <div className="flex-1 min-w-0">
+                <div className="text-[20px] font-extrabold text-emerald-800 leading-tight">🍳 {kitchenName}</div>
+                <div className="text-[10.5px] text-slate-500 mt-1">
+                  {kitchenType ? `${kitchenType} • ` : ''}Daily Inventory Logbook
                 </div>
-                {/* RIGHT — meta block, table-style form fields */}
-                <div className="text-[11px] text-slate-700 shrink-0">
-                  <table className="border-collapse">
-                    <tbody>
-                      <tr>
-                        <td className="pr-2 py-0.5 text-slate-500 whitespace-nowrap font-medium">Date:</td>
-                        <td className="py-0.5 font-semibold text-slate-900 whitespace-nowrap">{fmtDay(d)}</td>
-                      </tr>
-                      <tr>
-                        <td className="pr-2 py-0.5 text-slate-500 whitespace-nowrap font-medium">Shift:</td>
-                        <td className="py-0.5 border-b border-slate-400" style={{ minWidth: '180px' }}>&nbsp;</td>
-                      </tr>
-                      <tr>
-                        <td className="pr-2 py-0.5 text-slate-500 whitespace-nowrap font-medium">Logged by:</td>
-                        <td className="py-0.5 border-b border-slate-400" style={{ minWidth: '180px' }}>&nbsp;</td>
-                      </tr>
-                    </tbody>
-                  </table>
+                <div className="text-[9.5px] text-slate-400 mt-0.5">powered by ShelfWise</div>
+              </div>
+              {/* RIGHT — form fields as plain divs with fixed width, right-aligned */}
+              <div className="text-[10.5px] text-slate-700 shrink-0" style={{ minWidth: '250px' }}>
+                <div className="flex items-baseline gap-2 mb-1.5">
+                  <span className="text-slate-500 font-medium w-[70px]">Date:</span>
+                  <span className="font-semibold text-slate-900 whitespace-nowrap">{fmtDay(d)}</span>
+                </div>
+                <div className="flex items-baseline gap-2 mb-1.5">
+                  <span className="text-slate-500 font-medium w-[70px]">Shift:</span>
+                  <span className="flex-1 border-b border-slate-400 h-4">&nbsp;</span>
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-slate-500 font-medium w-[70px]">Logged by:</span>
+                  <span className="flex-1 border-b border-slate-400 h-4">&nbsp;</span>
                 </div>
               </div>
             </div>
@@ -2822,7 +2820,7 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
               📸 <b>End of shift:</b> Snap a photo of this completed sheet using ShelfWise → "Scan Logbook" and all items get added automatically. Write clearly!
             </div>
 
-            <table className="w-full border-collapse text-[11.5px]" style={{ tableLayout: 'fixed' }}>
+            <table className="w-full border-collapse text-[11.5px] logbook-data-table" style={{ tableLayout: 'fixed' }}>
               <thead>
                 <tr>
                   <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '5%' }}>#</th>
