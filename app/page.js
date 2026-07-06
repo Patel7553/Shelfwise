@@ -6622,7 +6622,7 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
 function RecipeGenDialog({ open, onClose, seed = [], inventoryNames = [] }) {
   const [ingredients, setIngredients] = useState([])
   const [current, setCurrent] = useState('')
-  const [servings, setServings] = useState(4)
+  const [servings, setServings] = useState(1)  // flexible default — start at 1 so single-portion meals work
   const [cuisine, setCuisine] = useState('Any')
   const [dietary, setDietary] = useState([])
   const [skillLevel, setSkillLevel] = useState('easy')
@@ -6635,7 +6635,7 @@ function RecipeGenDialog({ open, onClose, seed = [], inventoryNames = [] }) {
     if (open) {
       setIngredients(Array.isArray(seed) ? [...new Set(seed)] : [])
       setCurrent('')
-      setServings(4)
+      setServings(1)
       setCuisine('Any')
       setDietary([])
       setSkillLevel('easy')
@@ -6768,7 +6768,7 @@ ${r.notes ? `<h2>Chef's Note</h2><p>${escapeText(r.notes)}</p>` : ''}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
             <div>
               <Label className="text-xs">Servings</Label>
-              <Input type="number" min="1" max="20" value={servings} onChange={e => setServings(Math.max(1, Math.min(20, Number(e.target.value) || 4)))} />
+              <Input type="number" min="1" max="20" value={servings} onChange={e => setServings(Math.max(1, Math.min(20, Number(e.target.value) || 1)))} />
             </div>
             <div>
               <Label className="text-xs">Cuisine</Label>
