@@ -2643,6 +2643,9 @@ function ReceiptScanDialog({ open, onClose, onImport, settings }) {
 }
 
 function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
+  // Escape user-controlled strings before injecting into the generated HTML
+  const escapeHtml = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+
   // Default: just today, single sheet
   const todayISO = new Date().toISOString().slice(0, 10)
   const [fromDate, setFromDate] = useState(todayISO)
@@ -2671,9 +2674,123 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
   const fmtDay = (d) => d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
   const rows = Array.from({ length: Math.max(5, Math.min(100, Number(rowsPerDay) || 25)) })
 
+  // Build a completely standalone, self-contained HTML document with inline CSS.
+  // This is opened in a new window and printed from there — this bypasses ALL of
+  // the modal / parent-CSS quirks on mobile Safari and Chrome print-to-PDF.
+  const buildStandalonePrintHTML = () => {
+    const sheetsHtml = dates.map((d, idx) => {
+      const rowsHtml = rows.map((_, i) => `
+        <tr>
+          <td class="rownum">${i + 1}</td>
+          <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+        </tr>
+      `).join('')
+
+      return `
+      <section class="sheet ${idx > 0 ? 'page-break' : ''}">
+        <header class="sheet-head">
+          <div class="brand">
+            <div class="brand-title">🍳 ${escapeHtml(kitchenName || 'Kitchen')}</div>
+            <div class="brand-sub">${kitchenType ? escapeHtml(kitchenType) + ' · ' : ''}Daily Inventory Logbook</div>
+            <div class="brand-mini">powered by ShelfWise</div>
+          </div>
+          <div class="meta">
+            <div class="meta-row"><span class="meta-label">Date:</span><span class="meta-value">${escapeHtml(fmtDay(d))}</span></div>
+            <div class="meta-row"><span class="meta-label">Shift:</span><span class="meta-line">&nbsp;</span></div>
+            <div class="meta-row"><span class="meta-label">Logged by:</span><span class="meta-line">&nbsp;</span></div>
+          </div>
+        </header>
+
+        <div class="tip">📸 <b>End of shift:</b> Snap a photo of this completed sheet using ShelfWise → "Scan Logbook" and all items get added automatically. Write clearly!</div>
+
+        <table class="grid">
+          <thead>
+            <tr>
+              <th style="width:5%">#</th>
+              <th style="width:24%">Product</th>
+              <th style="width:8%">Qty</th>
+              <th style="width:8%">Unit</th>
+              <th style="width:15%">Expiry<br/><span class="hint">(DD/MM/YY)</span></th>
+              <th style="width:14%">Storage</th>
+              <th style="width:12%">Shelf</th>
+              <th style="width:14%">Initials</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+
+        <div class="footer">Sheet ${idx + 1} of ${dates.length} · Units: ea/kg/g/L/mL/pack · Storage: Fridge (F) / Freezer (Fr) / Dry (D) / Ambient (A)</div>
+      </section>`
+    }).join('')
+
+    return `<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<title>Kitchen Logbook — ${escapeHtml(kitchenName || 'Sheet')}</title>
+<style>
+  @page { size: A4 portrait; margin: 8mm 6mm; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .sheet { padding: 6mm 4mm; page-break-after: always; }
+  .sheet:last-child { page-break-after: auto; }
+  .page-break { page-break-before: always; }
+  .sheet-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; border-bottom: 3px solid #10b981; padding-bottom: 8px; margin-bottom: 8px; }
+  .brand { flex: 1; min-width: 0; }
+  .brand-title { font-size: 18pt; font-weight: 800; color: #065f46; line-height: 1.1; }
+  .brand-sub { font-size: 9pt; color: #64748b; margin-top: 2px; }
+  .brand-mini { font-size: 8pt; color: #94a3b8; margin-top: 1px; }
+  .meta { min-width: 250px; font-size: 9.5pt; color: #334155; }
+  .meta-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .meta-row:last-child { margin-bottom: 0; }
+  .meta-label { color: #64748b; font-weight: 500; width: 70px; flex-shrink: 0; }
+  .meta-value { font-weight: 600; color: #0f172a; white-space: nowrap; }
+  .meta-line { flex: 1; border-bottom: 1px solid #64748b; height: 14px; }
+  .tip { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; padding: 6px 10px; font-size: 9pt; border-radius: 6px; margin-bottom: 8px; line-height: 1.35; }
+  table.grid { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 9pt; }
+  table.grid th, table.grid td { border: 1px solid #64748b; padding: 3px 4px; overflow: hidden; word-wrap: break-word; }
+  table.grid th { background: #f1f5f9; font-size: 8pt; font-weight: 700; text-align: left; line-height: 1.15; }
+  table.grid th .hint { font-size: 7pt; font-weight: 400; color: #64748b; }
+  table.grid td { height: 22px; }
+  table.grid td.rownum { text-align: center; color: #94a3b8; }
+  table.grid tr { page-break-inside: avoid; }
+  .footer { text-align: center; color: #94a3b8; font-size: 7.5pt; margin-top: 6px; }
+  @media screen {
+    body { padding: 20px; background: #f1f5f9; }
+    .sheet { background: white; max-width: 210mm; margin: 0 auto 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+  }
+</style>
+</head>
+<body>
+${sheetsHtml}
+<script>
+  // Auto-fire the print dialog once the page is fully rendered.
+  window.addEventListener('load', function () {
+    setTimeout(function () { window.print(); }, 300);
+  });
+</script>
+</body></html>`
+  }
+
   const handlePrint = () => {
-    // Give the browser a tick to apply layout before printing
-    setTimeout(() => window.print(), 100)
+    const html = buildStandalonePrintHTML()
+    // Try opening a new window first (best on desktop + Android Chrome)
+    const w = window.open('', '_blank')
+    if (w && w.document) {
+      w.document.open()
+      w.document.write(html)
+      w.document.close()
+      return
+    }
+    // Fallback (iOS Safari sometimes blocks new windows): use a same-tab data blob
+    try {
+      const blob = new Blob([html], { type: 'text/html' })
+      const url = URL.createObjectURL(blob)
+      // Give iOS a moment; open in same tab
+      window.location.href = url
+    } catch (_) {
+      // Last-resort: legacy in-page print (may have the previous quirks)
+      setTimeout(() => window.print(), 100)
+    }
   }
 
   // Quick-set helpers
