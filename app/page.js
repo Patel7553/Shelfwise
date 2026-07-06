@@ -2694,23 +2694,40 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
 
   return (
     <>
-      {/* Print-only CSS — SCOPED to the data table only so it doesn't affect the header info block. */}
+      {/* Print-only CSS — SCOPED to the data table only + position:absolute on the sheet
+          so hidden elements don't reserve blank space at the top of the printed page. */}
       <style dangerouslySetInnerHTML={{ __html: `
         @media print {
+          html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            height: auto !important;
+            overflow: visible !important;
+            background: white !important;
+          }
           body * { visibility: hidden !important; }
           .print-logbook-sheet, .print-logbook-sheet * { visibility: visible !important; }
+          /* Absolutely position the sheet at top-left of the page so blank space
+             from hidden ancestors is collapsed away. */
           .print-logbook-sheet {
-            position: relative !important;
-            page-break-after: always;
-            break-after: page;
+            position: absolute !important;
+            top: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            width: 100% !important;
+            max-width: none !important;
             padding: 0 !important;
             margin: 0 !important;
-            max-width: none !important;
-            width: 100% !important;
             box-shadow: none !important;
+            page-break-after: always;
+            break-after: page;
+          }
+          .print-logbook-sheet + .print-logbook-sheet {
+            /* On multi-day prints, second and later sheets stack normally via page breaks */
+            position: relative !important;
           }
           .print-logbook-sheet:last-child { page-break-after: auto; break-after: auto; }
-          /* Only the DATA table gets forced layout + borders */
+          /* Only the DATA table gets forced layout + borders — never touch the header block */
           .print-logbook-sheet .logbook-data-table {
             width: 100% !important;
             table-layout: fixed !important;
@@ -2719,23 +2736,22 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
           }
           .print-logbook-sheet .logbook-data-table th,
           .print-logbook-sheet .logbook-data-table td {
-            padding: 3px 4px !important;
+            padding: 2.5px 3px !important;
             overflow: hidden !important;
-            word-wrap: break-word !important;
             border: 1px solid #64748b !important;
           }
           .print-logbook-sheet .logbook-data-table th {
-            word-break: keep-all !important;
-            hyphens: none !important;
-            font-size: 8.5pt !important;
-            line-height: 1.15 !important;
+            font-size: 7.5pt !important;
+            line-height: 1.1 !important;
+            white-space: normal !important;
+            font-weight: 700 !important;
           }
           .print-logbook-sheet .logbook-data-table tr {
             page-break-inside: avoid !important;
             break-inside: avoid !important;
           }
           .print-hide { display: none !important; }
-          @page { size: A4 portrait; margin: 10mm 8mm; }
+          @page { size: A4 portrait; margin: 8mm 6mm; }
         }
       `}} />
       <div className="fixed inset-0 z-[100] bg-slate-50 overflow-y-auto">
@@ -2824,13 +2840,13 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
               <thead>
                 <tr>
                   <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '5%' }}>#</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '27%' }}>Product</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '9%' }}>Qty</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '9%' }}>Unit</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '24%' }}>Product</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '8%' }}>Qty</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '8%' }}>Unit</th>
                   <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '15%' }}>Expiry<br/><span className="text-[9px] font-normal">(DD/MM/YY)</span></th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '12%' }}>Storage</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '11%' }}>Shelf/Loc.</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '12%' }}>Name/Initials</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '14%' }}>Storage</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '12%' }}>Shelf</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '14%' }}>Initials</th>
                 </tr>
               </thead>
               <tbody>
