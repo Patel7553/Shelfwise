@@ -2650,7 +2650,8 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
   const todayISO = new Date().toISOString().slice(0, 10)
   const [fromDate, setFromDate] = useState(todayISO)
   const [toDate, setToDate] = useState(todayISO)
-  const [rowsPerDay, setRowsPerDay] = useState(18)  // 18 rows fits A4 portrait cleanly on 1 page (was 20 — a hair too tight on iOS)
+  const [orientation, setOrientation] = useState('landscape')  // 'portrait' | 'landscape' — landscape gives roomier rows for handwriting (default per user request)
+  const [rowsPerDay, setRowsPerDay] = useState(15)  // 15 rows landscape / 18 rows portrait — both give tall roomy rows for handwriting
 
   // Compute list of dates in the [fromDate .. toDate] inclusive range
   const dates = React.useMemo(() => {
@@ -2723,13 +2724,20 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
       </section>`
     }).join('')
 
+    // Adjust row height based on orientation:
+    // Landscape has less vertical space so we still need generous rows for handwriting.
+    // Both are 'wide' (roomy) compared to previous 20px — this fixes the "narrow rows" complaint.
+    const rowHeightPt = orientation === 'landscape' ? 30 : 28
+    // Landscape also lets us use a bigger font size since we have more horizontal room
+    const bodyFontPt = orientation === 'landscape' ? 10 : 9
+
     return `<!doctype html>
 <html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kitchen Logbook — ${escapeHtml(kitchenName || 'Sheet')}</title>
 <style>
-  @page { size: A4 portrait; margin: 6mm 5mm; }
+  @page { size: A4 ${orientation}; margin: 6mm 5mm; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body {
     background: #fff;
@@ -2754,15 +2762,15 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
     margin-bottom: 6px;
   }
   .brand { flex: 1; min-width: 0; }
-  .brand-title { font-size: 16pt; font-weight: 800; color: #065f46; line-height: 1.1; }
-  .brand-sub { font-size: 8.5pt; color: #64748b; margin-top: 2px; }
+  .brand-title { font-size: ${orientation === 'landscape' ? '18pt' : '16pt'}; font-weight: 800; color: #065f46; line-height: 1.1; }
+  .brand-sub { font-size: 9pt; color: #64748b; margin-top: 2px; }
   .brand-mini { font-size: 7.5pt; color: #94a3b8; margin-top: 1px; }
   .meta { min-width: 62mm; font-size: 9pt; color: #334155; }
   .meta-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
   .meta-row:last-child { margin-bottom: 0; }
-  .meta-label { color: #64748b; font-weight: 500; width: 20mm; flex-shrink: 0; }
+  .meta-label { color: #64748b; font-weight: 500; width: 22mm; flex-shrink: 0; }
   .meta-value { font-weight: 600; color: #0f172a; white-space: nowrap; }
-  .meta-line { flex: 1; border-bottom: 0.75pt solid #64748b; height: 12px; }
+  .meta-line { flex: 1; border-bottom: 0.75pt solid #64748b; height: 14px; }
   .tip {
     background: #ecfdf5;
     border: 0.75pt solid #a7f3d0;
@@ -2777,25 +2785,26 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
     width: 100%;
     table-layout: fixed;
     border-collapse: collapse;
-    font-size: 9pt;
+    font-size: ${bodyFontPt}pt;
   }
   table.grid th,
   table.grid td {
     border: 0.5pt solid #64748b;
-    padding: 3px 4px;
+    padding: 4px 5px;
     overflow: hidden;
     word-wrap: break-word;
     vertical-align: middle;
   }
   table.grid th {
     background: #f1f5f9;
-    font-size: 8pt;
+    font-size: ${orientation === 'landscape' ? '9pt' : '8pt'};
     font-weight: 700;
     text-align: left;
     line-height: 1.15;
+    height: 20pt;
   }
   table.grid th .hint { font-size: 6.5pt; font-weight: 400; color: #64748b; }
-  table.grid td { height: 20px; }
+  table.grid td { height: ${rowHeightPt}pt; }
   table.grid td.rownum { text-align: center; color: #94a3b8; font-size: 8pt; }
   table.grid tr { page-break-inside: avoid; }
   .footer {
@@ -2950,6 +2959,22 @@ ${sheetsHtml}
             <div className="min-w-[90px]">
               <Label className="text-[11px] text-slate-600">Rows / day</Label>
               <Input type="number" min="5" max="100" value={rowsPerDay} onChange={e => setRowsPerDay(Number(e.target.value) || 25)} className="h-9" />
+            </div>
+            {/* Orientation toggle — landscape gives wider rows for handwriting, portrait fits more rows per page */}
+            <div className="min-w-[190px]">
+              <Label className="text-[11px] text-slate-600">Page orientation</Label>
+              <div className="flex h-9 rounded-md border border-slate-300 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => { setOrientation('portrait'); setRowsPerDay(18) }}
+                  className={`flex-1 text-xs font-medium transition-colors ${orientation === 'portrait' ? 'bg-emerald-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'}`}
+                >📄 Portrait</button>
+                <button
+                  type="button"
+                  onClick={() => { setOrientation('landscape'); setRowsPerDay(15) }}
+                  className={`flex-1 text-xs font-medium border-l border-slate-300 transition-colors ${orientation === 'landscape' ? 'bg-emerald-600 text-white' : 'bg-white text-slate-700 hover:bg-slate-50'}`}
+                >📃 Landscape</button>
+              </div>
             </div>
             <div className="flex gap-1 ml-auto">
               <Button size="sm" variant="outline" onClick={() => applyQuick('today')} className="h-9 text-xs">Today only</Button>
