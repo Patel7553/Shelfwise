@@ -2683,7 +2683,7 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
       const rowsHtml = rows.map((_, i) => `
         <tr>
           <td class="rownum">${i + 1}</td>
-          <td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+          <td></td><td></td><td></td><td></td><td></td><td></td>
         </tr>
       `).join('')
 
@@ -2708,13 +2708,12 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
           <thead>
             <tr>
               <th style="width:5%">#</th>
-              <th style="width:24%">Product</th>
-              <th style="width:8%">Qty</th>
-              <th style="width:8%">Unit</th>
-              <th style="width:15%">Expiry<br/><span class="hint">(DD/MM/YY)</span></th>
+              <th style="width:34%">Product</th>
+              <th style="width:9%">Qty</th>
+              <th style="width:9%">Unit</th>
+              <th style="width:16%">Expiry<br/><span class="hint">(DD/MM/YY)</span></th>
               <th style="width:14%">Storage</th>
-              <th style="width:12%">Shelf</th>
-              <th style="width:14%">Initials</th>
+              <th style="width:13%">Initials</th>
             </tr>
           </thead>
           <tbody>${rowsHtml}</tbody>
@@ -3027,20 +3026,18 @@ ${sheetsHtml}
               <thead>
                 <tr>
                   <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '5%' }}>#</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '24%' }}>Product</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '8%' }}>Qty</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '8%' }}>Unit</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '15%' }}>Expiry<br/><span className="text-[9px] font-normal">(DD/MM/YY)</span></th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '34%' }}>Product</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '9%' }}>Qty</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '9%' }}>Unit</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '16%' }}>Expiry<br/><span className="text-[9px] font-normal">(DD/MM/YY)</span></th>
                   <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '14%' }}>Storage</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '12%' }}>Shelf</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '14%' }}>Initials</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '13%' }}>Initials</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((_, i) => (
                   <tr key={i}>
                     <td className="border border-slate-400 px-1.5 py-2 text-center text-slate-400">{i + 1}</td>
-                    <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
                     <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
                     <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
                     <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
