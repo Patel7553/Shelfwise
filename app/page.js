@@ -2647,7 +2647,7 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
   const todayISO = new Date().toISOString().slice(0, 10)
   const [fromDate, setFromDate] = useState(todayISO)
   const [toDate, setToDate] = useState(todayISO)
-  const [rowsPerDay, setRowsPerDay] = useState(25)
+  const [rowsPerDay, setRowsPerDay] = useState(20)  // 20 rows fits A4 portrait cleanly on 1 page
 
   // Compute list of dates in the [fromDate .. toDate] inclusive range
   const dates = React.useMemo(() => {
@@ -2695,15 +2695,43 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
   return (
     <>
       {/* Print-only CSS: hide everything except the sheets when printing.
-          Each sheet has a page-break-after so multi-day prints paginate cleanly. */}
+          Each sheet has a page-break-after so multi-day prints paginate cleanly.
+          Force the table to fit A4 width using table-layout: fixed. */}
       <style dangerouslySetInnerHTML={{ __html: `
         @media print {
           body * { visibility: hidden !important; }
           .print-logbook-sheet, .print-logbook-sheet * { visibility: visible !important; }
-          .print-logbook-sheet { position: relative !important; page-break-after: always; break-after: page; }
+          .print-logbook-sheet {
+            position: relative !important;
+            page-break-after: always;
+            break-after: page;
+            padding: 0 !important;
+            margin: 0 !important;
+            max-width: none !important;
+            width: 100% !important;
+            box-shadow: none !important;
+          }
           .print-logbook-sheet:last-child { page-break-after: auto; break-after: auto; }
+          .print-logbook-sheet table {
+            width: 100% !important;
+            table-layout: fixed !important;
+            font-size: 9pt !important;
+            border-collapse: collapse !important;
+          }
+          .print-logbook-sheet th,
+          .print-logbook-sheet td {
+            padding: 3px 4px !important;
+            overflow: hidden !important;
+            word-wrap: break-word !important;
+            word-break: break-word !important;
+            border: 1px solid #64748b !important;
+          }
+          .print-logbook-sheet tr {
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+          }
           .print-hide { display: none !important; }
-          @page { size: A4; margin: 14mm; }
+          @page { size: A4 portrait; margin: 10mm 8mm; }
         }
       `}} />
       <div className="fixed inset-0 z-[100] bg-slate-50 overflow-y-auto">
@@ -2757,17 +2785,36 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
         {/* Render ONE printable sheet per date */}
         {dates.map((d, idx) => (
           <div key={idx} className="print-logbook-sheet max-w-[820px] mx-auto bg-white p-6 md:p-10 my-4 shadow print:shadow-none print:my-0 print:max-w-none">
-            <div className="flex items-start justify-between border-b-[3px] border-emerald-500 pb-3 mb-3">
-              <div>
-                <div className="text-[22px] font-extrabold text-emerald-800">🍳 {kitchenName}</div>
-                <div className="text-[11px] text-slate-500">
-                  {kitchenType ? `${kitchenType} • ` : ''}Daily Inventory Logbook — powered by ShelfWise
+            {/* Header — 2 balanced columns with fixed widths so date never wraps */}
+            <div className="border-b-[3px] border-emerald-500 pb-3 mb-3">
+              <div className="grid grid-cols-[1fr_auto] gap-4 items-start">
+                {/* LEFT — brand block */}
+                <div className="min-w-0">
+                  <div className="text-[22px] font-extrabold text-emerald-800 leading-tight truncate">🍳 {kitchenName}</div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    {kitchenType ? `${kitchenType} • ` : ''}Daily Inventory Logbook
+                  </div>
+                  <div className="text-[10px] text-slate-400 mt-0.5">powered by ShelfWise</div>
                 </div>
-              </div>
-              <div className="text-right text-xs text-slate-600">
-                <div className="text-sm font-semibold text-slate-900">{fmtDay(d)}</div>
-                <div>Shift: ___________________</div>
-                <div>Logged by: _______________</div>
+                {/* RIGHT — meta block, table-style form fields */}
+                <div className="text-[11px] text-slate-700 shrink-0">
+                  <table className="border-collapse">
+                    <tbody>
+                      <tr>
+                        <td className="pr-2 py-0.5 text-slate-500 whitespace-nowrap font-medium">Date:</td>
+                        <td className="py-0.5 font-semibold text-slate-900 whitespace-nowrap">{fmtDay(d)}</td>
+                      </tr>
+                      <tr>
+                        <td className="pr-2 py-0.5 text-slate-500 whitespace-nowrap font-medium">Shift:</td>
+                        <td className="py-0.5 border-b border-slate-400" style={{ minWidth: '180px' }}>&nbsp;</td>
+                      </tr>
+                      <tr>
+                        <td className="pr-2 py-0.5 text-slate-500 whitespace-nowrap font-medium">Logged by:</td>
+                        <td className="py-0.5 border-b border-slate-400" style={{ minWidth: '180px' }}>&nbsp;</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
 
@@ -2775,25 +2822,23 @@ function PrintLogbookDialog({ open, onClose, kitchenName, kitchenType }) {
               📸 <b>End of shift:</b> Snap a photo of this completed sheet using ShelfWise → "Scan Logbook" and all items get added automatically. Write clearly!
             </div>
 
-            <table className="w-full border-collapse text-[11.5px]">
+            <table className="w-full border-collapse text-[11.5px]" style={{ tableLayout: 'fixed' }}>
               <thead>
                 <tr>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px] w-6">#</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '22%' }}>Product</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '7%' }}>Qty</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '8%' }}>Unit</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '11%' }}>Expiry (DD/MM/YY)</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '10%' }}>Storage</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '12%' }}>Shelf / Loc.</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '10%' }}>Name / Initials</th>
-                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]">Notes</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '5%' }}>#</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '27%' }}>Product</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '9%' }}>Qty</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '9%' }}>Unit</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '15%' }}>Expiry<br/><span className="text-[9px] font-normal">(DD/MM/YY)</span></th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '12%' }}>Storage</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '11%' }}>Shelf/Loc.</th>
+                  <th className="border border-slate-400 bg-slate-100 px-1.5 py-1.5 text-left text-slate-700 text-[11px]" style={{ width: '12%' }}>Name/Initials</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((_, i) => (
                   <tr key={i}>
                     <td className="border border-slate-400 px-1.5 py-2 text-center text-slate-400">{i + 1}</td>
-                    <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
                     <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
                     <td className="border border-slate-400 px-1.5 py-2 h-7"></td>
                     <td className="border border-slate-400 px-1.5 py-2 h-7"></td>

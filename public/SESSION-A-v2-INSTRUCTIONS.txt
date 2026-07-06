@@ -1,0 +1,78 @@
+==========================================
+ShelfWise — Delivery A (v2 — with fixes)
+Multi-language + Android Install + Logbook + Recipe fixes
+==========================================
+
+WHAT'S NEW SINCE v1
+-------------------
+✅ Recipe Generator: default servings now 1 (was 4, was too rigid)
+✅ Logbook PDF header: date no longer wraps to 2 lines, cleaner layout with
+   proper Date / Shift / Logged-by rows and neat underline fields for handwriting.
+
+
+WHAT'S IN THIS ZIP
+------------------
+
+NEW FILES (create them):
+  • app/lib/i18n.js                     — Translation dictionary + useT() hook
+  • app/components/LanguageSwitcher.js  — Reusable language dropdown
+
+CHANGED FILES (OVERWRITE existing):
+  • app/components/InstallAppPrompt.js  — Android manual-fallback modal
+  • app/app/page.js                     — 5-language nav + Settings switcher
+                                          + Logbook layout fix
+                                          + Recipe servings=1 default
+  • app/app/login/page.js               — Email/Password/Sign-in translated
+                                          + language switcher below install card
+
+
+HOW TO INSTALL (Drag & Drop in VS Code)
+---------------------------------------
+1. Unzip this file.
+2. Open your ShelfWise project in VS Code.
+3. Drag & drop each file INTO THE MATCHING PATH shown above.
+4. VS Code will ask "Overwrite?" → click YES for each.
+5. Commit & push → Vercel auto-deploys in 1–2 minutes.
+
+
+WHAT WORKS TODAY (verified with screenshots)
+--------------------------------------------
+1. LOGIN PAGE
+   ✔ Language switcher at the bottom (English/Hindi/Gujarati/Punjabi/Spanish)
+   ✔ Email/Password/Sign-in labels translate instantly
+   ✔ Install prompt fully translates
+
+2. TOP NAVIGATION (Dashboard, Inventory, Recipes, Rota, Waste, Compliance, Admin,
+   Settings, Sign-out) — all translate on lang change
+
+3. MOBILE MENU DRAWER — all items translate
+
+4. SETTINGS DIALOG → Profile tab → new "🌍 App Language" dropdown
+
+5. INSTALL PROMPT
+   ✔ Android now always shows Install button (was hidden before!)
+   ✔ Tap opens 3-step "Menu → Install app" instructions
+   ✔ iOS unchanged (already worked)
+
+6. RECIPE GENERATOR — servings default is now 1
+
+7. LOGBOOK PDF — header is clean 2-column layout, date fits on one line
+
+
+NOT YET TRANSLATED (Delivery B — coming next)
+---------------------------------------------
+• Dashboard tiles (Total items / Expiring / Expired / Critical)
+• Add-item dialog labels (Category, Storage, Expiry, etc.)
+• All 25 languages (currently 5, adding 22 more EU langs in next round)
+• HACCP screen labels
+• Rota screen labels
+• Toast/error messages
+
+These will come in the next zip once your name change is finalized (so we don't
+translate "ShelfWise" text that needs to be renamed anyway).
+
+
+FOR YOUR NEXT DECISION
+----------------------
+• Rename: Kitcheye or ChefCompas — you decide, then I'll rebrand the whole app in one shot.
+• Then Delivery B will cover: full 27-language dictionary + wrap Dashboard/HACCP/Rota/Recipes strings.
