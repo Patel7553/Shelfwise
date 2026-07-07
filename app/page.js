@@ -2123,9 +2123,51 @@ function App() {
             <div className="space-y-4 py-2">
               <div className="flex items-center justify-between">
                 <p className="text-sm text-muted-foreground">Review and edit the detected items. Uncheck any you don't want to add.</p>
-                <p className="text-xs font-medium">{scanItems.filter(i => i._keep).length} of {scanItems.length} selected</p>
+                <p className="text-xs font-medium whitespace-nowrap">{scanItems.filter(i => i._keep).length} of {scanItems.length} selected</p>
               </div>
-              <div className="border rounded-lg overflow-hidden max-h-[420px] overflow-y-auto">
+
+              {/* MOBILE: card layout — each item shows full-width labeled inputs on its own card */}
+              <div className="md:hidden space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                {scanItems.map((it, idx) => (
+                  <div key={idx} className={`border rounded-lg p-3 bg-white space-y-2 ${!it._keep ? 'opacity-50' : ''}`}>
+                    <label className="flex items-center gap-2 font-semibold text-sm cursor-pointer">
+                      <input type="checkbox" checked={it._keep} onChange={e => updateScanItem(idx, '_keep', e.target.checked)} className="h-4 w-4 accent-emerald-600" />
+                      Item {idx + 1}
+                    </label>
+                    <div>
+                      <Label className="text-[11px] text-slate-500">Name</Label>
+                      <Input value={it.name} onChange={e => updateScanItem(idx, 'name', e.target.value)} className="h-9" placeholder="Product name" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label className="text-[11px] text-slate-500">Qty</Label>
+                        <Input type="number" value={it.quantity} onChange={e => updateScanItem(idx, 'quantity', e.target.value)} className="h-9" />
+                      </div>
+                      <div>
+                        <Label className="text-[11px] text-slate-500">Unit</Label>
+                        <Input value={it.unit} onChange={e => updateScanItem(idx, 'unit', e.target.value)} className="h-9" placeholder="kg, ea..." />
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-[11px] text-slate-500">Expiry date</Label>
+                      <Input type="date" value={it.expiryDate || ''} onChange={e => updateScanItem(idx, 'expiryDate', e.target.value)} className="h-9" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label className="text-[11px] text-slate-500">Category</Label>
+                        <Input value={it.category} onChange={e => updateScanItem(idx, 'category', e.target.value)} className="h-9" />
+                      </div>
+                      <div>
+                        <Label className="text-[11px] text-slate-500">Storage</Label>
+                        <Input value={it.storageType} onChange={e => updateScanItem(idx, 'storageType', e.target.value)} className="h-9" />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* DESKTOP: table layout — unchanged, wider screens have room */}
+              <div className="hidden md:block border rounded-lg overflow-hidden max-h-[420px] overflow-y-auto">
                 <Table>
                   <TableHeader className="bg-slate-50 sticky top-0">
                     <TableRow>
@@ -2153,7 +2195,8 @@ function App() {
                   </TableBody>
                 </Table>
               </div>
-              <div className="flex justify-between">
+
+              <div className="flex justify-between flex-wrap gap-2">
                 <Button variant="ghost" onClick={() => { setScanItems([]); setScanImage(null) }}>
                   <X className="h-4 w-4 mr-2" /> Start over
                 </Button>
