@@ -1465,7 +1465,7 @@ function App() {
 
       <main className="container mx-auto px-4 py-8">
         {view === 'dashboard' && (
-          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} />
+          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} openEdit={openEdit} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -3612,7 +3612,7 @@ function UseTodayPanel({ products, goToInventory, formatDate }) {
   )
 }
 
-function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, openReceipt, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes, currency, openRecipeGen, openRecipeGenFromExpiring }) {
+function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, openReceipt, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes, currency, openRecipeGen, openRecipeGenFromExpiring, openEdit }) {
   const [quickSearch, setQuickSearch] = useState('')
   const [globalResults, setGlobalResults] = useState(null)
   const [globalLoading, setGlobalLoading] = useState(false)
@@ -3851,15 +3851,15 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
       </Card>
       )}
 
-      {/* NEW — Items added today. Resets every midnight. Shows most recent first. */}
-      <RecentItemsToday products={products} goToInventory={goToInventory} formatDate={typeof stats.formatDate === 'function' ? stats.formatDate : (d) => d} />
+      {/* NEW — Items added today. Resets every midnight. Shows most recent first. Click any item to view / edit. */}
+      <RecentItemsToday products={products} goToInventory={goToInventory} openEdit={openEdit} />
     </div>
   )
 }
 
 // A card that lists items added today (created_at within the last 24h up to midnight tomorrow).
 // Refreshes when the products prop changes, so it always reflects the latest state.
-function RecentItemsToday({ products, goToInventory }) {
+function RecentItemsToday({ products, goToInventory, openEdit }) {
   const todayItems = React.useMemo(() => {
     if (!Array.isArray(products) || products.length === 0) return []
     const start = new Date(); start.setHours(0, 0, 0, 0)
@@ -3906,8 +3906,14 @@ function RecentItemsToday({ products, goToInventory }) {
               return (
                 <button
                   key={p.id}
-                  onClick={() => goToInventory('All')}
+                  onClick={() => {
+                    // Prefer opening the edit dialog so the user can see ALL fields at once (image, allergens, cost, notes...).
+                    // Falls back to navigating to inventory if openEdit isn't wired.
+                    if (typeof openEdit === 'function') openEdit(p)
+                    else goToInventory('All')
+                  }}
                   className="w-full text-left flex items-center gap-3 p-3 rounded-lg border hover:bg-emerald-50 hover:border-emerald-200 transition"
+                  title="Tap to view all details"
                 >
                   {p.imageUrl ? (
                     <img src={p.imageUrl} alt="" className="h-10 w-10 rounded-md object-cover border shrink-0" />
@@ -4371,6 +4377,7 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
   // -------- BULK SELECT + DELETE --------
   const [selectedIds, setSelectedIds] = useState(() => new Set())
   const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [confirmBulkOpen, setConfirmBulkOpen] = useState(false)  // styled confirm dialog (no native prompts)
   // Clear stale selections when the underlying list changes (filters, refreshes)
   useEffect(() => {
     setSelectedIds(prev => {
@@ -4394,10 +4401,10 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
     setSelectedIds(allSelected ? new Set() : new Set(products.map(p => p.id)))
   }
 
-  const bulkDelete = async () => {
+  // Actual delete once user confirms in the styled dialog
+  const confirmBulkDelete = async () => {
     const ids = Array.from(selectedIds)
-    if (ids.length === 0) return
-    if (!confirm(`Permanently delete ${ids.length} item${ids.length !== 1 ? 's' : ''}?\n\nThis cannot be undone.`)) return
+    if (ids.length === 0) { setConfirmBulkOpen(false); return }
     setBulkDeleting(true)
     let ok = 0, fail = 0
     for (const id of ids) {
@@ -4407,19 +4414,17 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
       } catch (_) { fail++ }
     }
     setBulkDeleting(false)
+    setConfirmBulkOpen(false)
     setSelectedIds(new Set())
     if (fail === 0) toast.success(`Deleted ${ok} item${ok !== 1 ? 's' : ''} ✅`)
     else if (ok > 0) toast.warning(`Deleted ${ok}, failed ${fail}`)
     else toast.error('Delete failed — please try again')
-    // Trigger inventory refresh via parent (uses deleteProduct which internally refreshes)
-    if (typeof deleteProduct === 'function' && ok > 0) {
-      // Call with a fake ID that doesn't exist — this makes the API silently no-op AND triggers the parent's list refresh.
-      // Better: just tell parent to refresh via a page-level event.
-      try { window.dispatchEvent(new Event('shelfwise-inventory-refresh')) } catch (_) {}
-    }
+    try { window.dispatchEvent(new Event('shelfwise-inventory-refresh')) } catch (_) {}
   }
-  // Also listen for the refresh so it can be raised anywhere
-  // (implemented at page-level; here we just fire it)
+
+  const bulkDelete = () => setConfirmBulkOpen(true)
+  // Preview names of items being deleted (first 6)
+  const previewSelected = products.filter(p => selectedIds.has(p.id)).slice(0, 6)
 
   return (
     <div className="space-y-6">
@@ -4591,6 +4596,57 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
           </div>
         </CardContent>
       </Card>
+
+      {/* Styled bulk-delete confirmation dialog — replaces native browser confirm */}
+      <Dialog open={confirmBulkOpen} onOpenChange={setConfirmBulkOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-700">
+              <Trash2 className="h-5 w-5" />
+              Delete {selectedIds.size} item{selectedIds.size !== 1 ? 's' : ''}?
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-2 space-y-3">
+            <p className="text-sm text-slate-700">
+              This will <b>permanently remove</b> the following item{selectedIds.size !== 1 ? 's' : ''} from your inventory. This action <b>cannot be undone</b>.
+            </p>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 max-h-[200px] overflow-y-auto">
+              <ul className="divide-y">
+                {previewSelected.map(p => (
+                  <li key={p.id} className="px-3 py-2 text-sm">
+                    <div className="font-semibold text-slate-900 truncate">{p.name}</div>
+                    <div className="text-[11px] text-slate-500 truncate">
+                      {p.quantity} {p.unit}
+                      {p.expiryDate ? ` · exp ${p.expiryDate}` : ''}
+                      {p.storageType ? ` · ${p.storageType}` : ''}
+                    </div>
+                  </li>
+                ))}
+                {selectedIds.size > previewSelected.length && (
+                  <li className="px-3 py-2 text-xs text-slate-500 italic">
+                    …and {selectedIds.size - previewSelected.length} more
+                  </li>
+                )}
+              </ul>
+            </div>
+            <div className="rounded-lg bg-amber-50 border border-amber-200 p-2.5 text-xs text-amber-900">
+              💡 If you want to track WASTE reasons (spoiled, prep loss, sold, etc.) instead of a hard delete, close this and use the 🗑️ trash icon on each row — that opens the "Dispose" flow with reasons.
+            </div>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button variant="outline" onClick={() => setConfirmBulkOpen(false)} disabled={bulkDeleting}>
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmBulkDelete}
+              disabled={bulkDeleting}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {bulkDeleting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Deleting…</> : <><Trash2 className="h-4 w-4 mr-2" /> Yes, delete {selectedIds.size}</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -5168,7 +5224,8 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
       setWidgets(Array.isArray(settings.dashboardWidgets) ? settings.dashboardWidgets : ALL_WIDGETS.map(w => w.key))
       setModules(Array.isArray(settings.modulesEnabled) ? settings.modulesEnabled : ['stock', 'recipes'])
     }
-  }, [open])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, settings.dashboardWidgets, settings.modulesEnabled])  // Re-sync when settings load or change externally
 
   const toggleWidget = (k) => setWidgets(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
   const toggleModule = (k) => setModules(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
