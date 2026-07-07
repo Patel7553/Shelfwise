@@ -302,6 +302,13 @@ function App() {
 
   useEffect(() => { fetchProducts() }, [statusFilter, search, sort, categoryFilter, storageFilter])
   useEffect(() => { fetchStats(); fetchFacets() }, [products.length, view])
+  // Global refresh trigger — any child component can dispatch this event to force a full reload
+  useEffect(() => {
+    const onRefresh = () => { fetchProducts(); fetchStats(); fetchFacets() }
+    window.addEventListener('shelfwise-inventory-refresh', onRefresh)
+    return () => window.removeEventListener('shelfwise-inventory-refresh', onRefresh)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter, search, sort, categoryFilter, storageFilter])
   useEffect(() => { fetchSettings() }, [])
   useEffect(() => { if (view === 'recipes') fetchRecipes() }, [view, recipesSearch])
 
@@ -421,6 +428,19 @@ function App() {
     if (!form.name.trim()) {
       toast.error('Name is required')
       return
+    }
+    // Duplicate check — only for NEW products (not when editing existing ones)
+    if (!editing) {
+      const dupes = findDuplicatesAgainstInventory([form], products)
+      if (dupes.length > 0) {
+        const d = dupes[0].newItem
+        const ok = window.confirm(
+          `⚠️ This looks like a duplicate already in your inventory:\n\n` +
+          `• ${d.name} (${d.quantity} ${d.unit}, exp ${d.expiryDate || '—'})\n\n` +
+          `It matches by name + quantity + expiry.\n\nAdd it anyway?`
+        )
+        if (!ok) return
+      }
     }
     try {
       const method = editing ? 'PUT' : 'POST'
@@ -642,6 +662,16 @@ function App() {
   const saveVoiceItems = async () => {
     const toSave = voiceItems.filter(i => i._keep && i.name?.trim())
     if (!toSave.length) { toast.error('Nothing selected to save'); return }
+    // Duplicate check — same rules as scan-logbook
+    const dupes = findDuplicatesAgainstInventory(toSave, products)
+    if (dupes.length > 0) {
+      const preview = dupes.slice(0, 5).map(d => `• ${d.newItem.name} (${d.newItem.quantity} ${d.newItem.unit}, exp ${d.newItem.expiryDate || '—'})`).join('\n')
+      const more = dupes.length > 5 ? `\n…and ${dupes.length - 5} more` : ''
+      const ok = window.confirm(
+        `⚠️ ${dupes.length} of ${toSave.length} item${dupes.length !== 1 ? 's' : ''} look like duplicates already in inventory:\n\n${preview}${more}\n\nAdd them anyway?\n\n[OK] = Add all\n[Cancel] = Stop and let me uncheck them first`
+      )
+      if (!ok) return
+    }
     setVoiceParsing(true)
     try {
       for (const item of toSave) {
@@ -942,6 +972,17 @@ function App() {
 
   const saveSnapItem = async () => {
     if (!snapItem?.name?.trim()) { toast.error('Product name is required'); return }
+    // Duplicate check — single item
+    const dupes = findDuplicatesAgainstInventory([snapItem], products)
+    if (dupes.length > 0) {
+      const d = dupes[0].newItem
+      const ok = window.confirm(
+        `⚠️ This item looks like a duplicate already in your inventory:\n\n` +
+        `• ${d.name} (${d.quantity} ${d.unit}, exp ${d.expiryDate || '—'})\n\n` +
+        `It matches by name + quantity + expiry.\n\nAdd it anyway?`
+      )
+      if (!ok) return
+    }
     setSnapSaving(true)
     try {
       const res = await fetch('/api/products', {
@@ -1027,11 +1068,47 @@ function App() {
     }
   }
 
+  // -------- DUPLICATE DETECTION --------
+  // Given a list of new items about to be saved and the current products in inventory,
+  // return an array of {new, existing} matches based on: name + quantity + expiryDate + preparedBy.
+  // (Case-insensitive name, trimmed; date compared as YYYY-MM-DD; empty preparedBy matches anything.)
+  const findDuplicatesAgainstInventory = (newItems, existingProducts) => {
+    const norm = (s) => String(s || '').trim().toLowerCase()
+    const dayOnly = (d) => (d || '').toString().slice(0, 10)
+    const matches = []
+    for (const n of newItems) {
+      const found = existingProducts.find(p => {
+        if (norm(p.name) !== norm(n.name)) return false
+        if (Number(p.quantity) !== Number(n.quantity)) return false
+        if (dayOnly(p.expiryDate) !== dayOnly(n.expiryDate)) return false
+        // If BOTH have preparedBy set, they must match; otherwise ignore.
+        const pInit = norm(p.preparedBy || p.prepared_by)
+        const nInit = norm(n.preparedBy)
+        if (pInit && nInit && pInit !== nInit) return false
+        return true
+      })
+      if (found) matches.push({ newItem: n, existing: found })
+    }
+    return matches
+  }
+
   const saveScannedItems = async () => {
     const toAdd = scanItems.filter(it => it._keep).map(({ _keep, ...rest }) => rest)
     if (!toAdd.length) {
       toast.error('No items selected')
       return
+    }
+    // Check for duplicates before saving
+    const dupes = findDuplicatesAgainstInventory(toAdd, products)
+    if (dupes.length > 0) {
+      const preview = dupes.slice(0, 5).map(d => `• ${d.newItem.name} (${d.newItem.quantity} ${d.newItem.unit}, exp ${d.newItem.expiryDate || '—'})`).join('\n')
+      const more = dupes.length > 5 ? `\n…and ${dupes.length - 5} more` : ''
+      const ok = window.confirm(
+        `⚠️ ${dupes.length} of ${toAdd.length} item${dupes.length !== 1 ? 's' : ''} look like duplicates already in your inventory:\n\n${preview}${more}\n\n` +
+        `They match by name + quantity + expiry (${dupes[0]?.newItem?.preparedBy ? '+ initials' : ''}).\n\n` +
+        `Add them anyway?\n\n[OK] = Add all (may create duplicates)\n[Cancel] = Stop and let me uncheck them first`
+      )
+      if (!ok) return
     }
     setScanSaving(true)
     try {
@@ -3773,7 +3850,92 @@ function DashboardView({ stats, products, goToInventory, seedData, openAdd, open
         </CardContent>
       </Card>
       )}
+
+      {/* NEW — Items added today. Resets every midnight. Shows most recent first. */}
+      <RecentItemsToday products={products} goToInventory={goToInventory} formatDate={typeof stats.formatDate === 'function' ? stats.formatDate : (d) => d} />
     </div>
+  )
+}
+
+// A card that lists items added today (created_at within the last 24h up to midnight tomorrow).
+// Refreshes when the products prop changes, so it always reflects the latest state.
+function RecentItemsToday({ products, goToInventory }) {
+  const todayItems = React.useMemo(() => {
+    if (!Array.isArray(products) || products.length === 0) return []
+    const start = new Date(); start.setHours(0, 0, 0, 0)
+    const end = new Date(); end.setHours(23, 59, 59, 999)
+    return products
+      .filter(p => {
+        const c = p.createdAt || p.created_at
+        if (!c) return false
+        const t = new Date(c).getTime()
+        return t >= start.getTime() && t <= end.getTime()
+      })
+      .sort((a, b) => new Date(b.createdAt || b.created_at) - new Date(a.createdAt || a.created_at))
+  }, [products])
+
+  const dateStr = new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })
+
+  return (
+    <Card className="border-0 shadow-sm">
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="text-xl flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-emerald-600" /> Added Today
+            </CardTitle>
+            <CardDescription>{dateStr} · Items you added or scanned today ({todayItems.length})</CardDescription>
+          </div>
+          {todayItems.length > 0 && (
+            <Button variant="ghost" size="sm" onClick={() => goToInventory('All')}>View all</Button>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent>
+        {todayItems.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground">
+            <Package className="h-10 w-10 mx-auto mb-2 opacity-30" />
+            <p className="text-sm">Nothing added yet today.</p>
+            <p className="text-xs mt-1">Use Voice, Snap Label, Scan Logbook or Supplier Invoice to add items — they'll show up here.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {todayItems.slice(0, 8).map(p => {
+              const c = new Date(p.createdAt || p.created_at)
+              const time = c.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => goToInventory('All')}
+                  className="w-full text-left flex items-center gap-3 p-3 rounded-lg border hover:bg-emerald-50 hover:border-emerald-200 transition"
+                >
+                  {p.imageUrl ? (
+                    <img src={p.imageUrl} alt="" className="h-10 w-10 rounded-md object-cover border shrink-0" />
+                  ) : (
+                    <div className="h-10 w-10 rounded-md bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-500 shrink-0">
+                      <Package className="h-4 w-4" />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-sm truncate">{p.name}</p>
+                    <p className="text-[11px] text-slate-500 truncate">
+                      {p.quantity} {p.unit}
+                      {p.storageType ? ` · ${p.storageType}` : ''}
+                      {p.expiryDate ? ` · exp ${p.expiryDate}` : ''}
+                      {p.preparedBy ? ` · by ${p.preparedBy}` : ''}
+                    </p>
+                  </div>
+                  <div className="text-[11px] text-slate-400 shrink-0 whitespace-nowrap">{time}</div>
+                </button>
+              )
+            })}
+            {todayItems.length > 8 && (
+              <p className="text-xs text-center text-slate-500 pt-1">+ {todayItems.length - 8} more today — tap "View all"</p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 
@@ -4205,6 +4367,60 @@ function ViewRecipeDialog({ recipe, onClose, onDelete }) {
 
 function InventoryView({ products, loading, statusFilter, setStatusFilter, search, setSearch, sort, setSort, categoryFilter, setCategoryFilter, storageFilter, setStorageFilter, facets, openAdd, openScan, openSnap, openBarcode, openVoice, printLogbook, openEdit, deleteProduct, openDispose, exportCSV, formatDate }) {
   const activeFilters = [statusFilter !== 'All', categoryFilter !== 'All', storageFilter !== 'All', !!search].filter(Boolean).length
+
+  // -------- BULK SELECT + DELETE --------
+  const [selectedIds, setSelectedIds] = useState(() => new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+  // Clear stale selections when the underlying list changes (filters, refreshes)
+  useEffect(() => {
+    setSelectedIds(prev => {
+      const validIds = new Set(products.map(p => p.id))
+      const next = new Set()
+      prev.forEach(id => { if (validIds.has(id)) next.add(id) })
+      return next
+    })
+  }, [products])
+
+  const toggleOne = (id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  const allSelected = products.length > 0 && products.every(p => selectedIds.has(p.id))
+  const someSelected = selectedIds.size > 0 && !allSelected
+  const toggleAll = () => {
+    setSelectedIds(allSelected ? new Set() : new Set(products.map(p => p.id)))
+  }
+
+  const bulkDelete = async () => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    if (!confirm(`Permanently delete ${ids.length} item${ids.length !== 1 ? 's' : ''}?\n\nThis cannot be undone.`)) return
+    setBulkDeleting(true)
+    let ok = 0, fail = 0
+    for (const id of ids) {
+      try {
+        const res = await fetch(`/api/products/${id}`, { method: 'DELETE' })
+        if (res.ok) ok++; else fail++
+      } catch (_) { fail++ }
+    }
+    setBulkDeleting(false)
+    setSelectedIds(new Set())
+    if (fail === 0) toast.success(`Deleted ${ok} item${ok !== 1 ? 's' : ''} ✅`)
+    else if (ok > 0) toast.warning(`Deleted ${ok}, failed ${fail}`)
+    else toast.error('Delete failed — please try again')
+    // Trigger inventory refresh via parent (uses deleteProduct which internally refreshes)
+    if (typeof deleteProduct === 'function' && ok > 0) {
+      // Call with a fake ID that doesn't exist — this makes the API silently no-op AND triggers the parent's list refresh.
+      // Better: just tell parent to refresh via a page-level event.
+      try { window.dispatchEvent(new Event('shelfwise-inventory-refresh')) } catch (_) {}
+    }
+  }
+  // Also listen for the refresh so it can be raised anywhere
+  // (implemented at page-level; here we just fire it)
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between flex-wrap gap-4">
@@ -4213,6 +4429,19 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
           <p className="text-muted-foreground mt-1">Showing {products.length} item{products.length !== 1 ? 's' : ''}{statusFilter !== 'All' ? ` · filtered by ${STATUS_META[statusFilter]?.label || statusFilter}` : ''}</p>
         </div>
         <div className="flex gap-2 flex-wrap">
+          {/* Bulk delete button — only shows when something is selected */}
+          {selectedIds.size > 0 && (
+            <Button
+              variant="destructive"
+              onClick={bulkDelete}
+              disabled={bulkDeleting}
+              className="bg-red-600 hover:bg-red-700 font-semibold"
+              title="Delete all selected items"
+            >
+              {bulkDeleting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Trash2 className="h-4 w-4 mr-2" />}
+              Delete {selectedIds.size} selected
+            </Button>
+          )}
           <Button variant="outline" onClick={exportCSV}><Download className="h-4 w-4 mr-2" /> Export CSV</Button>
           <Button variant="outline" onClick={openVoice} className="border-purple-300 bg-purple-50 text-purple-700 hover:bg-purple-100 font-semibold">🎤 Voice</Button>
           {/* <Button variant="outline" onClick={openBarcode} className="border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold"><ScanLine className="h-4 w-4 mr-2" /> 🔢 Barcode</Button> */}
@@ -4268,6 +4497,16 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
             <Table>
               <TableHeader className="bg-slate-50">
                 <TableRow>
+                  <TableHead className="w-10">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      ref={el => { if (el) el.indeterminate = someSelected }}
+                      onChange={toggleAll}
+                      className="h-4 w-4 accent-emerald-600 cursor-pointer"
+                      title={allSelected ? 'Deselect all' : 'Select all'}
+                    />
+                  </TableHead>
                   <TableHead className="w-14"></TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>Qty</TableHead>
@@ -4282,11 +4521,20 @@ function InventoryView({ products, loading, statusFilter, setStatusFilter, searc
               </TableHeader>
               <TableBody>
                 {loading ? (
-                  <TableRow><TableCell colSpan={10} className="text-center py-8 text-muted-foreground">Loading...</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={11} className="text-center py-8 text-muted-foreground">Loading...</TableCell></TableRow>
                 ) : products.length === 0 ? (
-                  <TableRow><TableCell colSpan={10} className="text-center py-12 text-muted-foreground">No products match your filters.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={11} className="text-center py-12 text-muted-foreground">No products match your filters.</TableCell></TableRow>
                 ) : products.map(p => (
-                  <TableRow key={p.id} className="hover:bg-slate-50/60">
+                  <TableRow key={p.id} className={`hover:bg-slate-50/60 ${selectedIds.has(p.id) ? 'bg-emerald-50/60' : ''}`}>
+                    <TableCell>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(p.id)}
+                        onChange={() => toggleOne(p.id)}
+                        className="h-4 w-4 accent-emerald-600 cursor-pointer"
+                        title="Select for bulk delete"
+                      />
+                    </TableCell>
                     <TableCell>
                       {p.imageUrl ? (
                         <img src={p.imageUrl} alt="" className="h-10 w-10 rounded-md object-cover border" />
