@@ -5267,7 +5267,7 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
       setModules(Array.isArray(settings.modulesEnabled) ? settings.modulesEnabled : ['stock', 'recipes'])
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, settings.dashboardWidgets, settings.modulesEnabled])  // Re-sync when settings load or change externally
+  }, [open, settings.kitchenName, settings.kitchenType, settings.currency, settings.alertEmail, settings.dashboardWidgets, settings.modulesEnabled])  // Re-sync on ANY settings change so we never save stale (empty) fields
 
   const toggleWidget = (k) => setWidgets(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
   const toggleModule = (k) => setModules(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
@@ -5311,15 +5311,18 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
       label: f.label.trim(),
       type: f.type || 'text'
     }))
-    // Build a PATCH-style payload — only include fields the user actually filled in.
-    // Prevents saving an empty kitchenName when the settings dialog opens before
-    // settings finished loading (which used to overwrite "bupa" back to blank).
+    // Build a PATCH-style payload — ONLY include fields the user actually changed.
+    // Compare against the currently-loaded settings; if a field is unchanged, skip it
+    // so the backend keeps whatever's already in the DB. This makes it impossible to
+    // accidentally overwrite the kitchen name with an empty/stale value.
     const payload = { customFields: cleanFields, weeklyDigestEnabled: weeklyDigest, dashboardWidgets: widgets, modulesEnabled: modules, onboarded: true }
-    if (name.trim()) payload.kitchenName = name.trim()   // <-- key fix: never overwrite kitchen name with empty
-    if (type) payload.kitchenType = type
-    if (inviteCode) payload.inviteCode = inviteCode
-    if (alertEmail.trim()) payload.alertEmail = alertEmail.trim()
-    if (currency) payload.currency = currency
+    const trimmedName = name.trim()
+    if (trimmedName && trimmedName !== (settings.kitchenName || '')) payload.kitchenName = trimmedName
+    if (type && type !== (settings.kitchenType || '')) payload.kitchenType = type
+    if (inviteCode && inviteCode !== (settings.inviteCode || '')) payload.inviteCode = inviteCode
+    const trimmedEmail = alertEmail.trim()
+    if (trimmedEmail && trimmedEmail !== (settings.alertEmail || '')) payload.alertEmail = trimmedEmail
+    if (currency && currency !== (settings.currency || '')) payload.currency = currency
     await saveSettings(payload)
     onClose()
   }
