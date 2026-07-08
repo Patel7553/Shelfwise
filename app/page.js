@@ -8109,16 +8109,54 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
                 <Label>Notes (optional)</Label>
                 <Input value={tempModal.notes || ''} onChange={e => setTempModal({ ...tempModal, notes: e.target.value })} placeholder="e.g. door left open by delivery" />
               </div>
-              {tempModal.id && (
-                <div>
-                  <Label>Recorded at</Label>
-                  <Input
-                    type="datetime-local"
-                    value={tempModal.recordedAt ? new Date(tempModal.recordedAt).toISOString().slice(0, 16) : ''}
-                    onChange={e => setTempModal({ ...tempModal, recordedAt: e.target.value ? new Date(e.target.value).toISOString() : tempModal.recordedAt })}
-                  />
-                </div>
-              )}
+              {/* Time & date pickers — always shown so user can log a reading for any past AM/PM slot */}
+              <div>
+                <Label>When was this reading taken?</Label>
+                {(() => {
+                  // Derive current time slot from recordedAt (default = now)
+                  const nowIso = tempModal.recordedAt || new Date().toISOString()
+                  const d = new Date(nowIso)
+                  const dateStr = d.toISOString().slice(0, 10)
+                  const hh = d.getUTCHours()
+                  // Which button is currently "active"?
+                  const activeSlot = tempModal.timeOfDay || (hh === 8 ? 'am' : hh === 17 ? 'pm' : 'now')
+                  const setSlot = (slot, dateOverride) => {
+                    const useDate = dateOverride || dateStr
+                    let time
+                    if (slot === 'am') time = '08:00'
+                    else if (slot === 'pm') time = '17:00'
+                    else time = new Date().toTimeString().slice(0, 5)
+                    setTempModal({ ...tempModal, timeOfDay: slot, recordedAt: `${useDate}T${time}:00Z` })
+                  }
+                  return (
+                    <>
+                      <div className="flex gap-1 mt-1 rounded-lg border bg-slate-50 p-0.5 overflow-hidden">
+                        {[
+                          { k: 'am', label: '🌅 AM (08:00)' },
+                          { k: 'pm', label: '🌆 PM (17:00)' },
+                          { k: 'now', label: '🕐 Now' },
+                        ].map(o => (
+                          <button
+                            key={o.k}
+                            type="button"
+                            onClick={() => setSlot(o.k)}
+                            className={`flex-1 px-2 py-1.5 text-xs font-medium rounded ${activeSlot === o.k ? 'bg-emerald-600 text-white' : 'text-slate-700 hover:bg-white'}`}
+                          >{o.label}</button>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <Label className="text-xs shrink-0">Date:</Label>
+                        <Input
+                          type="date"
+                          value={dateStr}
+                          onChange={e => setSlot(activeSlot, e.target.value)}
+                          className="h-8 text-xs flex-1"
+                        />
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
             </div>
           )}
           <DialogFooter>
