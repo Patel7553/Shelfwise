@@ -2113,9 +2113,27 @@ export async function PUT(request, { params }) {
       }
       if (customFields !== undefined) patch.custom_fields = customFields
 
-      const { data, error: e2 } = await sb.from('kitchens').update(patch).eq('id', ctx.kitchenId).select().single()
-      if (e2) throw e2
-      return json(kitchenToApi(data))
+      let { data, error: e2 } = await sb.from('kitchens').update(patch).eq('id', ctx.kitchenId).select().single()
+      if (e2 && /haccp_locations|schema cache/i.test(e2.message || '')) {
+        // Migration 12 not run yet — retry without haccp_locations to avoid rolling back other fields.
+        // We STILL surface a hint so the user knows their fridges/freezers didn't save.
+        const { haccp_locations, ...core } = patch
+        const retry = await sb.from('kitchens').update(core).eq('id', ctx.kitchenId).select().single()
+        data = retry.data
+        e2 = retry.error
+        if (data) {
+          data._migration12Missing = true  // signal to client
+        }
+      }
+      if (e2) {
+        const hint = /haccp_locations|schema cache/i.test(e2.message || '')
+          ? ' — please run supabase/migration-12-haccp-locations.sql in Supabase SQL Editor.'
+          : ''
+        return json({ error: (e2.message || 'Update failed') + hint }, 500)
+      }
+      const out = kitchenToApi(data)
+      if (data._migration12Missing) out._warning = 'Fridges & Freezers list could not be saved — please run migration-12 in Supabase.'
+      return json(out)
     }
 
     if (segs[0] === 'products' && segs[1]) {
