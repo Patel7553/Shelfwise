@@ -5257,6 +5257,11 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
   const [currency, setCurrency] = useState('GBP')
   const [weeklyDigest, setWeeklyDigest] = useState(true)
   const [digestSending, setDigestSending] = useState(false)
+  // Dirty tracking — CRITICAL: only send fields user actually touched to backend.
+  // Prevents stale local state (e.g. if dialog opened before settings loaded)
+  // from clobbering DB values on save. Each section tracks its own dirty flag.
+  const [touched, setTouched] = useState({ profile: false, login: false, dashboard: false, fields: false })
+  const markTouched = (section) => setTouched(prev => prev[section] ? prev : { ...prev, [section]: true })
   const ALL_WIDGETS = [
     { key: 'all_items', label: 'All Items count' },
     { key: 'expiring',  label: 'Expiring Soon' },
@@ -5281,27 +5286,39 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
 
   useEffect(() => {
     if (open) {
+      // Only re-sync a section if the user hasn't touched it yet.
+      // This lets the dialog absorb late-arriving settings (fetchSettings resolved
+      // after dialog opened) WITHOUT clobbering the user's in-progress edits.
+      if (!touched.profile) {
+        setName(settings.kitchenName || '')
+        setType(settings.kitchenType || 'Restaurant')
+        setCurrency(settings.currency || 'GBP')
+      }
+      if (!touched.login) {
+        setInviteCode(settings.inviteCode || '')
+        setAlertEmail(settings.alertEmail || '')
+        setWeeklyDigest(settings.weeklyDigestEnabled !== false)
+      }
+      if (!touched.dashboard) {
+        setWidgets(Array.isArray(settings.dashboardWidgets) ? settings.dashboardWidgets : ALL_WIDGETS.map(w => w.key))
+        setModules(Array.isArray(settings.modulesEnabled) ? settings.modulesEnabled : ['stock', 'recipes'])
+      }
+      if (!touched.fields) {
+        setFields(settings.customFields?.length ? [...settings.customFields] : [])
+      }
+    } else {
+      // Reset dirty flags and tab when dialog closes so next open is clean.
+      setTouched({ profile: false, login: false, dashboard: false, fields: false })
       setTab('profile')
-      setName(settings.kitchenName || '')
-      setType(settings.kitchenType || 'Restaurant')
-      setFields(settings.customFields?.length ? [...settings.customFields] : [])
-      setInviteCode(settings.inviteCode || '')
-      setAlertEmail(settings.alertEmail || '')
-      setCurrency(settings.currency || 'GBP')
-      setWeeklyDigest(settings.weeklyDigestEnabled !== false)
-      setWidgets(Array.isArray(settings.dashboardWidgets) ? settings.dashboardWidgets : ALL_WIDGETS.map(w => w.key))
-      setModules(Array.isArray(settings.modulesEnabled) ? settings.modulesEnabled : ['stock', 'recipes'])
     }
-    // IMPORTANT: only depend on `open`. Adding settings-* to deps would reset the
-    // user's in-progress checkbox picks whenever settings updates (e.g., mid-save),
-    // clearing everything they just ticked. Load once on open, save on close.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  }, [open, settings])
 
-  const toggleWidget = (k) => setWidgets(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
-  const toggleModule = (k) => setModules(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
+  const toggleWidget = (k) => { markTouched('dashboard'); setWidgets(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]) }
+  const toggleModule = (k) => { markTouched('dashboard'); setModules(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]) }
 
   const addField = () => {
+    markTouched('fields')
     const newField = { key: `field_${fields.length + 1}_${Date.now().toString(36)}`, label: '', type: 'text' }
     setFields(prev => [...prev, newField])
     // Scroll to bottom of fields list after render
@@ -5310,9 +5327,9 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
     }, 50)
   }
-  const updateField = (i, patch) => setFields(prev => prev.map((f, idx) => idx === i ? { ...f, ...patch } : f))
-  const removeField = (i) => setFields(prev => prev.filter((_, idx) => idx !== i))
-  const rotateCode = () => setInviteCode(Math.floor(100000 + Math.random() * 900000).toString())
+  const updateField = (i, patch) => { markTouched('fields'); setFields(prev => prev.map((f, idx) => idx === i ? { ...f, ...patch } : f)) }
+  const removeField = (i) => { markTouched('fields'); setFields(prev => prev.filter((_, idx) => idx !== i)) }
+  const rotateCode = () => { markTouched('login'); setInviteCode(Math.floor(100000 + Math.random() * 900000).toString()) }
 
   const sendTestEmail = async () => {
     if (!alertEmail.trim()) { toast.error('Set an alert email first'); return }
@@ -5335,23 +5352,44 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
   }
 
   const save = async () => {
-    const cleanFields = fields.filter(f => f.label.trim()).map(f => ({
-      key: (f.key || f.label).toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 40),
-      label: f.label.trim(),
-      type: f.type || 'text'
-    }))
-    // Build a PATCH-style payload — ONLY include fields the user actually changed.
-    // Compare against the currently-loaded settings; if a field is unchanged, skip it
-    // so the backend keeps whatever's already in the DB. This makes it impossible to
-    // accidentally overwrite the kitchen name with an empty/stale value.
-    const payload = { customFields: cleanFields, weeklyDigestEnabled: weeklyDigest, dashboardWidgets: widgets, modulesEnabled: modules, onboarded: true }
-    const trimmedName = name.trim()
-    if (trimmedName && trimmedName !== (settings.kitchenName || '')) payload.kitchenName = trimmedName
-    if (type && type !== (settings.kitchenType || '')) payload.kitchenType = type
-    if (inviteCode && inviteCode !== (settings.inviteCode || '')) payload.inviteCode = inviteCode
-    const trimmedEmail = alertEmail.trim()
-    if (trimmedEmail && trimmedEmail !== (settings.alertEmail || '')) payload.alertEmail = trimmedEmail
-    if (currency && currency !== (settings.currency || '')) payload.currency = currency
+    // PATCH-STYLE PAYLOAD — only send fields user actually touched.
+    // Any untouched section is OMITTED from the request so the backend keeps
+    // whatever's already in the DB. This makes it impossible to overwrite
+    // kitchen name (or widgets, or fields) with stale/default values.
+    const payload = { onboarded: true }
+
+    if (touched.profile) {
+      const trimmedName = name.trim()
+      if (trimmedName) payload.kitchenName = trimmedName  // never send blank name
+      if (type) payload.kitchenType = type
+      if (currency) payload.currency = currency
+    }
+
+    if (touched.login) {
+      const trimmedEmail = alertEmail.trim()
+      if (trimmedEmail) payload.alertEmail = trimmedEmail
+      if (inviteCode) payload.inviteCode = inviteCode
+      payload.weeklyDigestEnabled = weeklyDigest
+    }
+
+    if (touched.dashboard) {
+      payload.dashboardWidgets = widgets
+      payload.modulesEnabled = modules
+    }
+
+    if (touched.fields) {
+      const cleanFields = fields.filter(f => f.label.trim()).map(f => ({
+        key: (f.key || f.label).toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 40),
+        label: f.label.trim(),
+        type: f.type || 'text'
+      }))
+      payload.customFields = cleanFields
+    }
+
+    // No touched section → nothing to save, just close.
+    const anyTouched = touched.profile || touched.login || touched.dashboard || touched.fields
+    if (!anyTouched) { onClose(); return }
+
     await saveSettings(payload)
     onClose()
   }
@@ -5413,18 +5451,18 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
             <div className="space-y-4">
               <div>
                 <Label>Kitchen Name</Label>
-                <Input value={name} onChange={e => setName(e.target.value)} placeholder="Bella Cucina" />
+                <Input value={name} onChange={e => { markTouched('profile'); setName(e.target.value) }} placeholder="Bella Cucina" />
               </div>
               <div>
                 <Label>Kitchen Type</Label>
-                <Select value={type} onValueChange={setType}>
+                <Select value={type} onValueChange={v => { markTouched('profile'); setType(v) }}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>{kitchenTypes.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
               <div>
                 <Label>Currency</Label>
-                <Select value={currency || 'GBP'} onValueChange={setCurrency}>
+                <Select value={currency || 'GBP'} onValueChange={v => { markTouched('profile'); setCurrency(v) }}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="GBP">🇬🇧 GBP (£)</SelectItem>
@@ -5471,7 +5509,7 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
                 <Label className="text-amber-900 text-sm font-bold">📧 Alert Email</Label>
                 <p className="text-xs text-amber-700 mt-1 mb-3">Daily expiry alerts will be sent here.</p>
                 <div className="flex gap-2">
-                  <Input type="email" value={alertEmail} onChange={e => setAlertEmail(e.target.value)} placeholder="chef@kitchen.com" className="bg-white" />
+                  <Input type="email" value={alertEmail} onChange={e => { markTouched('login'); setAlertEmail(e.target.value) }} placeholder="chef@kitchen.com" className="bg-white" />
                   <Button variant="outline" size="sm" type="button" onClick={sendTestEmail} disabled={testing}>
                     {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send Test'}
                   </Button>
@@ -5488,7 +5526,7 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
                     <input
                       type="checkbox"
                       checked={weeklyDigest}
-                      onChange={e => setWeeklyDigest(e.target.checked)}
+                      onChange={e => { markTouched('login'); setWeeklyDigest(e.target.checked) }}
                       className="h-5 w-5 accent-emerald-600"
                     />
                     <span className="text-xs font-semibold text-emerald-900">{weeklyDigest ? 'ON' : 'OFF'}</span>
