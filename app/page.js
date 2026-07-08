@@ -135,7 +135,7 @@ function ThemeToggle() { return null }
 function App() {
   const T = useT()  // language-aware translator — re-renders whole app when user changes language
   // Deploy version marker — helps us verify a deploy actually shipped. Change this string each release.
-  const BUILD_VERSION = 'v15-saveSettings-safeguard-2026-07-08'
+  const BUILD_VERSION = 'v16-widget-persist-fix-2026-07-08'
   useEffect(() => { try { console.log('%cShelfWise build:', 'color:#059669;font-weight:700', BUILD_VERSION) } catch (_) {} }, [])
   const { theme, setTheme } = useTheme()
   const [initial] = useState(getInitialFromURL)
@@ -5292,8 +5292,11 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
       setWidgets(Array.isArray(settings.dashboardWidgets) ? settings.dashboardWidgets : ALL_WIDGETS.map(w => w.key))
       setModules(Array.isArray(settings.modulesEnabled) ? settings.modulesEnabled : ['stock', 'recipes'])
     }
+    // IMPORTANT: only depend on `open`. Adding settings-* to deps would reset the
+    // user's in-progress checkbox picks whenever settings updates (e.g., mid-save),
+    // clearing everything they just ticked. Load once on open, save on close.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, settings.kitchenName, settings.kitchenType, settings.currency, settings.alertEmail, settings.dashboardWidgets, settings.modulesEnabled])  // Re-sync on ANY settings change so we never save stale (empty) fields
+  }, [open])
 
   const toggleWidget = (k) => setWidgets(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
   const toggleModule = (k) => setModules(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
