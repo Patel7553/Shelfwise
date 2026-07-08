@@ -135,7 +135,7 @@ function ThemeToggle() { return null }
 function App() {
   const T = useT()  // language-aware translator — re-renders whole app when user changes language
   // Deploy version marker — helps us verify a deploy actually shipped. Change this string each release.
-  const BUILD_VERSION = 'v14-kitchen-name-fix-2026-07-08'
+  const BUILD_VERSION = 'v15-saveSettings-safeguard-2026-07-08'
   useEffect(() => { try { console.log('%cShelfWise build:', 'color:#059669;font-weight:700', BUILD_VERSION) } catch (_) {} }, [])
   const { theme, setTheme } = useTheme()
   const [initial] = useState(getInitialFromURL)
@@ -280,11 +280,34 @@ function App() {
   }
 
   const saveSettings = async (next) => {
+    // GLOBAL SAFEGUARD: never allow a save that would CLEAR a kitchen name that's already set.
+    // If the payload contains kitchenName that's empty/whitespace AND we already have one saved,
+    // drop that field before sending. This is a belt-and-braces guard on top of the per-caller checks.
+    const guarded = { ...(next || {}) }
+    if ('kitchenName' in guarded) {
+      const kn = String(guarded.kitchenName || '').trim()
+      if (!kn && (settings.kitchenName || '').trim()) {
+        // eslint-disable-next-line no-console
+        console.warn('[saveSettings] Dropped empty kitchenName to protect existing value:', settings.kitchenName)
+        delete guarded.kitchenName
+      } else if (kn) {
+        guarded.kitchenName = kn
+      }
+    }
+    // Same defence for kitchenType
+    if ('kitchenType' in guarded) {
+      const kt = String(guarded.kitchenType || '').trim()
+      if (!kt && (settings.kitchenType || '').trim()) {
+        // eslint-disable-next-line no-console
+        console.warn('[saveSettings] Dropped empty kitchenType to protect existing value')
+        delete guarded.kitchenType
+      }
+    }
     try {
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(next)
+        body: JSON.stringify(guarded)
       })
       const data = await res.json()
       setSettings(data)
@@ -4763,13 +4786,13 @@ function SetupWizardV2({ settings, onComplete }) {
     if (busy) return
     setBusy(true)
     try {
-      await onComplete({
-        kitchenName: kitchenName.trim(),
-        kitchenType,
-        timezone,
-        modulesEnabled: modules,
-        dashboardWidgets: widgets,
-      })
+      // Only include kitchenName/type if they're non-empty — never overwrite existing values with blanks
+      const payload = { modulesEnabled: modules, dashboardWidgets: widgets }
+      const kn = (kitchenName || '').trim()
+      if (kn) payload.kitchenName = kn
+      if (kitchenType) payload.kitchenType = kitchenType
+      if (timezone) payload.timezone = timezone
+      await onComplete(payload)
     } finally {
       setBusy(false)
     }
