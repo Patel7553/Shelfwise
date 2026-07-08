@@ -134,6 +134,9 @@ function ThemeToggle() { return null }
 
 function App() {
   const T = useT()  // language-aware translator — re-renders whole app when user changes language
+  // Deploy version marker — helps us verify a deploy actually shipped. Change this string each release.
+  const BUILD_VERSION = 'v14-kitchen-name-fix-2026-07-08'
+  useEffect(() => { try { console.log('%cShelfWise build:', 'color:#059669;font-weight:700', BUILD_VERSION) } catch (_) {} }, [])
   const { theme, setTheme } = useTheme()
   const [initial] = useState(getInitialFromURL)
   const [view, setView] = useState(initial.view) // dashboard | inventory | recipes
