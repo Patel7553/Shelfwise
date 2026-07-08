@@ -6733,7 +6733,152 @@ export default App
 // HACCP Compliance View — Temperature logs, Cleaning schedule, Delivery checks
 // UK Food Standards Agency & EU Reg 852/2004 require these records to be kept.
 // ============================================================================
-function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, onDelete, onAddOrphans, onCellAdd, formatDT }) {
+function QuickCheckDialog({ open, onClose, locations, currentUser, onDone }) {
+  // Log AM+PM temps for ALL fridges in ONE form. No modal-hopping.
+  const [when, setWhen] = useState('now')  // 'am' | 'pm' | 'now'
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [values, setValues] = useState({})  // { [locId]: '4.2' }
+  const [saving, setSaving] = useState(false)
+  const activeLocs = React.useMemo(() => (locations || []).filter(l => l && l.active !== false && l.name), [locations])
+
+  // Reset form each time dialog opens
+  useEffect(() => { if (open) { setValues({}); setWhen('now'); setDate(new Date().toISOString().slice(0, 10)) } }, [open])
+
+  const timeStr = when === 'am' ? '08:00' : when === 'pm' ? '17:00' : new Date().toTimeString().slice(0, 5)
+  const timeOfDay = when === 'am' ? 'morning' : when === 'pm' ? 'evening' : (new Date().getHours() < 12 ? 'morning' : 'evening')
+
+  const passFor = (loc, val) => {
+    const t = loc.type || 'fridge'
+    if (t === 'fridge') return val >= 0 && val <= 5
+    if (t === 'chiller') return val >= 0 && val <= 8
+    if (t === 'freezer') return val <= -15
+    if (t === 'hot_hold') return val >= 63
+    return true
+  }
+
+  const saveAll = async () => {
+    const entries = Object.entries(values).filter(([, v]) => String(v).trim() !== '')
+    if (entries.length === 0) { toast.error('Enter at least one temperature'); return }
+    setSaving(true)
+    const recordedAt = `${date}T${timeStr}:00Z`
+    let ok = 0, fail = 0
+    for (const [locId, raw] of entries) {
+      const loc = activeLocs.find(l => l.id === locId)
+      if (!loc) continue
+      const val = Number(String(raw).replace(',', '.'))
+      if (!Number.isFinite(val)) { fail++; continue }
+      try {
+        const res = await fetch('/api/haccp/temperatures', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            location: loc.name,
+            temperatureC: val,
+            isPass: passFor(loc, val),
+            recordedAt,
+            recordedBy: currentUser,
+            notes: '',
+          }),
+        })
+        if (res.ok) ok++; else fail++
+      } catch { fail++ }
+    }
+    setSaving(false)
+    if (ok > 0) toast.success(`Saved ${ok} reading${ok > 1 ? 's' : ''}${fail > 0 ? ` (${fail} failed)` : ''}`)
+    else toast.error('Nothing was saved')
+    onDone()
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={o => !o && onClose()}>
+      <DialogContent className="sm:max-w-lg max-h-[92vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>⚡ Quick temperature check</DialogTitle>
+          <p className="text-xs text-muted-foreground mt-1">Type today's temps for every fridge & freezer in one go. Tap Save at the bottom when done.</p>
+        </DialogHeader>
+        {activeLocs.length === 0 ? (
+          <div className="text-center py-6 text-muted-foreground">
+            <Thermometer className="h-10 w-10 mx-auto mb-2 opacity-30" />
+            <p className="text-sm">No fridges/freezers configured.</p>
+            <p className="text-xs mt-1">Add them in Settings → Fridges & Freezers first.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {/* When = AM / PM / Now */}
+            <div className="flex items-center gap-2 flex-wrap bg-slate-50 border rounded-lg p-2">
+              <Label className="text-xs shrink-0 pl-1">When:</Label>
+              <div className="flex rounded border bg-white overflow-hidden">
+                {[
+                  { k: 'am', label: '🌅 AM (08:00)' },
+                  { k: 'pm', label: '🌆 PM (17:00)' },
+                  { k: 'now', label: '🕐 Now' },
+                ].map(o => (
+                  <button
+                    key={o.k}
+                    onClick={() => setWhen(o.k)}
+                    className={`px-2.5 py-1 text-xs font-medium ${when === o.k ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+                  >{o.label}</button>
+                ))}
+              </div>
+              <div className="ml-auto flex items-center gap-1">
+                <Label className="text-xs">Date:</Label>
+                <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="h-7 text-xs w-32" />
+              </div>
+            </div>
+
+            {/* One input per fridge — no modal hopping */}
+            <div className="space-y-1.5">
+              {activeLocs.map((loc, i) => {
+                const raw = values[loc.id] ?? ''
+                const val = raw === '' ? null : Number(String(raw).replace(',', '.'))
+                const finite = val !== null && Number.isFinite(val)
+                const pass = finite ? passFor(loc, val) : null
+                const icon = loc.type === 'freezer' ? '🥶' : loc.type === 'hot_hold' ? '🔥' : loc.type === 'chiller' ? '🧊' : '❄️'
+                return (
+                  <div key={loc.id || i} className="flex items-center gap-2 bg-white border rounded-lg px-2.5 py-2">
+                    <span className="text-lg shrink-0">{icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold truncate">{loc.name}</div>
+                      <div className="text-[10px] text-muted-foreground capitalize">{loc.type || 'fridge'}</div>
+                    </div>
+                    <Input
+                      type="number"
+                      step="0.1"
+                      inputMode="decimal"
+                      value={raw}
+                      onChange={e => setValues(v => ({ ...v, [loc.id]: e.target.value }))}
+                      placeholder="°C"
+                      className={`w-20 text-right font-bold text-base ${pass === true ? 'bg-emerald-50 text-emerald-900 border-emerald-300' : pass === false ? 'bg-red-50 text-red-900 border-red-300' : ''}`}
+                    />
+                    {finite && (
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 ${pass ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
+                        {pass ? 'PASS' : 'FAIL'}
+                      </span>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="text-[11px] text-muted-foreground bg-emerald-50/60 border border-emerald-100 rounded p-2">
+              💡 Leave any fridge blank to skip it. You can log AM now and PM later.
+            </div>
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={saveAll} disabled={saving || activeLocs.length === 0} className="bg-emerald-600 hover:bg-emerald-700">
+            {saving ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Saving...</> : <><Check className="h-4 w-4 mr-1" /> Save all</>}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, onDelete, onAddOrphans, onCellSave, onQuickCheck, formatDT }) {
+  // Inline cell editing state — [locName, dateISO, slot] identifies the cell being edited
+  const [editingCell, setEditingCell] = useState(null)  // {loc, dateISO, slot, value}
+  const [savingCell, setSavingCell] = useState(false)
   // View mode: 'logbook' = pivoted grid like physical log sheet; 'list' = compact chronological list
   const [mode, setMode] = useState('logbook')
   // Week navigation — Monday of the currently-viewed week (UK convention)
@@ -6963,8 +7108,11 @@ ${printLocs.length > 0 ? `<table>
     <div className="space-y-3">
       {/* Header actions */}
       <div className="flex items-center gap-2 flex-wrap">
-        <Button size="sm" onClick={onLog} className="bg-emerald-600 hover:bg-emerald-700">
-          <Plus className="h-4 w-4 mr-1" /> Log temperature
+        <Button size="sm" onClick={onQuickCheck} className="bg-emerald-600 hover:bg-emerald-700">
+          ⚡ Quick check
+        </Button>
+        <Button size="sm" variant="outline" onClick={onLog}>
+          <Plus className="h-4 w-4 mr-1" /> Log one
         </Button>
         <Button size="sm" variant="outline" onClick={onScan} className="border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100">
           📸 Scan sheet <span className="ml-1 text-[9px] font-bold bg-emerald-600 text-white rounded px-1">AI</span>
@@ -7091,20 +7239,55 @@ ${printLocs.length > 0 ? `<table>
                             <React.Fragment key={dIdx}>
                               {['am', 'pm'].map(slot => {
                                 const list = cell[slot]
-                                // Empty cell — clickable to add a reading for this fridge/day/slot
-                                if (list.length === 0) return (
-                                  <td
-                                    key={slot}
-                                    onClick={() => onCellAdd && onCellAdd({
+                                const isEditing = editingCell && editingCell.loc === loc.name && editingCell.dateISO === dateKey && editingCell.slot === slot
+                                const commitCell = async () => {
+                                  const raw = (editingCell?.value || '').trim()
+                                  if (!raw) { setEditingCell(null); return }
+                                  const val = Number(raw.replace(',', '.'))
+                                  if (!Number.isFinite(val)) { setEditingCell(null); return }
+                                  setSavingCell(true)
+                                  try {
+                                    await onCellSave({
                                       location: loc.name,
                                       dateISO: dateKey,
                                       timeOfDay: slot === 'am' ? 'morning' : 'evening',
-                                    })}
-                                    className="px-1 py-1.5 text-center text-slate-300 hover:bg-emerald-50 hover:text-emerald-600 cursor-pointer border-l border-slate-100 transition-colors"
-                                    title={`Add ${slot.toUpperCase()} reading for ${loc.name} on ${d.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short' })}`}
-                                  >+</td>
+                                      temperatureC: val,
+                                    })
+                                  } finally { setSavingCell(false); setEditingCell(null) }
+                                }
+                                // Editing mode — inline input in the cell
+                                if (isEditing) {
+                                  return (
+                                    <td key={slot} className="p-0 border-l border-slate-100 bg-emerald-50">
+                                      <input
+                                        type="number"
+                                        step="0.1"
+                                        inputMode="decimal"
+                                        autoFocus
+                                        disabled={savingCell}
+                                        value={editingCell.value}
+                                        onChange={e => setEditingCell({ ...editingCell, value: e.target.value })}
+                                        onBlur={commitCell}
+                                        onKeyDown={e => {
+                                          if (e.key === 'Enter') { e.preventDefault(); commitCell() }
+                                          if (e.key === 'Escape') { setEditingCell(null) }
+                                        }}
+                                        className="w-full h-full text-center text-sm font-bold bg-emerald-50 text-emerald-900 outline-none border-0 focus:ring-2 focus:ring-emerald-400 focus:ring-inset px-1 py-1.5"
+                                        placeholder="°C"
+                                      />
+                                    </td>
+                                  )
+                                }
+                                // Empty cell — click to start inline editing
+                                if (list.length === 0) return (
+                                  <td
+                                    key={slot}
+                                    onClick={() => setEditingCell({ loc: loc.name, dateISO: dateKey, slot, value: '' })}
+                                    className="px-1 py-1.5 text-center text-slate-300 hover:bg-emerald-50 hover:text-emerald-700 cursor-text border-l border-slate-100 transition-colors"
+                                    title={`Type ${slot.toUpperCase()} reading for ${loc.name} on ${d.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short' })}`}
+                                  ><span className="text-lg leading-none">+</span></td>
                                 )
-                                // Cell with reading(s) — clickable to edit the first one
+                                // Filled cell — click to open edit modal for the reading (finer control)
                                 const allPass = list.every(r => r.isPass !== false)
                                 return (
                                   <td
@@ -7132,7 +7315,7 @@ ${printLocs.length > 0 ? `<table>
           <div className="flex items-center gap-3 text-[11px] text-muted-foreground pl-1 flex-wrap">
             <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-emerald-50 border border-emerald-200"></span> Pass</span>
             <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-red-50 border border-red-200"></span> Fail</span>
-            <span className="inline-flex items-center gap-1"><span className="text-slate-400 font-bold">+</span> Tap empty cell to add · <span className="text-emerald-700 font-medium">tap value to edit</span></span>
+            <span className="inline-flex items-center gap-1"><span className="text-slate-400 font-bold">+</span> Click empty cell → type → Enter to save · <span className="text-emerald-700 font-medium">Click value to edit</span></span>
           </div>
         </>
       ) : (
@@ -7183,6 +7366,7 @@ function HaccpView({ currentUser, haccpLocations = [] }) {
 
   // Modals
   const [tempModal, setTempModal] = useState(null)      // {location?, temperatureC?}
+  const [quickCheckOpen, setQuickCheckOpen] = useState(false) // one-shot "log all fridges for today"
   const [scanTempOpen, setScanTempOpen] = useState(false)  // AI-photo temperature log scanner
   const [scanTempImage, setScanTempImage] = useState(null) // data URL
   const [scanTempRotation, setScanTempRotation] = useState(0)
@@ -7539,18 +7723,30 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
             notes: t.notes || '',
           })}
           onDelete={(id) => deleteRow('temperatures', id)}
-          onCellAdd={({ location, dateISO, timeOfDay }) => {
-            // Open the "Log temperature" modal pre-filled from the grid cell tap.
-            // Location, date, and AM/PM time all come pre-selected — user just
-            // types the temperature value and taps Save.
-            const t = timeOfDay === 'morning' ? '08:00' : timeOfDay === 'evening' ? '17:00' : '12:00'
-            setTempModal({
-              location,
-              temperatureC: '',
-              recordedAt: `${dateISO}T${t}:00Z`,
-              notes: '',
-            })
+          onCellSave={async ({ location, dateISO, timeOfDay, temperatureC }) => {
+            // Save an inline-edited cell straight to backend — no modal.
+            // PASS/FAIL is auto-computed based on location type + standard ranges.
+            const loc = (haccpLocations || []).find(l => l.name === location) || {}
+            const t = loc.type || 'fridge'
+            let isPass = true
+            if (t === 'fridge') isPass = temperatureC >= 0 && temperatureC <= 5
+            else if (t === 'chiller') isPass = temperatureC >= 0 && temperatureC <= 8
+            else if (t === 'freezer') isPass = temperatureC <= -15
+            else if (t === 'hot_hold') isPass = temperatureC >= 63
+            const time = timeOfDay === 'morning' ? '08:00' : timeOfDay === 'evening' ? '17:00' : '12:00'
+            const recordedAt = `${dateISO}T${time}:00Z`
+            try {
+              const res = await fetch('/api/haccp/temperatures', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ location, temperatureC, isPass, recordedAt, recordedBy: currentUser, notes: '' }),
+              })
+              if (!res.ok) throw new Error('Save failed')
+              toast.success(`${temperatureC}° saved for ${location}`, { duration: 1600 })
+              load()
+            } catch (e) { toast.error(e.message) }
           }}
+          onQuickCheck={() => setQuickCheckOpen(true)}
           onAddOrphans={async (orphans) => {
             // Merge orphan names into user's saved haccpLocations and PUT to /api/settings.
             // Each orphan already has a suggested type based on temperature sign.
@@ -7837,6 +8033,15 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
         </DialogContent>
       </Dialog>
 
+
+      {/* ---- QUICK CHECK MODAL — log ALL fridges for today in one form ---- */}
+      <QuickCheckDialog
+        open={quickCheckOpen}
+        onClose={() => setQuickCheckOpen(false)}
+        locations={haccpLocations}
+        currentUser={currentUser}
+        onDone={() => { setQuickCheckOpen(false); load() }}
+      />
 
       {/* ---- TEMPERATURE MODAL ---- */}
       <Dialog open={!!tempModal} onOpenChange={o => !o && setTempModal(null)}>
