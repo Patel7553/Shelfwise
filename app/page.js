@@ -6733,7 +6733,7 @@ export default App
 // HACCP Compliance View — Temperature logs, Cleaning schedule, Delivery checks
 // UK Food Standards Agency & EU Reg 852/2004 require these records to be kept.
 // ============================================================================
-function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, onDelete, onAddOrphans, formatDT }) {
+function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, onDelete, onAddOrphans, onCellAdd, formatDT }) {
   // View mode: 'logbook' = pivoted grid like physical log sheet; 'list' = compact chronological list
   const [mode, setMode] = useState('logbook')
   // Week navigation — Monday of the currently-viewed week (UK convention)
@@ -7091,12 +7091,28 @@ ${printLocs.length > 0 ? `<table>
                             <React.Fragment key={dIdx}>
                               {['am', 'pm'].map(slot => {
                                 const list = cell[slot]
+                                // Empty cell — clickable to add a reading for this fridge/day/slot
                                 if (list.length === 0) return (
-                                  <td key={slot} className="px-1 py-1.5 text-center text-slate-300 border-l border-slate-100">—</td>
+                                  <td
+                                    key={slot}
+                                    onClick={() => onCellAdd && onCellAdd({
+                                      location: loc.name,
+                                      dateISO: dateKey,
+                                      timeOfDay: slot === 'am' ? 'morning' : 'evening',
+                                    })}
+                                    className="px-1 py-1.5 text-center text-slate-300 hover:bg-emerald-50 hover:text-emerald-600 cursor-pointer border-l border-slate-100 transition-colors"
+                                    title={`Add ${slot.toUpperCase()} reading for ${loc.name} on ${d.toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short' })}`}
+                                  >+</td>
                                 )
+                                // Cell with reading(s) — clickable to edit the first one
                                 const allPass = list.every(r => r.isPass !== false)
                                 return (
-                                  <td key={slot} className={`px-1 py-1.5 text-center border-l border-slate-100 font-semibold ${allPass ? 'text-emerald-800 bg-emerald-50/70' : 'text-red-800 bg-red-50'}`} title={list.map(r => `${r.temperatureC}°C by ${r.recordedBy || 'unknown'}`).join('\n')}>
+                                  <td
+                                    key={slot}
+                                    onClick={() => onEdit && onEdit(list[0])}
+                                    className={`px-1 py-1.5 text-center border-l border-slate-100 font-semibold cursor-pointer hover:ring-2 hover:ring-emerald-400 transition-shadow ${allPass ? 'text-emerald-800 bg-emerald-50/70' : 'text-red-800 bg-red-50'}`}
+                                    title={list.map(r => `${r.temperatureC}°C by ${r.recordedBy || 'unknown'} — tap to edit`).join('\n')}
+                                  >
                                     {list.map(r => r.temperatureC).join(', ')}
                                   </td>
                                 )
@@ -7113,10 +7129,10 @@ ${printLocs.length > 0 ? `<table>
           )}
 
           {/* Legend */}
-          <div className="flex items-center gap-3 text-[11px] text-muted-foreground pl-1">
+          <div className="flex items-center gap-3 text-[11px] text-muted-foreground pl-1 flex-wrap">
             <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-emerald-50 border border-emerald-200"></span> Pass</span>
             <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-red-50 border border-red-200"></span> Fail</span>
-            <span className="inline-flex items-center gap-1"><span className="text-slate-300">—</span> No reading</span>
+            <span className="inline-flex items-center gap-1"><span className="text-slate-400 font-bold">+</span> Tap empty cell to add · <span className="text-emerald-700 font-medium">tap value to edit</span></span>
           </div>
         </>
       ) : (
@@ -7523,6 +7539,18 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
             notes: t.notes || '',
           })}
           onDelete={(id) => deleteRow('temperatures', id)}
+          onCellAdd={({ location, dateISO, timeOfDay }) => {
+            // Open the "Log temperature" modal pre-filled from the grid cell tap.
+            // Location, date, and AM/PM time all come pre-selected — user just
+            // types the temperature value and taps Save.
+            const t = timeOfDay === 'morning' ? '08:00' : timeOfDay === 'evening' ? '17:00' : '12:00'
+            setTempModal({
+              location,
+              temperatureC: '',
+              recordedAt: `${dateISO}T${t}:00Z`,
+              notes: '',
+            })
+          }}
           onAddOrphans={async (orphans) => {
             // Merge orphan names into user's saved haccpLocations and PUT to /api/settings.
             // Each orphan already has a suggested type based on temperature sign.
