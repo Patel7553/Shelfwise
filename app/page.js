@@ -7301,7 +7301,7 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
         <TempLogbookView
           temps={temps}
           haccpLocations={haccpLocations}
-          onLog={() => setTempModal({ location: haccpLocations.find(l => l.active !== false)?.name || 'Fridge 1', temperatureC: '' })}
+          onLog={() => setTempModal({ location: haccpLocations.find(l => l.active !== false)?.name || '', temperatureC: '' })}
           onScan={() => setScanTempOpen(true)}
           onDelete={(id) => deleteRow('temperatures', id)}
           formatDT={formatDT}
@@ -7566,14 +7566,29 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
             <div className="grid gap-3 py-2">
               <div>
                 <Label>Location *</Label>
-                <Select value={tempModal.location} onValueChange={v => setTempModal({ ...tempModal, location: v })}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {['Fridge 1','Fridge 2','Fridge 3','Freezer 1','Freezer 2','Walk-in Cold Room','Hot Hold','Display Cabinet'].map(l => (
-                      <SelectItem key={l} value={l}>{l}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {(() => {
+                  const userLocs = (haccpLocations || []).filter(l => l && l.active !== false && l.name)
+                  if (userLocs.length === 0) {
+                    // No configured locations yet — free-text input + hint to configure
+                    return (
+                      <>
+                        <Input value={tempModal.location || ''} onChange={e => setTempModal({ ...tempModal, location: e.target.value })} placeholder="Type a fridge/freezer name" />
+                        <p className="text-[11px] text-amber-700 mt-1">💡 Add your fridges/freezers in <span className="font-semibold">Settings → Fridges & Freezers</span> so they'll appear here automatically.</p>
+                      </>
+                    )
+                  }
+                  return (
+                    <Select value={tempModal.location} onValueChange={v => setTempModal({ ...tempModal, location: v })}>
+                      <SelectTrigger><SelectValue placeholder="Choose a fridge/freezer" /></SelectTrigger>
+                      <SelectContent>
+                        {userLocs.map(l => {
+                          const icon = l.type === 'freezer' ? '🥶' : l.type === 'hot_hold' ? '🔥' : l.type === 'chiller' ? '🧊' : '❄️'
+                          return <SelectItem key={l.id || l.name} value={l.name}>{icon} {l.name}</SelectItem>
+                        })}
+                      </SelectContent>
+                    </Select>
+                  )
+                })()}
               </div>
               <div>
                 <Label>Temperature (°C) *</Label>
