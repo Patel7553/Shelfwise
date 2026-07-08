@@ -670,52 +670,79 @@ async function parseTemperatureLogPhoto(base64DataUrl) {
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
   const today = new Date().toISOString().slice(0, 10)
   const systemPrompt = `You are an expert at reading professional kitchen HACCP temperature log sheets.
-These are physical clipboard sheets where staff handwrite fridge/freezer temperatures at fixed times of day (morning + evening usually).
+These are physical clipboard sheets where staff handwrite fridge/freezer temperatures throughout the week.
+This includes UK "Food Alert" FH Form 3, Weekly HACCP Temperature Logs, Daily Fridge/Freezer Checklists, etc.
 
-The image may be ROTATED — read text in any orientation.
-Common layouts include:
-  - Rows = fridge/freezer/hot-hold locations (e.g. "Fridge 1", "Walk-in Cold Room", "Freezer 2", "Hot Hold")
-  - Columns = AM and PM (or specific times like "08:00" and "17:00")
-  - Cells contain the temperature reading in Celsius, possibly with initials next to it
-  - Some sheets have separate rows for each date
+CRITICAL — the image may be ROTATED, tilted, or upside-down. Read the text in ANY orientation.
+First identify the sheet structure BEFORE extracting data:
 
-Rules:
-1. Look at EVERY cell that has a number — that's a reading.
-2. For each reading, output ONE JSON entry with: location (fridge/freezer name), temperatureC (number), timeOfDay ("morning"|"evening"|"other"), initials (if visible), notes.
-3. Safe ranges (used for PASS/FAIL flag):
-   - Fridge / Chilled: 0 to 5°C → PASS. Outside this = FAIL.
-   - Freezer: at or below -18°C → PASS. Anything warmer than -15°C = FAIL.
-   - Hot Hold: at or above 63°C → PASS. Below = FAIL.
-   - Otherwise unclassified → default isPass=true.
-4. Ignore column headers, decorative text, kitchen name, signatures.
-5. If the sheet has a printed DATE, use it as the recordedAt date. Otherwise use today (${today}).
+COMMON LAYOUTS:
+  Layout A — Weekly grid (most common in UK):
+    * ROWS = fridge/freezer locations (e.g. "Patients fridge", "Walk in fridge", "Walk in freezer",
+      "Upright freezer", "Larder – cheese", "Staff Fridge", "Ice cream freezer", "Ward Fridge", etc.)
+    * TOP-LEVEL COLUMNS = 7 days of the week (Monday, Tuesday, ..., Sunday)
+    * SUB-COLUMNS under each day = "am" and "pm" (or "morning"/"evening", or specific times).
+    * There is usually a "Week Commencing: DD/MM/YY" (or similar) date at the top — USE THIS as the base date.
+    * Values are temperatures in Celsius (e.g. "3.9", "4.1", "-18.6", "-20"). Positive for fridges,
+      negative for freezers.
+    * Cells may contain "df" (defrost) — SKIP these, do NOT emit a reading.
+    * Cells may contain initials next to temperatures — capture them if visible.
+    * MANY cells will be EMPTY (blank) if the week isn't complete — SKIP empty cells entirely.
 
-Return ONLY valid JSON:
+  Layout B — Single-day sheet:
+    * Rows = locations, columns = am / pm only. Use today's date (${today}).
+
+  Layout C — Freeform list: locations & readings listed row by row with dates.
+
+EXTRACTION RULES:
+1. For EVERY non-empty cell that contains a temperature number, output ONE JSON reading.
+2. Compute the exact ISO date (YYYY-MM-DD) for each reading:
+   * If the sheet shows "Week Commencing DD/MM/YY", parse it (UK format = day/month/year).
+   * Then Monday = weekCommencing, Tuesday = +1, Wednesday = +2, ... Sunday = +6.
+   * If no week-commencing date is visible, use today (${today}) for all readings.
+3. Determine timeOfDay from the sub-column: "am"→"morning", "pm"→"evening".
+4. Determine location from the ROW LABEL (the leftmost cell of the row). Strip any leading numbers
+   like "1)", "2)", "12)" — keep only the name (e.g. "Patients fridge", "Walk in freezer").
+5. Skip rows that are TOTALS, signatures, or admin (weekly sign off, action taken, temp verified).
+6. Skip cells with "df" (defrost), "off", "-" (dash) or non-numeric markers.
+7. PASS/FAIL flag (isPass):
+   * Fridge / Chilled / "in fridge" / "salad" / "larder" location: 0 to 5°C → PASS. Otherwise FAIL.
+   * Freezer / "ice cream" / "freezer" location: at or below -18°C → PASS. Warmer than -15°C → FAIL.
+   * Hot Hold: at or above 63°C → PASS. Below → FAIL.
+   * Otherwise → isPass=true.
+8. Preserve the original numeric value INCLUDING negative sign (e.g. "-18.6" → -18.6).
+9. If you see decimals written as "3.9" or "3·9" or "3,9" — normalize to 3.9.
+10. If a reading is ambiguous (smudged, unreadable), skip it rather than guess wildly.
+
+Return ONLY valid JSON, no prose, no markdown fences:
 {
-  "sheetDate": "YYYY-MM-DD" | null,
+  "sheetDate": "YYYY-MM-DD" | null,          // the "week commencing" date if visible
+  "weekCommencing": "YYYY-MM-DD" | null,     // same as sheetDate for weekly sheets
   "readings": [
     {
-      "location": "e.g. Fridge 1",
-      "temperatureC": number,
-      "isPass": true | false,
+      "location": "e.g. Patients fridge",
+      "temperatureC": 3.9,
+      "isPass": true,
+      "dateISO": "YYYY-MM-DD",               // exact date computed per day column
+      "dayOfWeek": "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday",
       "timeOfDay": "morning" | "evening" | "other",
-      "initials": "e.g. JS" | "",
+      "initials": "",
       "notes": ""
     }
   ]
-}
-Output STRICT JSON — no prose, no markdown fences.`
+}`
 
   const body = {
     model: 'gpt-4o',
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: [
-        { type: 'text', text: 'Read this HACCP temperature log sheet. Extract every temperature reading. Return JSON.' },
-        { type: 'image_url', image_url: { url: base64DataUrl } }
+        { type: 'text', text: 'Read this HACCP temperature log sheet CAREFULLY. Identify the layout first (weekly grid vs single-day), find the week-commencing date, then extract every non-empty temperature reading with its correct date, day, and time-of-day. Return JSON only.' },
+        { type: 'image_url', image_url: { url: base64DataUrl, detail: 'high' } }
       ]}
     ],
     temperature: 0.05,
+    max_tokens: 4000,
     response_format: { type: 'json_object' },
   }
   const res = await fetch(EMERGENT_URL, {
@@ -729,16 +756,34 @@ Output STRICT JSON — no prose, no markdown fences.`
   let parsed
   try { parsed = JSON.parse(content) } catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : {} }
   const readings = Array.isArray(parsed.readings) ? parsed.readings : []
+  const weekCommencing = parsed.weekCommencing || parsed.sheetDate || null
   return {
-    sheetDate: parsed.sheetDate || null,
-    readings: readings.map(r => ({
-      location: String(r.location || '').trim(),
-      temperatureC: Number(r.temperatureC),
-      isPass: r.isPass !== false,
-      timeOfDay: ['morning','evening','other'].includes(r.timeOfDay) ? r.timeOfDay : 'other',
-      initials: String(r.initials || '').trim().slice(0, 6),
-      notes: String(r.notes || '').trim(),
-    })).filter(r => r.location && Number.isFinite(r.temperatureC)),
+    sheetDate: parsed.sheetDate || weekCommencing || null,
+    weekCommencing,
+    readings: readings.map(r => {
+      // Prefer AI-provided dateISO; fall back to computing from weekCommencing + dayOfWeek
+      let dateISO = String(r.dateISO || '').slice(0, 10)
+      const dayOfWeek = String(r.dayOfWeek || '').toLowerCase()
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO) && weekCommencing && dayOfWeek) {
+        const days = ['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
+        const offset = days.indexOf(dayOfWeek)
+        if (offset >= 0) {
+          const d = new Date(weekCommencing + 'T00:00:00Z')
+          if (!isNaN(d)) { d.setUTCDate(d.getUTCDate() + offset); dateISO = d.toISOString().slice(0, 10) }
+        }
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) dateISO = today
+      return {
+        location: String(r.location || '').trim(),
+        temperatureC: Number(r.temperatureC),
+        isPass: r.isPass !== false,
+        dateISO,
+        dayOfWeek: ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'].includes(dayOfWeek) ? dayOfWeek : '',
+        timeOfDay: ['morning','evening','other'].includes(r.timeOfDay) ? r.timeOfDay : 'other',
+        initials: String(r.initials || '').trim().slice(0, 6),
+        notes: String(r.notes || '').trim(),
+      }
+    }).filter(r => r.location && Number.isFinite(r.temperatureC)),
   }
 }
 

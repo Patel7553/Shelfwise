@@ -6620,12 +6620,17 @@ function HaccpView({ currentUser }) {
       const data = await res.json()
       const list = Array.isArray(data.readings) ? data.readings : []
       if (list.length === 0) throw new Error('No readings detected — try a clearer photo')
-      const sheetDate = data.sheetDate || new Date().toISOString().slice(0, 10)
-      setScanTempReadings(list.map(r => ({
-        ...r,
-        recordedAt: `${sheetDate}T${r.timeOfDay === 'morning' ? '08:00' : r.timeOfDay === 'evening' ? '17:00' : '12:00'}:00Z`,
-        _keep: true,
-      })))
+      const fallbackDate = data.weekCommencing || data.sheetDate || new Date().toISOString().slice(0, 10)
+      setScanTempReadings(list.map(r => {
+        // Prefer per-reading dateISO from AI (weekly grid support), fall back to sheet date
+        const d = /^\d{4}-\d{2}-\d{2}$/.test(String(r.dateISO || '')) ? r.dateISO : fallbackDate
+        const t = r.timeOfDay === 'morning' ? '08:00' : r.timeOfDay === 'evening' ? '17:00' : '12:00'
+        return {
+          ...r,
+          recordedAt: `${d}T${t}:00Z`,
+          _keep: true,
+        }
+      }))
       toast.success(`\u2728 ${list.length} readings detected \u2014 review & save`)
     } catch (e) { toast.error(e.message) }
     finally { setScanTempBusy(false) }
@@ -7119,17 +7124,22 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
                     </div>
                     <div className="flex items-center gap-2 mt-1.5">
                       <span className="w-4 shrink-0"></span>
+                      <Input type="date" value={(r.recordedAt || '').slice(0, 10)} onChange={e => {
+                        const d = e.target.value
+                        const t = (r.recordedAt || '').slice(11, 16) || '12:00'
+                        setScanTempReadings(list => list.map((x, j) => j === i ? { ...x, recordedAt: `${d}T${t}:00Z` } : x))
+                      }} className="h-7 text-[11px] w-32" title="Reading date" />
                       <select value={r.timeOfDay} onChange={e => {
                         const tod = e.target.value
                         const d = (r.recordedAt || '').slice(0, 10) || new Date().toISOString().slice(0,10)
                         const t = tod === 'morning' ? '08:00' : tod === 'evening' ? '17:00' : '12:00'
                         setScanTempReadings(list => list.map((x, j) => j === i ? { ...x, timeOfDay: tod, recordedAt: `${d}T${t}:00Z` } : x))
                       }} className="h-7 text-[11px] rounded border px-1 border-slate-300">
-                        <option value="morning">🌅 Morning</option>
-                        <option value="evening">🌆 Evening</option>
+                        <option value="morning">🌅 AM</option>
+                        <option value="evening">🌆 PM</option>
                         <option value="other">🕐 Other</option>
                       </select>
-                      <Input value={r.initials} onChange={e => setScanTempReadings(list => list.map((x, j) => j === i ? { ...x, initials: e.target.value } : x))} className="h-7 text-[11px] w-20" placeholder="Initials" />
+                      <Input value={r.initials} onChange={e => setScanTempReadings(list => list.map((x, j) => j === i ? { ...x, initials: e.target.value } : x))} className="h-7 text-[11px] w-16" placeholder="Init" />
                       <Input value={r.notes || ''} onChange={e => setScanTempReadings(list => list.map((x, j) => j === i ? { ...x, notes: e.target.value } : x))} className="h-7 text-[11px] flex-1" placeholder="Notes" />
                     </div>
                   </div>
