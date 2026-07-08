@@ -7460,7 +7460,7 @@ function HaccpView({ currentUser, haccpLocations = [] }) {
   // Compress iPhone photos (typically 3-8MB) down to <1MB before sending.
   // Vercel serverless has a 4.5MB body limit → oversized photos = "Load failed".
   // Also downscales to max 1800px on the long edge for faster OCR.
-  const compressImage = async (dataUrl, maxDim = 3000, quality = 0.88) => {
+  const compressImage = async (dataUrl, maxDim = 2400, quality = 0.85) => {
     return new Promise((resolve, reject) => {
       const img = new Image()
       img.onload = () => {
@@ -7507,9 +7507,9 @@ function HaccpView({ currentUser, haccpLocations = [] }) {
       // Step 2: compress — iPhone raw photos are 3-8MB which exceeds Vercel's
       // 4.5MB body limit AND slows down GPT-4o vision. Compress to <1MB.
       const send = await compressImage(rotated, 1800, 0.72)
-      // Step 3: send to backend (with 55s client-side timeout — Vercel maxDuration is 60s)
+      // Step 3: send to backend (with 90s client-side timeout — Vercel maxDuration is 60-300s)
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 55000)
+      const timeoutId = setTimeout(() => controller.abort(), 90000)
       let res
       try {
         res = await fetch('/api/haccp/scan-temperatures', {
@@ -7518,7 +7518,7 @@ function HaccpView({ currentUser, haccpLocations = [] }) {
           signal: controller.signal,
         })
       } catch (err) {
-        if (err.name === 'AbortError') throw new Error('AI is taking too long. Try a smaller photo (crop tighter)')
+        if (err.name === 'AbortError') throw new Error('AI is taking too long. Try photographing HALF the sheet at a time (e.g. Mon-Wed then Thu-Sun) — split scans are faster and more accurate.')
         throw new Error('Network error — check your connection and try again')
       } finally { clearTimeout(timeoutId) }
       if (!res.ok) {
@@ -8014,6 +8014,8 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
             <DialogTitle className="flex items-center gap-2">📸 Scan Temperature Log <span className="text-[10px] bg-emerald-600 text-white rounded px-1.5 py-0.5 font-bold">AI</span></DialogTitle>
             <p className="text-sm text-muted-foreground">
               Snap your paper temperature log sheet — AI reads every fridge/freezer row and adds all readings in one click.
+              <br/>
+              <span className="text-[11px] text-amber-700 font-medium">💡 Tip: For a full weekly sheet with 10+ fridges, split into TWO photos (Mon-Wed & Thu-Sun) for the best results.</span>
             </p>
           </DialogHeader>
           {!scanTempImage && (

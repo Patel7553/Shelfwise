@@ -4,10 +4,9 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { getAuthContext, generateChefCode, signChefToken, newCodeSeed } from '@/lib/auth'
 
 // Vercel serverless function config — MUST be at the top of a route file.
-// GPT-4o vision calls on dense HACCP sheets take 20-40s. Default Vercel timeout
-// is 10-15s which causes "Load failed" errors on Safari. Bumping to 60s (the
-// Hobby-plan max) fixes it. Pro plan supports up to 300s.
-export const maxDuration = 60
+// GPT-4o vision calls on dense HACCP sheets take 30-60s. Setting to 300 (max
+// on Pro plan) so weekly sheets don't time out. Hobby plan silently caps this.
+export const maxDuration = 300
 export const dynamic = 'force-dynamic'
 
 const EMERGENT_URL = 'https://integrations.emergentagent.com/llm/v1/chat/completions'
