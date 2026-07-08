@@ -6875,7 +6875,7 @@ function QuickCheckDialog({ open, onClose, locations, currentUser, onDone }) {
   )
 }
 
-function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, onDelete, onAddOrphans, onCellSave, onQuickCheck, formatDT }) {
+function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, onDelete, onBulkDelete, onAddOrphans, onCellSave, onQuickCheck, formatDT }) {
   // Inline cell editing state — [locName, dateISO, slot] identifies the cell being edited
   const [editingCell, setEditingCell] = useState(null)  // {loc, dateISO, slot, value}
   const [savingCell, setSavingCell] = useState(false)
@@ -7338,10 +7338,10 @@ ${printLocs.length > 0 ? `<table>
           }
           const bulkDelete = () => {
             if (selectedTempIds.size === 0) return
-            if (!confirm(`Delete ${selectedTempIds.size} reading${selectedTempIds.size > 1 ? 's' : ''}? This cannot be undone.`)) return
             const ids = [...selectedTempIds]
             setSelectedTempIds(new Set())
-            ids.forEach(id => onDelete(id))
+            // Single confirmation happens INSIDE onBulkDelete — no per-row prompts.
+            onBulkDelete(ids)
           }
           return (
             <div className="space-y-1.5">
@@ -7615,8 +7615,10 @@ function HaccpView({ currentUser, haccpLocations = [] }) {
     } catch (e) { toast.error(e.message) }
   }
 
-  const deleteRow = async (kind, id) => {
-    if (!confirm('Delete this record? This cannot be undone.')) return
+  const deleteRow = async (kind, id, opts = {}) => {
+    // Skip the per-row confirm when called from bulk delete (which already
+    // asked once). Also skip the per-row toast so we can show one summary toast.
+    if (!opts.silent && !confirm('Delete this record? This cannot be undone.')) return
     const url = kind === 'temperatures' ? `/api/haccp/temperatures/${id}`
               : kind === 'cleaning-tasks' ? `/api/haccp/cleaning-tasks/${id}`
               : kind === 'cleaning-log' ? `/api/haccp/cleaning-log/${id}`
@@ -7624,9 +7626,22 @@ function HaccpView({ currentUser, haccpLocations = [] }) {
     try {
       const res = await fetch(url, { method: 'DELETE' })
       if (!res.ok) throw new Error('Delete failed')
-      toast.success('Deleted')
-      load()
-    } catch (e) { toast.error(e.message) }
+      if (!opts.silent) { toast.success('Deleted'); load() }
+      return true
+    } catch (e) { if (!opts.silent) toast.error(e.message); return false }
+  }
+  // Bulk delete — ONE confirm, ONE summary toast, ONE reload at the end.
+  const bulkDelete = async (kind, ids) => {
+    if (!ids || ids.length === 0) return
+    if (!confirm(`Delete ${ids.length} record${ids.length > 1 ? 's' : ''}? This cannot be undone.`)) return
+    let ok = 0, fail = 0
+    for (const id of ids) {
+      const success = await deleteRow(kind, id, { silent: true })
+      if (success) ok++; else fail++
+    }
+    if (ok > 0) toast.success(`Deleted ${ok} record${ok > 1 ? 's' : ''}${fail > 0 ? ` (${fail} failed)` : ''}`)
+    else toast.error('Nothing was deleted')
+    load()
   }
 
   // ---- Report / Print ----------------------------------------------------
@@ -7780,6 +7795,7 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
             notes: t.notes || '',
           })}
           onDelete={(id) => deleteRow('temperatures', id)}
+          onBulkDelete={(ids) => bulkDelete('temperatures', ids)}
           onCellSave={async ({ location, dateISO, timeOfDay, temperatureC }) => {
             // Save an inline-edited cell straight to backend — no modal.
             // PASS/FAIL is auto-computed based on location type + standard ranges.
