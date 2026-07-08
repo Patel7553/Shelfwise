@@ -6733,7 +6733,7 @@ export default App
 // HACCP Compliance View — Temperature logs, Cleaning schedule, Delivery checks
 // UK Food Standards Agency & EU Reg 852/2004 require these records to be kept.
 // ============================================================================
-function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, onDelete, formatDT }) {
+function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, onDelete, onAddOrphans, formatDT }) {
   // View mode: 'logbook' = pivoted grid like physical log sheet; 'list' = compact chronological list
   const [mode, setMode] = useState('logbook')
   // Week navigation — Monday of the currently-viewed week (UK convention)
@@ -7018,12 +7018,25 @@ ${printLocs.length > 0 ? `<table>
 
           {/* Warning banner if orphan locations exist */}
           {orphanLocations.length > 0 && (
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-[11px] text-amber-900 flex items-start gap-2">
-              <span className="text-base leading-none">⚠️</span>
-              <div>
-                <span className="font-semibold">{orphanLocations.length} reading{orphanLocations.length > 1 ? 's have' : ' has'} a location that doesn't match your saved fridges</span>
-                <span className="block text-amber-800">Names found: <span className="font-mono">{orphanLocations.map(o => o.name).join(', ')}</span></span>
-                <span className="block mt-0.5">Fix by either (a) tapping <b>List</b> view above → ✏️ edit the reading to use your exact saved name, or (b) adding these names in <b>Settings → Fridges & Freezers</b>.</span>
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-2">
+              <div className="flex items-start gap-2 text-[12px] text-amber-900">
+                <span className="text-base leading-none">⚠️</span>
+                <div className="flex-1 min-w-0">
+                  <span className="font-semibold block">{orphanLocations.length} reading{orphanLocations.length > 1 ? 's have' : ' has'} a location that doesn't match your saved fridges</span>
+                  <span className="block text-amber-800 mt-0.5"><span className="font-mono text-[11px]">{orphanLocations.map(o => o.name).join(', ')}</span></span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap pl-6">
+                {onAddOrphans && (
+                  <Button
+                    size="sm"
+                    onClick={() => onAddOrphans(orphanLocations)}
+                    className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white"
+                  >
+                    ✨ Add all {orphanLocations.length} to my fridges (one-tap fix)
+                  </Button>
+                )}
+                <span className="text-[10px] text-amber-800">or edit each reading in List view</span>
               </div>
             </div>
           )}
@@ -7510,6 +7523,39 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
             notes: t.notes || '',
           })}
           onDelete={(id) => deleteRow('temperatures', id)}
+          onAddOrphans={async (orphans) => {
+            // Merge orphan names into user's saved haccpLocations and PUT to /api/settings.
+            // Each orphan already has a suggested type based on temperature sign.
+            const additions = orphans.map(o => ({
+              id: `loc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+              name: o.name,
+              type: o.type || 'fridge',
+              minC: null,
+              maxC: null,
+              active: true,
+            }))
+            const merged = [...(haccpLocations || []), ...additions]
+            try {
+              const res = await fetch('/api/settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ haccpLocations: merged }),
+              })
+              const data = await res.json()
+              if (!res.ok) throw new Error(data?.error || 'Save failed')
+              if (data._warning) {
+                toast.error(data._warning, { duration: 8000 })
+                return
+              }
+              toast.success(`✨ Added ${additions.length} location${additions.length > 1 ? 's' : ''} to your fridge list`)
+              // Trigger a settings refresh in the parent by dispatching a custom event
+              window.dispatchEvent(new Event('shelfwise-settings-refresh'))
+              // Also give it a moment then reload the compliance page fully
+              setTimeout(() => window.location.reload(), 800)
+            } catch (e) {
+              toast.error(e.message || 'Failed to add locations')
+            }
+          }}
           formatDT={formatDT}
         />
       )}
