@@ -216,6 +216,7 @@ function kitchenToApi(k) {
     tagline: k.tagline || 'From shelf to plate — never lose track.',
     currency: k.currency || '',
     weeklyDigestEnabled: k.weekly_digest_enabled !== false,
+    haccpLocations: Array.isArray(k.haccp_locations) ? k.haccp_locations : [],
     lastDigestSentAt: k.last_digest_sent_at,
     createdAt: k.created_at,
     approvedAt: k.approved_at,
@@ -672,66 +673,90 @@ Output strictly valid JSON with no other text.`
 // ---- Parse a HACCP temperature log photo (physical clipboard sheet) ----
 // User has a paper log with multiple fridge names + morning/evening temps handwritten.
 // AI reads it and returns a list of temperature readings ready to bulk-insert.
-async function parseTemperatureLogPhoto(base64DataUrl) {
+async function parseTemperatureLogPhoto(base64DataUrl, knownLocations = []) {
   const key = process.env.EMERGENT_LLM_KEY
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
   const today = new Date().toISOString().slice(0, 10)
+
+  // Build context block from user's saved fridges/freezers so the AI matches
+  // handwritten labels to the exact names the user uses (e.g. "walk-in" → "Walk-in Fridge #2").
+  let locationsContext = ''
+  if (Array.isArray(knownLocations) && knownLocations.length > 0) {
+    const list = knownLocations
+      .filter(l => l && l.active !== false && l.name)
+      .map(l => `  - "${l.name}" (${l.type || 'fridge'})`)
+      .join('\n')
+    if (list) {
+      locationsContext = `
+
+KNOWN LOCATIONS IN THIS KITCHEN — match handwritten row labels to these exact names when possible.
+Use fuzzy matching (case-insensitive, ignore hyphens/spaces/punctuation, accept abbreviations like
+"WIF" → "Walk-in Fridge", "PF" → "Patients Fridge"). If a row label clearly doesn't match any known
+location, return the label AS WRITTEN on the sheet (don't force a match):
+${list}
+`
+    }
+  }
+
   const systemPrompt = `You are an expert at reading professional kitchen HACCP temperature log sheets.
 These are physical clipboard sheets where staff handwrite fridge/freezer temperatures throughout the week.
-This includes UK "Food Alert" FH Form 3, Weekly HACCP Temperature Logs, Daily Fridge/Freezer Checklists, etc.
+This includes UK "Food Alert" FH Form 3, Weekly HACCP Temperature Logs, Daily Fridge/Freezer Checklists,
+freeform lists, monthly grids, and everything in between.
 
 CRITICAL — the image may be ROTATED, tilted, or upside-down. Read the text in ANY orientation.
-First identify the sheet structure BEFORE extracting data:
+${locationsContext}
+COMMON LAYOUTS — identify which one this sheet uses BEFORE extracting data:
 
-COMMON LAYOUTS:
   Layout A — Weekly grid (most common in UK):
-    * ROWS = fridge/freezer locations (e.g. "Patients fridge", "Walk in fridge", "Walk in freezer",
-      "Upright freezer", "Larder – cheese", "Staff Fridge", "Ice cream freezer", "Ward Fridge", etc.)
-    * TOP-LEVEL COLUMNS = 7 days of the week (Monday, Tuesday, ..., Sunday)
-    * SUB-COLUMNS under each day = "am" and "pm" (or "morning"/"evening", or specific times).
-    * There is usually a "Week Commencing: DD/MM/YY" (or similar) date at the top — USE THIS as the base date.
-    * Values are temperatures in Celsius (e.g. "3.9", "4.1", "-18.6", "-20"). Positive for fridges,
-      negative for freezers.
-    * Cells may contain "df" (defrost) — SKIP these, do NOT emit a reading.
-    * Cells may contain initials next to temperatures — capture them if visible.
+    * ROWS = fridge/freezer locations
+    * TOP-LEVEL COLUMNS = 7 days of the week (Monday..Sunday)
+    * SUB-COLUMNS under each day = "am" and "pm"
+    * "Week Commencing: DD/MM/YY" date at the top — USE THIS as the base date.
     * MANY cells will be EMPTY (blank) if the week isn't complete — SKIP empty cells entirely.
 
-  Layout B — Single-day sheet:
-    * Rows = locations, columns = am / pm only. Use today's date (${today}).
+  Layout B — Daily / Single-day sheet:
+    * Rows = locations, columns = am / pm only (or times like 08:00 / 17:00). One date.
 
-  Layout C — Freeform list: locations & readings listed row by row with dates.
+  Layout C — Monthly grid:
+    * Rows = locations, columns = days of the month (1-31). One date per column.
+
+  Layout D — Freeform list:
+    * Each row = location + date + temperature + initials. No grid.
 
 EXTRACTION RULES:
 1. For EVERY non-empty cell that contains a temperature number, output ONE JSON reading.
 2. Compute the exact ISO date (YYYY-MM-DD) for each reading:
-   * If the sheet shows "Week Commencing DD/MM/YY", parse it (UK format = day/month/year).
-   * Then Monday = weekCommencing, Tuesday = +1, Wednesday = +2, ... Sunday = +6.
-   * If no week-commencing date is visible, use today (${today}) for all readings.
+   * Weekly grid: parse "Week Commencing DD/MM/YY" (UK format = day/month/year).
+     Monday = weekCommencing, Tuesday = +1, ..., Sunday = +6.
+   * Monthly grid: use the sheet month/year + the day number of the column.
+   * Daily sheet: use the date printed on the sheet, or today (${today}) if none.
 3. Determine timeOfDay from the sub-column: "am"→"morning", "pm"→"evening".
-4. Determine location from the ROW LABEL (the leftmost cell of the row). Strip any leading numbers
-   like "1)", "2)", "12)" — keep only the name (e.g. "Patients fridge", "Walk in freezer").
-5. Skip rows that are TOTALS, signatures, or admin (weekly sign off, action taken, temp verified).
-6. Skip cells with "df" (defrost), "off", "-" (dash) or non-numeric markers.
+4. Determine location from the ROW LABEL (leftmost cell). Strip leading numbers
+   like "1)", "2)", "12)". If the row label matches a KNOWN LOCATION above, USE THE
+   EXACT KNOWN NAME. Otherwise return the label as written.
+5. Skip rows that are TOTALS, signatures, admin (weekly sign off, action taken).
+6. Skip cells with "df" (defrost), "off", "-" (dash), "x", or non-numeric markers.
 7. PASS/FAIL flag (isPass):
-   * Fridge / Chilled / "in fridge" / "salad" / "larder" location: 0 to 5°C → PASS. Otherwise FAIL.
-   * Freezer / "ice cream" / "freezer" location: at or below -18°C → PASS. Warmer than -15°C → FAIL.
-   * Hot Hold: at or above 63°C → PASS. Below → FAIL.
+   * fridge / chilled / salad / larder: 0 to 5°C → PASS. Otherwise FAIL.
+   * chiller: 0 to 8°C → PASS.
+   * freezer / ice cream: at or below -18°C → PASS. Warmer than -15°C → FAIL.
+   * hot_hold: at or above 63°C → PASS. Below → FAIL.
    * Otherwise → isPass=true.
 8. Preserve the original numeric value INCLUDING negative sign (e.g. "-18.6" → -18.6).
-9. If you see decimals written as "3.9" or "3·9" or "3,9" — normalize to 3.9.
-10. If a reading is ambiguous (smudged, unreadable), skip it rather than guess wildly.
+9. Normalize decimals: "3.9" or "3·9" or "3,9" → 3.9.
+10. If a reading is smudged/ambiguous, skip it rather than guess.
 
 Return ONLY valid JSON, no prose, no markdown fences:
 {
-  "sheetDate": "YYYY-MM-DD" | null,          // the "week commencing" date if visible
-  "weekCommencing": "YYYY-MM-DD" | null,     // same as sheetDate for weekly sheets
+  "sheetDate": "YYYY-MM-DD" | null,
+  "weekCommencing": "YYYY-MM-DD" | null,
   "readings": [
     {
       "location": "e.g. Patients fridge",
       "temperatureC": 3.9,
       "isPass": true,
-      "dateISO": "YYYY-MM-DD",               // exact date computed per day column
-      "dayOfWeek": "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday",
+      "dateISO": "YYYY-MM-DD",
+      "dayOfWeek": "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday" | "",
       "timeOfDay": "morning" | "evening" | "other",
       "initials": "",
       "notes": ""
@@ -1659,7 +1684,14 @@ export async function POST(request, { params }) {
       // ---- HACCP: scan a physical temperature log sheet (photo) ----
       if (path === 'haccp/scan-temperatures') {
         if (!body.image || !body.image.startsWith('data:image/')) return json({ error: 'Invalid or missing image' }, 400)
-        const parsed = await parseTemperatureLogPhoto(body.image)
+        // Load user's saved HACCP locations so the AI can match handwritten labels
+        // to the exact names they use. This makes scanning work for ANY sheet layout.
+        let knownLocations = []
+        if (ctx.kitchenId) {
+          const { data: kitchenRow } = await sb.from('kitchens').select('haccp_locations').eq('id', ctx.kitchenId).maybeSingle()
+          if (Array.isArray(kitchenRow?.haccp_locations)) knownLocations = kitchenRow.haccp_locations
+        }
+        const parsed = await parseTemperatureLogPhoto(body.image, knownLocations)
         return json(parsed)
       }
       if (path === 'parse-voice') {
@@ -2066,6 +2098,19 @@ export async function PUT(request, { params }) {
       if (Array.isArray(body.categories)) patch.categories = body.categories
       if (Array.isArray(body.locations)) patch.locations = body.locations
       if (Array.isArray(body.units)) patch.units = body.units
+      if (Array.isArray(body.haccpLocations)) {
+        // Sanitize each HACCP location entry
+        patch.haccp_locations = body.haccpLocations
+          .filter(l => l && typeof l === 'object' && String(l.name || '').trim())
+          .map(l => ({
+            id: String(l.id || uuidv4()),
+            name: String(l.name).trim().slice(0, 60),
+            type: ['fridge', 'freezer', 'hot_hold', 'chiller'].includes(l.type) ? l.type : 'fridge',
+            minC: Number.isFinite(Number(l.minC)) ? Number(l.minC) : null,
+            maxC: Number.isFinite(Number(l.maxC)) ? Number(l.maxC) : null,
+            active: l.active !== false,
+          }))
+      }
       if (customFields !== undefined) patch.custom_fields = customFields
 
       const { data, error: e2 } = await sb.from('kitchens').update(patch).eq('id', ctx.kitchenId).select().single()

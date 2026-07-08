@@ -5254,13 +5254,14 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
   const [testing, setTesting] = useState(false)
   const [widgets, setWidgets] = useState([])
   const [modules, setModules] = useState([])
+  const [locations, setLocations] = useState([])  // HACCP fridge/freezer locations
   const [currency, setCurrency] = useState('GBP')
   const [weeklyDigest, setWeeklyDigest] = useState(true)
   const [digestSending, setDigestSending] = useState(false)
   // Dirty tracking — CRITICAL: only send fields user actually touched to backend.
   // Prevents stale local state (e.g. if dialog opened before settings loaded)
   // from clobbering DB values on save. Each section tracks its own dirty flag.
-  const [touched, setTouched] = useState({ profile: false, login: false, dashboard: false, fields: false })
+  const [touched, setTouched] = useState({ profile: false, login: false, dashboard: false, fields: false, haccp: false })
   const markTouched = (section) => setTouched(prev => prev[section] ? prev : { ...prev, [section]: true })
   const ALL_WIDGETS = [
     { key: 'all_items', label: 'All Items count' },
@@ -5306,9 +5307,12 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
       if (!touched.fields) {
         setFields(settings.customFields?.length ? [...settings.customFields] : [])
       }
+      if (!touched.haccp) {
+        setLocations(Array.isArray(settings.haccpLocations) ? [...settings.haccpLocations] : [])
+      }
     } else {
       // Reset dirty flags and tab when dialog closes so next open is clean.
-      setTouched({ profile: false, login: false, dashboard: false, fields: false })
+      setTouched({ profile: false, login: false, dashboard: false, fields: false, haccp: false })
       setTab('profile')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -5386,8 +5390,21 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
       payload.customFields = cleanFields
     }
 
+    if (touched.haccp) {
+      payload.haccpLocations = locations
+        .filter(l => l && String(l.name || '').trim())
+        .map(l => ({
+          id: l.id || `loc-${Math.random().toString(36).slice(2, 10)}`,
+          name: String(l.name).trim().slice(0, 60),
+          type: ['fridge', 'freezer', 'hot_hold', 'chiller'].includes(l.type) ? l.type : 'fridge',
+          minC: Number.isFinite(Number(l.minC)) ? Number(l.minC) : null,
+          maxC: Number.isFinite(Number(l.maxC)) ? Number(l.maxC) : null,
+          active: l.active !== false,
+        }))
+    }
+
     // No touched section → nothing to save, just close.
-    const anyTouched = touched.profile || touched.login || touched.dashboard || touched.fields
+    const anyTouched = touched.profile || touched.login || touched.dashboard || touched.fields || touched.haccp
     if (!anyTouched) { onClose(); return }
 
     await saveSettings(payload)
@@ -5415,7 +5432,35 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
     { key: 'profile', label: 'Kitchen', longLabel: 'Kitchen Profile', icon: ChefHat },
     { key: 'login', label: 'Login', longLabel: 'Login & Alerts', icon: Settings },
     { key: 'dashboard', label: 'Dashboard', longLabel: 'Dashboard', icon: LayoutDashboard },
+    { key: 'haccp', label: 'Fridges', longLabel: 'Fridges & Freezers', icon: Thermometer },
     { key: 'fields', label: 'Fields', longLabel: 'Custom Fields', icon: Package },
+  ]
+
+  // ---- HACCP location handlers ----
+  const addLocation = (defaults = {}) => {
+    markTouched('haccp')
+    const newLoc = {
+      id: `loc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      name: defaults.name || '',
+      type: defaults.type || 'fridge',
+      minC: defaults.minC ?? null,
+      maxC: defaults.maxC ?? null,
+      active: true,
+    }
+    setLocations(prev => [...prev, newLoc])
+    // Scroll list to newly added row
+    setTimeout(() => {
+      const el = document.getElementById('haccp-loc-end')
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }, 50)
+  }
+  const updateLocation = (i, patch) => { markTouched('haccp'); setLocations(prev => prev.map((l, idx) => idx === i ? { ...l, ...patch } : l)) }
+  const removeLocation = (i) => { markTouched('haccp'); setLocations(prev => prev.filter((_, idx) => idx !== i)) }
+  const LOCATION_TYPES = [
+    { key: 'fridge', label: '❄️ Fridge', defaultRange: '0 to 5°C' },
+    { key: 'chiller', label: '🧊 Chiller', defaultRange: '0 to 8°C' },
+    { key: 'freezer', label: '🥶 Freezer', defaultRange: '≤ -18°C' },
+    { key: 'hot_hold', label: '🔥 Hot Hold', defaultRange: '≥ 63°C' },
   ]
 
   return (
@@ -5577,6 +5622,90 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
                   </label>
                 ))}
               </div>
+            </div>
+          )}
+
+          {tab === 'haccp' && (
+            <div className="space-y-3">
+              <div className="flex items-start justify-between gap-2 flex-wrap">
+                <div>
+                  <Label className="text-base font-bold">Fridges & Freezers</Label>
+                  <p className="text-xs text-muted-foreground">Add every fridge, freezer, chiller, and hot-hold unit in your kitchen. The AI scanner will match handwritten labels to these names.</p>
+                </div>
+                <Button size="sm" onClick={() => addLocation()} className="bg-emerald-600 hover:bg-emerald-700"><Plus className="h-4 w-4 mr-1" /> Add</Button>
+              </div>
+
+              {/* Quick-add presets — encourage adding common units in one tap */}
+              <div className="flex flex-wrap gap-1.5 text-xs">
+                <button type="button" onClick={() => addLocation({ name: 'Walk-in Fridge', type: 'fridge' })} className="px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100">+ Walk-in Fridge</button>
+                <button type="button" onClick={() => addLocation({ name: 'Walk-in Freezer', type: 'freezer' })} className="px-2 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100">+ Walk-in Freezer</button>
+                <button type="button" onClick={() => addLocation({ name: 'Upright Fridge', type: 'fridge' })} className="px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100">+ Upright Fridge</button>
+                <button type="button" onClick={() => addLocation({ name: 'Upright Freezer', type: 'freezer' })} className="px-2 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100">+ Upright Freezer</button>
+                <button type="button" onClick={() => addLocation({ name: 'Hot Hold', type: 'hot_hold' })} className="px-2 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100">+ Hot Hold</button>
+                <button type="button" onClick={() => addLocation({ name: 'Salad Chiller', type: 'chiller' })} className="px-2 py-1 rounded-full bg-cyan-50 text-cyan-700 border border-cyan-200 hover:bg-cyan-100">+ Salad Chiller</button>
+              </div>
+
+              {locations.length === 0 ? (
+                <div className="text-center py-10 text-muted-foreground border-2 border-dashed rounded-lg">
+                  <Thermometer className="h-10 w-10 mx-auto mb-2 opacity-30" />
+                  <p className="text-sm font-medium">No fridges or freezers yet</p>
+                  <p className="text-xs">Tap a preset above or "Add" to create your first unit.</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {locations.map((l, i) => {
+                    const meta = LOCATION_TYPES.find(t => t.key === l.type) || LOCATION_TYPES[0]
+                    return (
+                      <div key={l.id || i} className={`bg-white border rounded-lg p-3 space-y-2 ${l.active === false ? 'opacity-50' : ''}`}>
+                        <div className="flex gap-2 items-center">
+                          <span className="text-xs text-muted-foreground font-semibold w-6 text-center shrink-0">{i + 1}</span>
+                          <Input value={l.name || ''} onChange={e => updateLocation(i, { name: e.target.value })} placeholder="e.g. Walk-in Fridge #2" className="flex-1 min-w-0" />
+                          <Select value={l.type || 'fridge'} onValueChange={v => updateLocation(i, { type: v })}>
+                            <SelectTrigger className="w-32 shrink-0"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {LOCATION_TYPES.map(t => <SelectItem key={t.key} value={t.key}>{t.label}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                          <Button variant="ghost" size="icon" onClick={() => removeLocation(i)} className="text-red-600 hover:bg-red-50 shrink-0"><X className="h-4 w-4" /></Button>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 pl-8 text-xs">
+                          <span className="text-muted-foreground">Safe range:</span>
+                          <span className="font-medium text-slate-700">Default {meta.defaultRange}</span>
+                          <span className="text-muted-foreground">or set custom:</span>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={l.minC ?? ''}
+                            onChange={e => updateLocation(i, { minC: e.target.value === '' ? null : Number(e.target.value) })}
+                            placeholder="Min °C"
+                            className="h-7 w-20 text-xs"
+                          />
+                          <span className="text-muted-foreground">to</span>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={l.maxC ?? ''}
+                            onChange={e => updateLocation(i, { maxC: e.target.value === '' ? null : Number(e.target.value) })}
+                            placeholder="Max °C"
+                            className="h-7 w-20 text-xs"
+                          />
+                          <label className="ml-auto flex items-center gap-1 cursor-pointer">
+                            <input type="checkbox" checked={l.active !== false} onChange={e => updateLocation(i, { active: e.target.checked })} className="h-3.5 w-3.5 accent-emerald-600" />
+                            <span className="text-muted-foreground">Active</span>
+                          </label>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  <div id="haccp-loc-end" />
+                </div>
+              )}
+
+              {locations.length > 0 && (
+                <div className="text-[11px] text-muted-foreground bg-emerald-50/60 border border-emerald-100 rounded-lg p-2.5">
+                  💡 <span className="font-medium">Tip:</span> The AI scanner uses these names to match handwritten labels on your temperature log sheets — no matter how they're written (e.g. "walk-in", "WIF", "Walkin fridge" all map to your "Walk-in Fridge").
+                </div>
+              )}
             </div>
           )}
 
