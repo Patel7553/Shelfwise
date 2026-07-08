@@ -756,14 +756,23 @@ EXTRACTION RULES:
    EXACT KNOWN NAME. Otherwise return the label as written.
 5. Skip rows that are TOTALS, signatures, admin (weekly sign off, action taken).
 6. Skip cells with "df" (defrost), "off", "-" (dash), "x", or non-numeric markers.
-7. PASS/FAIL flag (isPass):
+7. ⚠️ CRITICAL — HANDWRITING QUIRKS TO PARSE (very common on UK sheets):
+   * "02", "03", "04", "05" written in a cell = "2°C", "3°C", "4°C", "5°C"
+     (the leading "0" is the staff drawing the degree symbol next to the digit).
+     Convert "02" → 2, "03" → 3, "04" → 4, "05" → 5, "07" → 7, etc.
+   * A digit followed by a small superscript circle/dot (e.g. "3°", "3'", "3`")
+     = that temperature in Celsius. Convert "3°" → 3, "3.1°" → 3.1.
+   * "-19.8" or "-19,8" or "-19·8" all mean -19.8 (normalize).
+   * Numbers with an apostrophe or small mark after them ("3'", "4'") are STILL
+     just "3" and "4" (the mark is a shorthand degree indicator, ignore it).
+   * "df" or "dF" or "D.F." = defrost — SKIP this cell entirely (do not emit).
+8. PASS/FAIL flag (isPass):
    * fridge / chilled / salad / larder: 0 to 5°C → PASS. Otherwise FAIL.
    * chiller: 0 to 8°C → PASS.
    * freezer / ice cream: at or below -18°C → PASS. Warmer than -15°C → FAIL.
    * hot_hold: at or above 63°C → PASS. Below → FAIL.
    * Otherwise → isPass=true.
-8. Preserve the original numeric value INCLUDING negative sign (e.g. "-18.6" → -18.6).
-9. Normalize decimals: "3.9" or "3·9" or "3,9" → 3.9.
+9. Preserve the original numeric value INCLUDING negative sign (e.g. "-18.6" → -18.6).
 10. If a reading is smudged/ambiguous, skip it rather than guess.
 
 Return ONLY valid JSON, no prose, no markdown fences:
@@ -858,7 +867,19 @@ Return ONLY valid JSON, no prose, no markdown fences:
       }
       return {
         location: String(r.location || '').trim(),
-        temperatureC: Number(r.temperatureC),
+        // Handle the common UK-sheet handwriting quirk where staff writes
+        // "2°C" as "02" (leading zero = degree symbol). If AI passes back "02"
+        // as a string, or numeric 2 with a hint, normalize here.
+        temperatureC: (() => {
+          const raw = r.temperatureC
+          if (typeof raw === 'string') {
+            const cleaned = raw.replace(/[°'`"]/g, '').replace(',', '.').trim()
+            // "02" → 2, "03" → 3, but "-20" stays -20 and "0.5" stays 0.5
+            if (/^0[1-9]$/.test(cleaned)) return Number(cleaned.slice(1))
+            return Number(cleaned)
+          }
+          return Number(raw)
+        })(),
         isPass: r.isPass !== false,
         dateISO,
         dayOfWeek: ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'].includes(dayOfWeek) ? dayOfWeek : '',
