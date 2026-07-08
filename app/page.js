@@ -7770,6 +7770,68 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
         </CardContent></Card>
       </div>
 
+      {/* ==== TODAY'S FRIDGE STATUS — shows every configured fridge, whether checked yet today, and current AM/PM values ==== */}
+      {haccpLocations.filter(l => l && l.active !== false && l.name).length > 0 && (
+        <Card className="border-2 border-emerald-200">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <div>
+                <div className="flex items-center gap-2 text-emerald-800">
+                  <Thermometer className="h-4 w-4" />
+                  <span className="text-sm font-bold uppercase tracking-wide">Today's Fridge Status</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">Live view of every fridge/freezer in your kitchen · {new Date().toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'short' })}</p>
+              </div>
+              <div className="flex items-center gap-1 text-[11px]">
+                {(() => {
+                  const activeLocs = haccpLocations.filter(l => l && l.active !== false && l.name)
+                  const today = new Date().toISOString().slice(0, 10)
+                  const todaysReadings = temps.filter(t => new Date(t.recordedAt).toISOString().slice(0, 10) === today)
+                  const checkedLocs = new Set(todaysReadings.map(t => t.location.toLowerCase()))
+                  const done = activeLocs.filter(l => checkedLocs.has(l.name.toLowerCase())).length
+                  const total = activeLocs.length
+                  const pct = Math.round((done / total) * 100)
+                  return (
+                    <>
+                      <div className={`px-2 py-0.5 rounded font-bold ${pct === 100 ? 'bg-emerald-100 text-emerald-800' : pct >= 50 ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-800'}`}>
+                        {done}/{total} ({pct}%)
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {haccpLocations.filter(l => l && l.active !== false && l.name).map(loc => {
+                const today = new Date().toISOString().slice(0, 10)
+                const todays = temps.filter(t => t.location.toLowerCase() === loc.name.toLowerCase() && new Date(t.recordedAt).toISOString().slice(0, 10) === today)
+                const am = todays.find(t => new Date(t.recordedAt).getUTCHours() < 12)
+                const pm = todays.find(t => new Date(t.recordedAt).getUTCHours() >= 12)
+                const icon = loc.type === 'freezer' ? '🥶' : loc.type === 'hot_hold' ? '🔥' : loc.type === 'chiller' ? '🧊' : '❄️'
+                const bothDone = am && pm
+                const noneDone = !am && !pm
+                return (
+                  <div key={loc.id || loc.name} className={`bg-white border rounded-lg p-2.5 flex items-center gap-2 ${bothDone ? 'border-emerald-200' : noneDone ? 'border-red-200 bg-red-50/30' : 'border-amber-200 bg-amber-50/30'}`}>
+                    <span className="text-lg shrink-0">{icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold truncate">{loc.name}</div>
+                      <div className="flex items-center gap-1.5 text-[10px] mt-0.5">
+                        <span className={`px-1.5 py-0.5 rounded font-medium ${am ? (am.isPass !== false ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800') : 'bg-slate-100 text-slate-500'}`}>
+                          {am ? `AM ${am.temperatureC}°` : 'AM —'}
+                        </span>
+                        <span className={`px-1.5 py-0.5 rounded font-medium ${pm ? (pm.isPass !== false ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800') : 'bg-slate-100 text-slate-500'}`}>
+                          {pm ? `PM ${pm.temperatureC}°` : 'PM —'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Tabs */}
       <div className="flex items-center gap-1 border-b overflow-x-auto">
         <Button variant={tab === 'temperatures' ? 'default' : 'ghost'} size="sm" onClick={() => setTab('temperatures')} className="rounded-b-none">
