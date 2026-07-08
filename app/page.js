@@ -6589,6 +6589,29 @@ function HaccpView({ currentUser }) {
 
   // ---- Save handlers ------------------------------------------------------
   // ---- AI-scan a physical HACCP temperature log sheet ----
+  // Compress iPhone photos (typically 3-8MB) down to <1MB before sending.
+  // Vercel serverless has a 4.5MB body limit → oversized photos = "Load failed".
+  // Also downscales to max 1800px on the long edge for faster OCR.
+  const compressImage = async (dataUrl, maxDim = 1800, quality = 0.72) => {
+    return new Promise((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => {
+        let w = img.width, h = img.height
+        const longEdge = Math.max(w, h)
+        if (longEdge > maxDim) {
+          const scale = maxDim / longEdge
+          w = Math.round(w * scale); h = Math.round(h * scale)
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = w; canvas.height = h
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(img, 0, 0, w, h)
+        resolve(canvas.toDataURL('image/jpeg', quality))
+      }
+      img.onerror = reject
+      img.src = dataUrl
+    })
+  }
   const applyImgRotation = async (dataUrl, deg) => {
     if (!deg) return dataUrl
     return new Promise((resolve, reject) => {
@@ -6611,12 +6634,29 @@ function HaccpView({ currentUser }) {
     if (!scanTempImage) return
     setScanTempBusy(true)
     try {
-      const send = await applyImgRotation(scanTempImage, scanTempRotation)
-      const res = await fetch('/api/haccp/scan-temperatures', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: send }),
-      })
-      if (!res.ok) throw new Error('AI failed to read the sheet')
+      // Step 1: rotate (if user tapped 90°/270° buttons)
+      const rotated = await applyImgRotation(scanTempImage, scanTempRotation)
+      // Step 2: compress — iPhone raw photos are 3-8MB which exceeds Vercel's
+      // 4.5MB body limit AND slows down GPT-4o vision. Compress to <1MB.
+      const send = await compressImage(rotated, 1800, 0.72)
+      // Step 3: send to backend (with 55s client-side timeout — Vercel maxDuration is 60s)
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 55000)
+      let res
+      try {
+        res = await fetch('/api/haccp/scan-temperatures', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: send }),
+          signal: controller.signal,
+        })
+      } catch (err) {
+        if (err.name === 'AbortError') throw new Error('AI is taking too long. Try a smaller photo (crop tighter)')
+        throw new Error('Network error — check your connection and try again')
+      } finally { clearTimeout(timeoutId) }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        throw new Error(errData.error || `AI failed (${res.status}). Try a clearer/less-rotated photo`)
+      }
       const data = await res.json()
       const list = Array.isArray(data.readings) ? data.readings : []
       if (list.length === 0) throw new Error('No readings detected — try a clearer photo')
@@ -6632,7 +6672,7 @@ function HaccpView({ currentUser }) {
         }
       }))
       toast.success(`\u2728 ${list.length} readings detected \u2014 review & save`)
-    } catch (e) { toast.error(e.message) }
+    } catch (e) { toast.error(e.message || 'Load failed — try a smaller/clearer photo') }
     finally { setScanTempBusy(false) }
   }
   const saveScannedTemps = async () => {
