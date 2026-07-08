@@ -675,7 +675,10 @@ Output strictly valid JSON with no other text.`
 async function parseTemperatureLogPhoto(base64DataUrl, knownLocations = []) {
   const key = process.env.EMERGENT_LLM_KEY
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
-  const today = new Date().toISOString().slice(0, 10)
+  const now = new Date()
+  const today = now.toISOString().slice(0, 10)
+  const currentYear = now.getFullYear()
+  const lastYear = currentYear - 1
 
   // Build context block from user's saved fridges/freezers so the AI matches
   // handwritten labels to the exact names the user uses (e.g. "walk-in" → "Walk-in Fridge #2").
@@ -701,6 +704,12 @@ ${list}
 These are physical clipboard sheets where staff handwrite fridge/freezer temperatures throughout the week.
 This includes UK "Food Alert" FH Form 3, Weekly HACCP Temperature Logs, Daily Fridge/Freezer Checklists,
 freeform lists, monthly grids, and everything in between.
+
+⚠️ TODAY'S DATE: ${today}. CURRENT YEAR IS ${currentYear}.
+When you see a "Week Commencing" date on the sheet like "07/07" (day/month), always use CURRENT YEAR (${currentYear})
+unless the sheet explicitly writes a full 4-digit year like "07/07/${currentYear - 3}" that clearly differs.
+NEVER default to old years like 2023 or 2024 — if a 2-digit year like "07/07/25" is written, that means ${currentYear - 1}
+(the year "25" = 20-25), NOT ${lastYear - 1}. Prefer the current year ${currentYear} for any ambiguous date.
 
 CRITICAL — the image may be ROTATED, tilted, or upside-down. Read the text in ANY orientation.
 ${locationsContext}
@@ -776,7 +785,9 @@ Return ONLY valid JSON, no prose, no markdown fences:
 }`
 
   const body = {
-    model: 'gpt-4o',
+    // gpt-4o-mini is 3-5x faster than gpt-4o for structured extraction from images,
+    // handles handwritten HACCP temps just as well, and is ~10x cheaper per request.
+    model: 'gpt-4o-mini',
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: [
@@ -800,7 +811,18 @@ Return ONLY valid JSON, no prose, no markdown fences:
   let parsed
   try { parsed = JSON.parse(content) } catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : {} }
   const readings = Array.isArray(parsed.readings) ? parsed.readings : []
-  const weekCommencing = parsed.weekCommencing || parsed.sheetDate || null
+  let weekCommencing = parsed.weekCommencing || parsed.sheetDate || null
+  // Clamp weekCommencing to current year if AI hallucinated an old year
+  if (weekCommencing && /^\d{4}-\d{2}-\d{2}$/.test(weekCommencing)) {
+    const wc = new Date(weekCommencing + 'T00:00:00Z')
+    const wcDiff = (now.getTime() - wc.getTime()) / 86400000
+    if (wcDiff > 180) {
+      wc.setUTCFullYear(currentYear)
+      const futureDiff = (wc.getTime() - now.getTime()) / 86400000
+      if (futureDiff > 7) wc.setUTCFullYear(currentYear - 1)
+      weekCommencing = wc.toISOString().slice(0, 10)
+    }
+  }
   // Detect truncation — if OpenAI ran out of tokens mid-response, the JSON is
   // incomplete and we probably parsed only the first N readings.
   const truncated = finishReason === 'length'
@@ -821,6 +843,19 @@ Return ONLY valid JSON, no prose, no markdown fences:
         }
       }
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) dateISO = today
+      // ⚠️ CLAMP: if AI hallucinated an old year (e.g. wrote 2023 when it's ${currentYear}),
+      // force the year to current year. Anything more than 6 months in the past is suspicious.
+      const parsed = new Date(dateISO + 'T00:00:00Z')
+      const daysDiff = (now.getTime() - parsed.getTime()) / 86400000
+      if (daysDiff > 180) {
+        // Swap in current year, keep month/day
+        const fixed = new Date(dateISO + 'T00:00:00Z')
+        fixed.setUTCFullYear(currentYear)
+        // If the "fixed" date is now in the future by more than 7 days, use last year instead
+        const futureDiff = (fixed.getTime() - now.getTime()) / 86400000
+        if (futureDiff > 7) fixed.setUTCFullYear(currentYear - 1)
+        dateISO = fixed.toISOString().slice(0, 10)
+      }
       return {
         location: String(r.location || '').trim(),
         temperatureC: Number(r.temperatureC),
