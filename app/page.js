@@ -6879,6 +6879,8 @@ function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, onDelet
   // Inline cell editing state — [locName, dateISO, slot] identifies the cell being edited
   const [editingCell, setEditingCell] = useState(null)  // {loc, dateISO, slot, value}
   const [savingCell, setSavingCell] = useState(false)
+  // Multi-select for List view bulk delete
+  const [selectedTempIds, setSelectedTempIds] = useState(new Set())
   // View mode: 'logbook' = pivoted grid like physical log sheet; 'list' = compact chronological list
   const [mode, setMode] = useState('logbook')
   // Week navigation — Monday of the currently-viewed week (UK convention)
@@ -7319,38 +7321,93 @@ ${printLocs.length > 0 ? `<table>
           </div>
         </>
       ) : (
-        /* ==== LIST MODE — compact chronological cards ==== */
-        <div className="space-y-1.5">
-          {temps.slice(0, 200).map(t => {
-            const dt = new Date(t.recordedAt)
-            const dateStr = dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
-            const timeStr = dt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
-            const pass = t.isPass !== false
-            return (
-              <div key={t.id} className={`flex items-center gap-2 bg-white border rounded-lg px-3 py-2 ${pass ? '' : 'border-red-200 bg-red-50/30'}`}>
-                <div className="w-16 shrink-0">
-                  <div className="text-[11px] font-semibold text-slate-800">{dateStr}</div>
-                  <div className="text-[10px] text-muted-foreground">{timeStr}</div>
+        /* ==== LIST MODE — compact chronological cards with multi-select ==== */
+        (() => {
+          const toggleSelected = (id) => {
+            setSelectedTempIds(prev => {
+              const next = new Set(prev)
+              if (next.has(id)) next.delete(id); else next.add(id)
+              return next
+            })
+          }
+          const list = temps.slice(0, 200)
+          const allSelected = list.length > 0 && list.every(t => selectedTempIds.has(t.id))
+          const toggleAll = () => {
+            if (allSelected) setSelectedTempIds(new Set())
+            else setSelectedTempIds(new Set(list.map(t => t.id)))
+          }
+          const bulkDelete = () => {
+            if (selectedTempIds.size === 0) return
+            if (!confirm(`Delete ${selectedTempIds.size} reading${selectedTempIds.size > 1 ? 's' : ''}? This cannot be undone.`)) return
+            const ids = [...selectedTempIds]
+            setSelectedTempIds(new Set())
+            ids.forEach(id => onDelete(id))
+          }
+          return (
+            <div className="space-y-1.5">
+              {/* Multi-select toolbar */}
+              {selectedTempIds.size > 0 && (
+                <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2 sticky top-0 z-10">
+                  <span className="text-xs font-semibold text-red-800">{selectedTempIds.size} selected</span>
+                  <div className="flex-1" />
+                  <Button size="sm" variant="outline" onClick={() => setSelectedTempIds(new Set())} className="h-7 text-xs">Cancel</Button>
+                  <Button size="sm" onClick={bulkDelete} className="h-7 text-xs bg-red-600 hover:bg-red-700 text-white">
+                    <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete selected
+                  </Button>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-slate-800 truncate">{t.location}</div>
-                  {t.notes && <div className="text-[10px] text-muted-foreground truncate">{t.notes}</div>}
-                </div>
-                <div className={`text-lg font-bold ${pass ? 'text-emerald-700' : 'text-red-700'} shrink-0`}>{t.temperatureC}°</div>
-                <div className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 ${pass ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
-                  {pass ? 'PASS' : 'FAIL'}
-                </div>
-                <div className={`text-[10px] text-muted-foreground shrink-0 w-16 truncate text-right`} title={t.recordedBy}>{shortBy(t.recordedBy)}</div>
-                <Button variant="ghost" size="icon" onClick={() => onEdit(t)} className="h-7 w-7 shrink-0" title="Edit">
-                  <Pencil className="h-3.5 w-3.5 text-slate-500" />
-                </Button>
-                <Button variant="ghost" size="icon" onClick={() => onDelete(t.id)} className="h-7 w-7 shrink-0" title="Delete">
-                  <Trash2 className="h-3.5 w-3.5 text-red-500" />
-                </Button>
-              </div>
-            )
-          })}
-        </div>
+              )}
+              {/* Select all */}
+              {list.length > 1 && (
+                <label className="flex items-center gap-2 text-xs text-muted-foreground pl-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    className="h-3.5 w-3.5 accent-emerald-600"
+                  />
+                  Select all ({list.length})
+                </label>
+              )}
+              {list.map(t => {
+                const dt = new Date(t.recordedAt)
+                const dateStr = dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+                const timeStr = dt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+                const pass = t.isPass !== false
+                const isSelected = selectedTempIds.has(t.id)
+                return (
+                  <div key={t.id} className={`flex items-center gap-2 bg-white border rounded-lg px-3 py-2 ${pass ? '' : 'border-red-200 bg-red-50/30'} ${isSelected ? 'ring-2 ring-red-300 bg-red-50/40' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => toggleSelected(t.id)}
+                      className="h-4 w-4 accent-emerald-600 shrink-0"
+                      title="Select for bulk delete"
+                    />
+                    <div className="w-16 shrink-0">
+                      <div className="text-[11px] font-semibold text-slate-800">{dateStr}</div>
+                      <div className="text-[10px] text-muted-foreground">{timeStr}</div>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold text-slate-800 truncate">{t.location}</div>
+                      {t.notes && <div className="text-[10px] text-muted-foreground truncate">{t.notes}</div>}
+                    </div>
+                    <div className={`text-lg font-bold ${pass ? 'text-emerald-700' : 'text-red-700'} shrink-0`}>{t.temperatureC}°</div>
+                    <div className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 ${pass ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
+                      {pass ? 'PASS' : 'FAIL'}
+                    </div>
+                    <div className={`text-[10px] text-muted-foreground shrink-0 w-16 truncate text-right`} title={t.recordedBy}>{shortBy(t.recordedBy)}</div>
+                    <Button variant="ghost" size="icon" onClick={() => onEdit(t)} className="h-7 w-7 shrink-0" title="Edit">
+                      <Pencil className="h-3.5 w-3.5 text-slate-500" />
+                    </Button>
+                    <Button variant="ghost" size="icon" onClick={() => onDelete(t.id)} className="h-7 w-7 shrink-0" title="Delete">
+                      <Trash2 className="h-3.5 w-3.5 text-red-500" />
+                    </Button>
+                  </div>
+                )
+              })}
+            </div>
+          )
+        })()
       )}
     </div>
   )
