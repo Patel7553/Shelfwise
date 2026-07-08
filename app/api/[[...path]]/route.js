@@ -2143,6 +2143,23 @@ export async function PUT(request, { params }) {
       }
       return json(enrich(fromDb(data)))
     }
+
+    // ------- HACCP: edit a temperature reading -------
+    if (segs[0] === 'haccp' && segs[1] === 'temperatures' && segs[2]) {
+      const { ctx, error } = await requireOwnerOrChef(request)
+      if (error) return error
+      const id = segs[2]
+      const body = await request.json()
+      const patch = {}
+      if (typeof body.location === 'string') patch.location = body.location.trim()
+      if (Number.isFinite(Number(body.temperatureC))) patch.temperature_c = Number(body.temperatureC)
+      if (typeof body.isPass === 'boolean') patch.is_pass = body.isPass
+      if (typeof body.recordedAt === 'string') patch.recorded_at = body.recordedAt
+      if (typeof body.notes === 'string') patch.notes = body.notes.trim()
+      const { data, error: e2 } = await sb.from('haccp_temperature_logs').update(patch).eq('id', id).eq('kitchen_id', ctx.kitchenId).select().single()
+      if (e2) return json({ error: e2.message }, 500)
+      return json(haccpTempFromDb(data))
+    }
     return json({ error: 'Not found' }, 404)
   } catch (e) {
     console.error('PUT error', e)

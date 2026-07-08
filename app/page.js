@@ -5437,6 +5437,22 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
   ]
 
   // ---- HACCP location handlers ----
+  const [selectedLocIds, setSelectedLocIds] = useState(new Set())
+  const toggleLocSelected = (id) => {
+    setSelectedLocIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  const selectAllLocs = () => setSelectedLocIds(new Set(locations.map(l => l.id).filter(Boolean)))
+  const clearSelectedLocs = () => setSelectedLocIds(new Set())
+  const deleteSelectedLocs = () => {
+    if (selectedLocIds.size === 0) return
+    markTouched('haccp')
+    setLocations(prev => prev.filter(l => !selectedLocIds.has(l.id)))
+    setSelectedLocIds(new Set())
+  }
   const addLocation = (defaults = {}) => {
     markTouched('haccp')
     const newLoc = {
@@ -5653,12 +5669,45 @@ function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
                 </div>
               ) : (
                 <div className="space-y-2">
+                  {/* Multi-select toolbar — appears when any row selected */}
+                  {selectedLocIds.size > 0 && (
+                    <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                      <span className="text-xs font-semibold text-red-800">{selectedLocIds.size} selected</span>
+                      <div className="flex-1" />
+                      <Button size="sm" variant="outline" onClick={clearSelectedLocs} className="h-7 text-xs">Cancel</Button>
+                      <Button size="sm" onClick={deleteSelectedLocs} className="h-7 text-xs bg-red-600 hover:bg-red-700 text-white">
+                        <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete selected
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Select-all bar */}
+                  {locations.length > 1 && (
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground pl-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedLocIds.size === locations.length && locations.length > 0}
+                        onChange={() => selectedLocIds.size === locations.length ? clearSelectedLocs() : selectAllLocs()}
+                        className="h-3.5 w-3.5 accent-emerald-600"
+                      />
+                      Select all
+                    </label>
+                  )}
+
                   {locations.map((l, i) => {
                     const meta = LOCATION_TYPES.find(t => t.key === l.type) || LOCATION_TYPES[0]
+                    const isSelected = selectedLocIds.has(l.id)
                     return (
-                      <div key={l.id || i} className={`bg-white border rounded-lg p-3 space-y-2 ${l.active === false ? 'opacity-50' : ''}`}>
+                      <div key={l.id || i} className={`bg-white border rounded-lg p-3 space-y-2 ${l.active === false ? 'opacity-50' : ''} ${isSelected ? 'ring-2 ring-red-300 bg-red-50/30' : ''}`}>
                         <div className="flex gap-2 items-center">
-                          <span className="text-xs text-muted-foreground font-semibold w-6 text-center shrink-0">{i + 1}</span>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleLocSelected(l.id)}
+                            className="h-4 w-4 accent-emerald-600 shrink-0"
+                            title="Select for bulk delete"
+                          />
+                          <span className="text-xs text-muted-foreground font-semibold w-4 text-center shrink-0">{i + 1}</span>
                           <Input value={l.name || ''} onChange={e => updateLocation(i, { name: e.target.value })} placeholder="e.g. Walk-in Fridge #2" className="flex-1 min-w-0" />
                           <Select value={l.type || 'fridge'} onValueChange={v => updateLocation(i, { type: v })}>
                             <SelectTrigger className="w-32 shrink-0"><SelectValue /></SelectTrigger>
@@ -6675,7 +6724,7 @@ export default App
 // HACCP Compliance View — Temperature logs, Cleaning schedule, Delivery checks
 // UK Food Standards Agency & EU Reg 852/2004 require these records to be kept.
 // ============================================================================
-function TempLogbookView({ temps, haccpLocations, onLog, onScan, onDelete, formatDT }) {
+function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, onDelete, formatDT }) {
   // View mode: 'logbook' = pivoted grid like physical log sheet; 'list' = compact chronological list
   const [mode, setMode] = useState('logbook')
   // Week navigation — Monday of the currently-viewed week (UK convention)
@@ -6769,17 +6818,30 @@ function TempLogbookView({ temps, haccpLocations, onLog, onScan, onDelete, forma
     doc.write(`<!doctype html><html><head><title>HACCP Temperature Log · ${weekLabel}</title>
 <style>
   *{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
-  body{margin:0;padding:20px;color:#0f172a}
+  body{margin:0;padding:20px;color:#0f172a;background:#f8fafc}
   h1{font-size:18px;margin:0 0 6px;color:#065f46}
   .sub{font-size:11px;color:#64748b;margin-bottom:14px}
-  table{width:100%;border-collapse:collapse;font-size:11px}
+  table{width:100%;border-collapse:collapse;font-size:11px;background:#fff}
   th,td{border:1px solid #cbd5e1;padding:6px 4px;text-align:center}
   th{background:#f0fdf4;font-weight:600;color:#065f46}
   th .d{font-size:9px;color:#64748b;font-weight:400}
   td.loc{text-align:left;font-weight:600;background:#f8fafc;color:#0f172a}
   td.fail{background:#fee2e2;color:#991b1b;font-weight:600}
-  @media print{ body{padding:8px} @page{size:landscape;margin:8mm} }
+  .toolbar{position:sticky;top:0;background:#f8fafc;padding:10px 0;margin:-20px -20px 14px;padding:12px 20px;border-bottom:1px solid #e2e8f0;display:flex;gap:8px;align-items:center;z-index:100}
+  .toolbar button{border:1px solid #cbd5e1;background:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;color:#0f172a;display:inline-flex;align-items:center;gap:6px}
+  .toolbar button:hover{background:#f1f5f9}
+  .toolbar .primary{background:#059669;color:#fff;border-color:#059669}
+  .toolbar .primary:hover{background:#047857}
+  .toolbar .spacer{flex:1}
+  .toolbar .hint{font-size:11px;color:#64748b}
+  @media print{ .toolbar{display:none !important} body{padding:8px;background:#fff} @page{size:landscape;margin:8mm} }
 </style></head><body>
+<div class="toolbar">
+  <button onclick="window.close()" title="Close this preview">← Close</button>
+  <button class="primary" onclick="window.print()">🖨️ Print</button>
+  <span class="spacer"></span>
+  <span class="hint">This preview will not affect your ShelfWise app. Close when done.</span>
+</div>
 <h1>Weekly Temperature Log — ${weekLabel}</h1>
 <div class="sub">HACCP compliance record · generated by ShelfWise on ${new Date().toLocaleString('en-GB')}</div>
 <table>
@@ -6789,9 +6851,26 @@ function TempLogbookView({ temps, haccpLocations, onLog, onScan, onDelete, forma
   </thead>
   <tbody>${rows || '<tr><td colspan="15">No readings this week</td></tr>'}</tbody>
 </table>
+<script>
+  // If browser blocks window.close() (e.g. Safari doesn't allow closing tabs it didn't open),
+  // fall back to going back in history so the user can return to the app.
+  document.querySelectorAll('.toolbar button[onclick*=close]').forEach(btn => {
+    btn.addEventListener('click', function(e){
+      e.preventDefault()
+      try { window.close() } catch(_) {}
+      // Safari fallback — window.close() silently fails on tabs it didn't spawn
+      setTimeout(() => {
+        if (!window.closed) {
+          if (window.history.length > 1) window.history.back()
+          else document.body.innerHTML = '<div style="padding:40px;text-align:center;color:#64748b"><h2>You can close this tab now.</h2><p>ShelfWise is still open in your previous tab.</p></div>'
+        }
+      }, 100)
+    })
+  })
+</script>
 </body></html>`)
     doc.close()
-    setTimeout(() => w.print(), 250)
+    // Don't auto-print — let the user click Print or Close when ready
   }
 
   return (
@@ -6939,8 +7018,11 @@ function TempLogbookView({ temps, haccpLocations, onLog, onScan, onDelete, forma
                 <div className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 ${pass ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
                   {pass ? 'PASS' : 'FAIL'}
                 </div>
-                <div className="text-[10px] text-muted-foreground shrink-0 w-16 truncate text-right" title={t.recordedBy}>{shortBy(t.recordedBy)}</div>
-                <Button variant="ghost" size="icon" onClick={() => onDelete(t.id)} className="h-7 w-7 shrink-0">
+                <div className={`text-[10px] text-muted-foreground shrink-0 w-16 truncate text-right`} title={t.recordedBy}>{shortBy(t.recordedBy)}</div>
+                <Button variant="ghost" size="icon" onClick={() => onEdit(t)} className="h-7 w-7 shrink-0" title="Edit">
+                  <Pencil className="h-3.5 w-3.5 text-slate-500" />
+                </Button>
+                <Button variant="ghost" size="icon" onClick={() => onDelete(t.id)} className="h-7 w-7 shrink-0" title="Delete">
                   <Trash2 className="h-3.5 w-3.5 text-red-500" />
                 </Button>
               </div>
@@ -7111,9 +7193,14 @@ function HaccpView({ currentUser, haccpLocations = [] }) {
 
   const saveTemp = async (payload) => {
     try {
-      const res = await fetch('/api/haccp/temperatures', { method: 'POST', body: JSON.stringify(payload) })
+      // If payload has id → edit existing (PUT); otherwise create new (POST)
+      const isEdit = !!payload.id
+      const url = isEdit ? `/api/haccp/temperatures/${payload.id}` : '/api/haccp/temperatures'
+      const method = isEdit ? 'PUT' : 'POST'
+      const { id, ...body } = payload
+      const res = await fetch(url, { method, body: JSON.stringify(body) })
       if (!res.ok) throw new Error('Save failed')
-      toast.success('Temperature logged')
+      toast.success(isEdit ? 'Reading updated' : 'Temperature logged')
       setTempModal(null); load()
     } catch (e) { toast.error(e.message) }
   }
@@ -7303,6 +7390,15 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
           haccpLocations={haccpLocations}
           onLog={() => setTempModal({ location: haccpLocations.find(l => l.active !== false)?.name || '', temperatureC: '' })}
           onScan={() => setScanTempOpen(true)}
+          onEdit={(t) => setTempModal({
+            id: t.id,
+            location: t.location,
+            temperatureC: t.temperatureC,
+            isPass: t.isPass,
+            recordedAt: t.recordedAt,
+            recordedBy: t.recordedBy,
+            notes: t.notes || '',
+          })}
           onDelete={(id) => deleteRow('temperatures', id)}
           formatDT={formatDT}
         />
@@ -7561,7 +7657,7 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
       {/* ---- TEMPERATURE MODAL ---- */}
       <Dialog open={!!tempModal} onOpenChange={o => !o && setTempModal(null)}>
         <DialogContent className="sm:max-w-md">
-          <DialogHeader><DialogTitle>Log temperature</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{tempModal?.id ? 'Edit temperature reading' : 'Log temperature'}</DialogTitle></DialogHeader>
           {tempModal && (
             <div className="grid gap-3 py-2">
               <div>
@@ -7608,18 +7704,30 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
                 <Label>Notes (optional)</Label>
                 <Input value={tempModal.notes || ''} onChange={e => setTempModal({ ...tempModal, notes: e.target.value })} placeholder="e.g. door left open by delivery" />
               </div>
+              {tempModal.id && (
+                <div>
+                  <Label>Recorded at</Label>
+                  <Input
+                    type="datetime-local"
+                    value={tempModal.recordedAt ? new Date(tempModal.recordedAt).toISOString().slice(0, 16) : ''}
+                    onChange={e => setTempModal({ ...tempModal, recordedAt: e.target.value ? new Date(e.target.value).toISOString() : tempModal.recordedAt })}
+                  />
+                </div>
+              )}
             </div>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setTempModal(null)}>Cancel</Button>
             <Button onClick={() => saveTemp({
+              id: tempModal.id,
               location: tempModal.location,
               temperatureC: Number(tempModal.temperatureC),
               isPass: tempModal.isPass !== false,
-              recordedBy: currentUser,
+              recordedBy: tempModal.recordedBy || currentUser,
+              recordedAt: tempModal.recordedAt,
               notes: tempModal.notes || '',
             })} disabled={!tempModal?.location || tempModal?.temperatureC === '' || tempModal?.temperatureC == null}>
-              <Check className="h-4 w-4 mr-1" /> Save
+              <Check className="h-4 w-4 mr-1" /> {tempModal?.id ? 'Update' : 'Save'}
             </Button>
           </DialogFooter>
         </DialogContent>
