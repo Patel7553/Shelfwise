@@ -112,8 +112,8 @@ export default function LoginPage() {
           <CardContent className="p-6">
             <Tabs value={tab} onValueChange={setTab}>
               <TabsList className="grid w-full grid-cols-2 mb-4">
-                <TabsTrigger value="owner">Owner / Admin</TabsTrigger>
-                <TabsTrigger value="chef">Chef</TabsTrigger>
+                <TabsTrigger value="owner">📧 Email</TabsTrigger>
+                <TabsTrigger value="chef">🔑 Code</TabsTrigger>
               </TabsList>
 
               <TabsContent value="owner">
