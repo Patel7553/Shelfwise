@@ -6907,18 +6907,18 @@ function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, onDelet
   }, [haccpLocations])
 
   // Also detect any locations in THIS week's readings that DON'T match any
-  // configured fridge/freezer (case-insensitive). These are "orphans" — usually
-  // typos from AI scans (e.g. "Ward" when saved list has "Ward Fridge").
-  // We show them in a separate "Other / unmatched" section so the user can see
-  // them and rename via the List view.
+  // configured fridge/freezer using AGGRESSIVE normalization to catch tiny
+  // typos, extra spaces, hyphens, punctuation. "Ward Fridge" = "ward-fridge"
+  // = "ward  fridge" = "Ward Fridge  " (trailing space).
+  const normalizeName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
   const orphanLocations = React.useMemo(() => {
-    const known = new Set(configuredLocations.map(l => l.name.toLowerCase()))
+    const known = new Set(configuredLocations.map(l => normalizeName(l.name)))
     const found = new Map()
     const start = days[0].getTime(); const end = days[6].getTime() + 86400000
     ;(temps || []).forEach(t => {
       const ts = new Date(t.recordedAt).getTime()
       if (ts < start || ts >= end) return
-      const key = String(t.location || '').toLowerCase().trim()
+      const key = normalizeName(t.location)
       if (!key || known.has(key)) return
       if (!found.has(key)) {
         found.set(key, {

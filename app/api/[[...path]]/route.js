@@ -760,7 +760,7 @@ EXTRACTION RULES:
    * "02", "03", "04", "05" written in a cell = "2°C", "3°C", "4°C", "5°C"
      (the leading "0" is the staff drawing the degree symbol next to the digit).
      Convert "02" → 2, "03" → 3, "04" → 4, "05" → 5, "07" → 7, etc.
-   * A digit followed by a small superscript circle/dot (e.g. "3°", "3'", "3`")
+   * A digit followed by a small superscript circle/dot (e.g. "3°" or "3'")
      = that temperature in Celsius. Convert "3°" → 3, "3.1°" → 3.1.
    * "-19.8" or "-19,8" or "-19·8" all mean -19.8 (normalize).
    * Numbers with an apostrophe or small mark after them ("3'", "4'") are STILL
