@@ -769,12 +769,12 @@ Return ONLY valid JSON, no prose, no markdown fences:
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: [
-        { type: 'text', text: 'Read this HACCP temperature log sheet CAREFULLY. Identify the layout first (weekly grid vs single-day), find the week-commencing date, then extract every non-empty temperature reading with its correct date, day, and time-of-day. Return JSON only.' },
+        { type: 'text', text: 'Read this HACCP temperature log sheet CAREFULLY. Identify the layout first (weekly grid vs single-day), find the week-commencing date, then extract EVERY non-empty temperature reading with its correct date, day, and time-of-day. Do NOT stop early — a weekly sheet may have 100+ readings across 7 days × AM/PM columns. Return the FULL JSON with every reading. Return JSON only.' },
         { type: 'image_url', image_url: { url: base64DataUrl, detail: 'high' } }
       ]}
     ],
     temperature: 0.05,
-    max_tokens: 4000,
+    max_tokens: 16000,  // was 4000 — bumped so full-week sheets (~150+ readings) don't get truncated mid-JSON
     response_format: { type: 'json_object' },
   }
   const res = await fetch(EMERGENT_URL, {
@@ -785,13 +785,18 @@ Return ONLY valid JSON, no prose, no markdown fences:
   if (!res.ok) throw new Error(`Emergent LLM ${res.status}: ${await res.text()}`)
   const data = await res.json()
   const content = data?.choices?.[0]?.message?.content || '{}'
+  const finishReason = data?.choices?.[0]?.finish_reason
   let parsed
   try { parsed = JSON.parse(content) } catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : {} }
   const readings = Array.isArray(parsed.readings) ? parsed.readings : []
   const weekCommencing = parsed.weekCommencing || parsed.sheetDate || null
+  // Detect truncation — if OpenAI ran out of tokens mid-response, the JSON is
+  // incomplete and we probably parsed only the first N readings.
+  const truncated = finishReason === 'length'
   return {
     sheetDate: parsed.sheetDate || weekCommencing || null,
     weekCommencing,
+    truncated,  // frontend can show a warning to retry with a smaller crop
     readings: readings.map(r => {
       // Prefer AI-provided dateISO; fall back to computing from weekCommencing + dayOfWeek
       let dateISO = String(r.dateISO || '').slice(0, 10)

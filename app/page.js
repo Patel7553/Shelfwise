@@ -7460,7 +7460,7 @@ function HaccpView({ currentUser, haccpLocations = [] }) {
   // Compress iPhone photos (typically 3-8MB) down to <1MB before sending.
   // Vercel serverless has a 4.5MB body limit → oversized photos = "Load failed".
   // Also downscales to max 1800px on the long edge for faster OCR.
-  const compressImage = async (dataUrl, maxDim = 2200, quality = 0.86) => {
+  const compressImage = async (dataUrl, maxDim = 3000, quality = 0.88) => {
     return new Promise((resolve, reject) => {
       const img = new Image()
       img.onload = () => {
@@ -7539,7 +7539,12 @@ function HaccpView({ currentUser, haccpLocations = [] }) {
           _keep: true,
         }
       }))
-      toast.success(`\u2728 ${list.length} readings detected \u2014 review & save`)
+      if (data.truncated) {
+        // AI ran out of tokens — response was cut off, so some readings are missing
+        toast.error(`⚠️ Only ${list.length} readings extracted — the sheet may have more that got cut off. Try photographing half the sheet at a time.`, { duration: 10000 })
+      } else {
+        toast.success(`\u2728 ${list.length} readings detected \u2014 review & save`)
+      }
     } catch (e) { toast.error(e.message || 'Load failed — try a smaller/clearer photo') }
     finally { setScanTempBusy(false) }
   }
