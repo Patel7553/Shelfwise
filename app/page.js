@@ -1536,7 +1536,7 @@ function App() {
           <AnalyticsView products={products} />
         )}
         {view === 'haccp' && (
-          <HaccpView currentUser={me?.user?.email || me?.chef?.name || ''} />
+          <HaccpView currentUser={me?.user?.email || me?.chef?.name || ''} haccpLocations={settings.haccpLocations || []} />
         )}
       </main>
 
@@ -6675,7 +6675,284 @@ export default App
 // HACCP Compliance View — Temperature logs, Cleaning schedule, Delivery checks
 // UK Food Standards Agency & EU Reg 852/2004 require these records to be kept.
 // ============================================================================
-function HaccpView({ currentUser }) {
+function TempLogbookView({ temps, haccpLocations, onLog, onScan, onDelete, formatDT }) {
+  // View mode: 'logbook' = pivoted grid like physical log sheet; 'list' = compact chronological list
+  const [mode, setMode] = useState('logbook')
+  // Week navigation — Monday of the currently-viewed week (UK convention)
+  const getMonday = (d) => {
+    const x = new Date(d)
+    const day = x.getDay() // 0=Sun,1=Mon,...6=Sat
+    const diff = day === 0 ? -6 : 1 - day
+    x.setDate(x.getDate() + diff)
+    x.setHours(0, 0, 0, 0)
+    return x
+  }
+  const [weekStart, setWeekStart] = useState(() => getMonday(new Date()))
+
+  const days = React.useMemo(() => {
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(weekStart); d.setDate(d.getDate() + i); return d
+    })
+  }, [weekStart])
+  const weekLabel = `${days[0].toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })} – ${days[6].toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`
+
+  // Union of user-configured locations + any locations found in this week's readings
+  const activeLocations = React.useMemo(() => {
+    const named = (haccpLocations || []).filter(l => l && l.active !== false && l.name)
+    const knownNames = new Set(named.map(l => l.name.toLowerCase()))
+    const extras = new Map()
+    const start = days[0].getTime(); const end = days[6].getTime() + 86400000
+    ;(temps || []).forEach(t => {
+      const ts = new Date(t.recordedAt).getTime()
+      if (ts < start || ts >= end) return
+      const key = String(t.location || '').toLowerCase()
+      if (!key || knownNames.has(key)) return
+      if (!extras.has(key)) extras.set(key, { id: `t-${key}`, name: t.location, type: t.temperatureC <= 0 ? 'freezer' : 'fridge', active: true, _fromTemps: true })
+    })
+    return [...named, ...extras.values()]
+  }, [haccpLocations, temps, days])
+
+  // Build cell map: readings[locName][YYYY-MM-DD][am|pm] = array of readings
+  const readingsMap = React.useMemo(() => {
+    const map = {}
+    const start = days[0].getTime(); const end = days[6].getTime() + 86400000
+    ;(temps || []).forEach(t => {
+      const d = new Date(t.recordedAt)
+      const ts = d.getTime()
+      if (ts < start || ts >= end) return
+      const dateKey = d.toISOString().slice(0, 10)
+      const slot = d.getUTCHours() < 12 ? 'am' : 'pm'
+      const locKey = String(t.location || '').toLowerCase()
+      if (!map[locKey]) map[locKey] = {}
+      if (!map[locKey][dateKey]) map[locKey][dateKey] = { am: [], pm: [] }
+      map[locKey][dateKey][slot].push(t)
+    })
+    return map
+  }, [temps, days])
+
+  // Compact author = initials (first + last) or first token before @ for emails
+  const shortBy = (raw) => {
+    if (!raw) return '—'
+    const s = String(raw).trim()
+    if (s.includes('@')) {
+      const local = s.split('@')[0]
+      return local.slice(0, 12) + (local.length > 12 ? '…' : '')
+    }
+    const parts = s.split(/\s+/).filter(Boolean)
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
+    return s.length > 12 ? s.slice(0, 12) + '…' : s
+  }
+
+  const shiftWeek = (delta) => {
+    const d = new Date(weekStart); d.setDate(d.getDate() + delta * 7); setWeekStart(d)
+  }
+  const goThisWeek = () => setWeekStart(getMonday(new Date()))
+
+  const printLogbook = () => {
+    const w = window.open('', '_blank')
+    if (!w) return
+    const doc = w.document
+    const rows = activeLocations.map(loc => {
+      const key = loc.name.toLowerCase()
+      const cells = days.map(d => {
+        const dateKey = d.toISOString().slice(0, 10)
+        const cell = readingsMap[key]?.[dateKey] || { am: [], pm: [] }
+        const fmt = (list) => list.length === 0 ? '—' : list.map(r => `${r.temperatureC}°`).join(', ')
+        const amPass = cell.am.every(r => r.isPass !== false)
+        const pmPass = cell.pm.every(r => r.isPass !== false)
+        return `<td class="${cell.am.length && !amPass ? 'fail' : ''}">${fmt(cell.am)}</td><td class="${cell.pm.length && !pmPass ? 'fail' : ''}">${fmt(cell.pm)}</td>`
+      }).join('')
+      return `<tr><td class="loc">${loc.name}</td>${cells}</tr>`
+    }).join('')
+    const dayHeaders = days.map(d => `<th colspan="2">${d.toLocaleDateString('en-GB', { weekday: 'short' })}<br/><span class="d">${d.getDate()}/${d.getMonth()+1}</span></th>`).join('')
+    const ampmHeaders = days.map(() => `<th>AM</th><th>PM</th>`).join('')
+    doc.write(`<!doctype html><html><head><title>HACCP Temperature Log · ${weekLabel}</title>
+<style>
+  *{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+  body{margin:0;padding:20px;color:#0f172a}
+  h1{font-size:18px;margin:0 0 6px;color:#065f46}
+  .sub{font-size:11px;color:#64748b;margin-bottom:14px}
+  table{width:100%;border-collapse:collapse;font-size:11px}
+  th,td{border:1px solid #cbd5e1;padding:6px 4px;text-align:center}
+  th{background:#f0fdf4;font-weight:600;color:#065f46}
+  th .d{font-size:9px;color:#64748b;font-weight:400}
+  td.loc{text-align:left;font-weight:600;background:#f8fafc;color:#0f172a}
+  td.fail{background:#fee2e2;color:#991b1b;font-weight:600}
+  @media print{ body{padding:8px} @page{size:landscape;margin:8mm} }
+</style></head><body>
+<h1>Weekly Temperature Log — ${weekLabel}</h1>
+<div class="sub">HACCP compliance record · generated by ShelfWise on ${new Date().toLocaleString('en-GB')}</div>
+<table>
+  <thead>
+    <tr><th rowspan="2" style="width:180px">Location</th>${dayHeaders}</tr>
+    <tr>${ampmHeaders}</tr>
+  </thead>
+  <tbody>${rows || '<tr><td colspan="15">No readings this week</td></tr>'}</tbody>
+</table>
+</body></html>`)
+    doc.close()
+    setTimeout(() => w.print(), 250)
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Header actions */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <Button size="sm" onClick={onLog} className="bg-emerald-600 hover:bg-emerald-700">
+          <Plus className="h-4 w-4 mr-1" /> Log temperature
+        </Button>
+        <Button size="sm" variant="outline" onClick={onScan} className="border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100">
+          📸 Scan sheet <span className="ml-1 text-[9px] font-bold bg-emerald-600 text-white rounded px-1">AI</span>
+        </Button>
+        <div className="ml-auto flex items-center gap-1 rounded-lg border bg-white p-0.5">
+          <button
+            onClick={() => setMode('logbook')}
+            className={`px-3 py-1 text-xs font-medium rounded ${mode === 'logbook' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+          >📖 Logbook</button>
+          <button
+            onClick={() => setMode('list')}
+            className={`px-3 py-1 text-xs font-medium rounded ${mode === 'list' ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+          >📃 List</button>
+        </div>
+        {mode === 'logbook' && (
+          <Button size="sm" variant="outline" onClick={printLogbook}>
+            <Printer className="h-4 w-4 mr-1" /> Print
+          </Button>
+        )}
+      </div>
+
+      {temps.length === 0 ? (
+        <Card><CardContent className="p-6 text-center text-muted-foreground">
+          <Thermometer className="h-8 w-8 mx-auto mb-2 opacity-40" />
+          No temperature readings yet. Log your first one or scan a sheet to start building your record.
+        </CardContent></Card>
+      ) : mode === 'logbook' ? (
+        <>
+          {/* Week navigator */}
+          <div className="flex items-center justify-between gap-2 bg-white border rounded-lg px-3 py-2">
+            <Button size="sm" variant="ghost" onClick={() => shiftWeek(-1)}>← Prev</Button>
+            <div className="text-center">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Week</div>
+              <div className="text-sm font-bold text-slate-800">{weekLabel}</div>
+            </div>
+            <div className="flex gap-1">
+              <Button size="sm" variant="ghost" onClick={goThisWeek}>Today</Button>
+              <Button size="sm" variant="ghost" onClick={() => shiftWeek(1)}>Next →</Button>
+            </div>
+          </div>
+
+          {/* Logbook grid */}
+          {activeLocations.length === 0 ? (
+            <Card><CardContent className="p-6 text-center text-sm text-muted-foreground">
+              No fridges/freezers configured yet.
+              <br/>
+              <span className="text-xs">Add them in Settings → Fridges & Freezers to see them here.</span>
+            </CardContent></Card>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border bg-white">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="bg-emerald-50 text-emerald-800 border-b border-emerald-200">
+                    <th rowSpan={2} className="sticky left-0 bg-emerald-50 text-left px-3 py-2 font-semibold w-44 min-w-[11rem] border-r border-emerald-200">Location</th>
+                    {days.map((d, i) => {
+                      const isToday = d.toDateString() === new Date().toDateString()
+                      return (
+                        <th key={i} colSpan={2} className={`px-1 py-1.5 font-semibold text-center border-l border-emerald-200 ${isToday ? 'bg-emerald-100' : ''}`}>
+                          <div className="text-[10px] uppercase tracking-wide">{d.toLocaleDateString('en-GB', { weekday: 'short' })}</div>
+                          <div className="text-[10px] font-normal text-emerald-600">{d.getDate()}/{d.getMonth() + 1}</div>
+                        </th>
+                      )
+                    })}
+                  </tr>
+                  <tr className="bg-emerald-50/60 text-[10px] text-emerald-700 border-b border-emerald-200">
+                    {days.map((d, i) => (
+                      <React.Fragment key={i}>
+                        <th className="px-1 py-1 font-normal border-l border-emerald-200">AM</th>
+                        <th className="px-1 py-1 font-normal">PM</th>
+                      </React.Fragment>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeLocations.map((loc, rowIdx) => {
+                    const key = loc.name.toLowerCase()
+                    const typeIcon = loc.type === 'freezer' ? '🥶' : loc.type === 'hot_hold' ? '🔥' : loc.type === 'chiller' ? '🧊' : '❄️'
+                    return (
+                      <tr key={loc.id || key} className={rowIdx % 2 ? 'bg-slate-50/40' : 'bg-white'}>
+                        <td className="sticky left-0 bg-inherit px-3 py-2 font-semibold text-slate-800 border-r border-slate-200 whitespace-nowrap">
+                          <span className="mr-1.5">{typeIcon}</span>{loc.name}
+                        </td>
+                        {days.map((d, dIdx) => {
+                          const dateKey = d.toISOString().slice(0, 10)
+                          const cell = readingsMap[key]?.[dateKey] || { am: [], pm: [] }
+                          return (
+                            <React.Fragment key={dIdx}>
+                              {['am', 'pm'].map(slot => {
+                                const list = cell[slot]
+                                if (list.length === 0) return (
+                                  <td key={slot} className="px-1 py-1.5 text-center text-slate-300 border-l border-slate-100">—</td>
+                                )
+                                const allPass = list.every(r => r.isPass !== false)
+                                return (
+                                  <td key={slot} className={`px-1 py-1.5 text-center border-l border-slate-100 font-semibold ${allPass ? 'text-emerald-800 bg-emerald-50/70' : 'text-red-800 bg-red-50'}`} title={list.map(r => `${r.temperatureC}°C by ${r.recordedBy || 'unknown'}`).join('\n')}>
+                                    {list.map(r => r.temperatureC).join(', ')}
+                                  </td>
+                                )
+                              })}
+                            </React.Fragment>
+                          )
+                        })}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Legend */}
+          <div className="flex items-center gap-3 text-[11px] text-muted-foreground pl-1">
+            <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-emerald-50 border border-emerald-200"></span> Pass</span>
+            <span className="inline-flex items-center gap-1"><span className="inline-block w-3 h-3 rounded bg-red-50 border border-red-200"></span> Fail</span>
+            <span className="inline-flex items-center gap-1"><span className="text-slate-300">—</span> No reading</span>
+          </div>
+        </>
+      ) : (
+        /* ==== LIST MODE — compact chronological cards ==== */
+        <div className="space-y-1.5">
+          {temps.slice(0, 200).map(t => {
+            const dt = new Date(t.recordedAt)
+            const dateStr = dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+            const timeStr = dt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+            const pass = t.isPass !== false
+            return (
+              <div key={t.id} className={`flex items-center gap-2 bg-white border rounded-lg px-3 py-2 ${pass ? '' : 'border-red-200 bg-red-50/30'}`}>
+                <div className="w-16 shrink-0">
+                  <div className="text-[11px] font-semibold text-slate-800">{dateStr}</div>
+                  <div className="text-[10px] text-muted-foreground">{timeStr}</div>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold text-slate-800 truncate">{t.location}</div>
+                  {t.notes && <div className="text-[10px] text-muted-foreground truncate">{t.notes}</div>}
+                </div>
+                <div className={`text-lg font-bold ${pass ? 'text-emerald-700' : 'text-red-700'} shrink-0`}>{t.temperatureC}°</div>
+                <div className={`text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0 ${pass ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}`}>
+                  {pass ? 'PASS' : 'FAIL'}
+                </div>
+                <div className="text-[10px] text-muted-foreground shrink-0 w-16 truncate text-right" title={t.recordedBy}>{shortBy(t.recordedBy)}</div>
+                <Button variant="ghost" size="icon" onClick={() => onDelete(t.id)} className="h-7 w-7 shrink-0">
+                  <Trash2 className="h-3.5 w-3.5 text-red-500" />
+                </Button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function HaccpView({ currentUser, haccpLocations = [] }) {
   const [tab, setTab] = useState('temperatures')
   const [temps, setTemps] = useState([])
   const [tasks, setTasks] = useState([])
@@ -7021,61 +7298,14 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
 
       {/* ==== TEMPERATURES TAB ==== */}
       {tab === 'temperatures' && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Button size="sm" onClick={() => setTempModal({ location: 'Fridge 1', temperatureC: '' })}>
-              <Plus className="h-4 w-4 mr-1" /> Log temperature
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => setScanTempOpen(true)} className="border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100">
-              📸 Scan temp log <span className="ml-1 text-[9px] font-bold bg-emerald-600 text-white rounded px-1">AI</span>
-            </Button>
-            <p className="text-xs text-muted-foreground hidden sm:block">Log fridge/freezer temps twice daily. Safe: 0–5°C fridge, ≤ -18°C freezer.</p>
-          </div>
-
-          {temps.length === 0 ? (
-            <Card><CardContent className="p-6 text-center text-muted-foreground">
-              <Thermometer className="h-8 w-8 mx-auto mb-2 opacity-40" />
-              No temperature readings yet. Log your first one to start building your compliance record.
-            </CardContent></Card>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>When</TableHead>
-                    <TableHead>Location</TableHead>
-                    <TableHead>Temp (°C)</TableHead>
-                    <TableHead>Result</TableHead>
-                    <TableHead>By</TableHead>
-                    <TableHead>Notes</TableHead>
-                    <TableHead className="w-12"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {temps.slice(0, 100).map(t => (
-                    <TableRow key={t.id}>
-                      <TableCell className="text-xs">{formatDT(t.recordedAt)}</TableCell>
-                      <TableCell className="font-medium">{t.location}</TableCell>
-                      <TableCell>{t.temperatureC}</TableCell>
-                      <TableCell>
-                        {t.isPass
-                          ? <Badge className="bg-emerald-100 text-emerald-800 border-emerald-200">PASS</Badge>
-                          : <Badge className="bg-red-100 text-red-800 border-red-200">FAIL</Badge>}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{t.recordedBy || '—'}</TableCell>
-                      <TableCell className="text-xs">{t.notes || ''}</TableCell>
-                      <TableCell>
-                        <Button variant="ghost" size="icon" onClick={() => deleteRow('temperatures', t.id)}>
-                          <Trash2 className="h-4 w-4 text-red-600" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </div>
+        <TempLogbookView
+          temps={temps}
+          haccpLocations={haccpLocations}
+          onLog={() => setTempModal({ location: haccpLocations.find(l => l.active !== false)?.name || 'Fridge 1', temperatureC: '' })}
+          onScan={() => setScanTempOpen(true)}
+          onDelete={(id) => deleteRow('temperatures', id)}
+          formatDT={formatDT}
+        />
       )}
 
       {/* ==== CLEANING TAB ==== */}
