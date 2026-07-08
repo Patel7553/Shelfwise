@@ -7480,6 +7480,33 @@ function HaccpView({ currentUser, haccpLocations = [] }) {
       img.src = dataUrl
     })
   }
+  // Split a wide (landscape) image into two overlapping halves — LEFT and RIGHT.
+  // This lets us send each half to the AI in parallel so we fit inside Vercel's
+  // function timeout even for very dense weekly sheets. Overlap ensures no cells
+  // are missed at the split boundary.
+  const splitImageInHalves = async (dataUrl) => {
+    return new Promise((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => {
+        const w = img.width, h = img.height
+        const overlap = Math.round(w * 0.1)  // 10% overlap in the middle
+        const halfW = Math.round(w / 2)
+        const makeHalf = (startX, endX) => {
+          const canvas = document.createElement('canvas')
+          canvas.width = endX - startX
+          canvas.height = h
+          const ctx = canvas.getContext('2d')
+          ctx.drawImage(img, startX, 0, endX - startX, h, 0, 0, endX - startX, h)
+          return canvas.toDataURL('image/jpeg', 0.85)
+        }
+        const left = makeHalf(0, halfW + overlap)
+        const right = makeHalf(halfW - overlap, w)
+        resolve({ left, right })
+      }
+      img.onerror = reject
+      img.src = dataUrl
+    })
+  }
   const applyImgRotation = async (dataUrl, deg) => {
     if (!deg) return dataUrl
     return new Promise((resolve, reject) => {
@@ -7504,48 +7531,56 @@ function HaccpView({ currentUser, haccpLocations = [] }) {
     try {
       // Step 1: rotate (if user tapped 90°/270° buttons)
       const rotated = await applyImgRotation(scanTempImage, scanTempRotation)
-      // Step 2: compress — iPhone raw photos are 3-8MB which exceeds Vercel's
-      // 4.5MB body limit AND slows down GPT-4o vision. Compress to <1MB.
-      const send = await compressImage(rotated, 1800, 0.72)
-      // Step 3: send to backend (with 90s client-side timeout — Vercel maxDuration is 60-300s)
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 90000)
-      let res
-      try {
-        res = await fetch('/api/haccp/scan-temperatures', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image: send }),
-          signal: controller.signal,
-        })
-      } catch (err) {
-        if (err.name === 'AbortError') throw new Error('AI is taking too long. Try photographing HALF the sheet at a time (e.g. Mon-Wed then Thu-Sun) — split scans are faster and more accurate.')
-        throw new Error('Network error — check your connection and try again')
-      } finally { clearTimeout(timeoutId) }
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}))
-        throw new Error(errData.error || `AI failed (${res.status}). Try a clearer/less-rotated photo`)
+      // Step 2: compress (2400px @ 0.85 quality)
+      const compressed = await compressImage(rotated, 2400, 0.85)
+      // Step 3: AUTO-SPLIT into 2 halves + send in PARALLEL. Each half is
+      // half the pixels + half the readings → each Vercel call finishes in
+      // 8-15 seconds instead of 60+ for the full sheet. Client merges results.
+      const { left, right } = await splitImageInHalves(compressed)
+      const callOne = async (imgPart, half) => {
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), 45000)
+        try {
+          const res = await fetch('/api/haccp/scan-temperatures', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: imgPart }),
+            signal: controller.signal,
+          })
+          if (!res.ok) return { readings: [], _half: half, _failed: true }
+          const data = await res.json()
+          return { ...data, _half: half }
+        } catch { return { readings: [], _half: half, _failed: true } }
+        finally { clearTimeout(timeoutId) }
       }
-      const data = await res.json()
-      const list = Array.isArray(data.readings) ? data.readings : []
-      if (list.length === 0) throw new Error('No readings detected — try a clearer photo')
-      const fallbackDate = data.weekCommencing || data.sheetDate || new Date().toISOString().slice(0, 10)
+      // Run both halves in parallel
+      const [leftResult, rightResult] = await Promise.all([
+        callOne(left, 'left'),
+        callOne(right, 'right'),
+      ])
+      // Merge readings, dedup on (location + dateISO + timeOfDay)
+      const combined = [...(leftResult.readings || []), ...(rightResult.readings || [])]
+      const seen = new Set()
+      const list = []
+      for (const r of combined) {
+        const key = `${(r.location || '').toLowerCase()}|${r.dateISO}|${r.timeOfDay}`
+        if (seen.has(key)) continue
+        seen.add(key); list.push(r)
+      }
+      if (list.length === 0) {
+        const bothFailed = leftResult._failed && rightResult._failed
+        throw new Error(bothFailed
+          ? 'AI could not read the sheet — please retake with better lighting and hold the phone directly above the sheet.'
+          : 'No readings detected — try a clearer photo')
+      }
+      const fallbackDate = leftResult.weekCommencing || rightResult.weekCommencing || leftResult.sheetDate || rightResult.sheetDate || new Date().toISOString().slice(0, 10)
       setScanTempReadings(list.map(r => {
-        // Prefer per-reading dateISO from AI (weekly grid support), fall back to sheet date
         const d = /^\d{4}-\d{2}-\d{2}$/.test(String(r.dateISO || '')) ? r.dateISO : fallbackDate
         const t = r.timeOfDay === 'morning' ? '08:00' : r.timeOfDay === 'evening' ? '17:00' : '12:00'
-        return {
-          ...r,
-          recordedAt: `${d}T${t}:00Z`,
-          _keep: true,
-        }
+        return { ...r, recordedAt: `${d}T${t}:00Z`, _keep: true }
       }))
-      if (data.truncated) {
-        // AI ran out of tokens — response was cut off, so some readings are missing
-        toast.error(`⚠️ Only ${list.length} readings extracted — the sheet may have more that got cut off. Try photographing half the sheet at a time.`, { duration: 10000 })
-      } else {
-        toast.success(`\u2728 ${list.length} readings detected \u2014 review & save`)
-      }
-    } catch (e) { toast.error(e.message || 'Load failed — try a smaller/clearer photo') }
+      const halfNote = (leftResult._failed || rightResult._failed) ? ' (one half failed — retake for the missing side)' : ''
+      toast.success(`\u2728 ${list.length} readings detected${halfNote} — review & save`)
+    } catch (e) { toast.error(e.message || 'Scan failed — try a clearer photo') }
     finally { setScanTempBusy(false) }
   }
   const saveScannedTemps = async () => {

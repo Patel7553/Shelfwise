@@ -791,12 +791,12 @@ Return ONLY valid JSON, no prose, no markdown fences:
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: [
-        { type: 'text', text: 'Read this HACCP temperature log sheet CAREFULLY. Identify the layout first (weekly grid vs single-day), find the week-commencing date, then extract EVERY non-empty temperature reading with its correct date, day, and time-of-day. CRITICAL for weekly sheets: ALWAYS start with Monday as the first day column — ignore any content, empty columns, banners, or trailing days that appear BEFORE Monday. Do NOT stop early — a weekly sheet may have 100+ readings across 7 days × AM/PM columns. Return the FULL JSON with every reading. Return JSON only.' },
-        { type: 'image_url', image_url: { url: base64DataUrl, detail: 'high' } }
+        { type: 'text', text: 'Read this HACCP temperature log sheet CAREFULLY. Identify the layout first (weekly grid vs single-day), find the week-commencing date, then extract EVERY non-empty temperature reading with its correct date, day, and time-of-day. CRITICAL for weekly sheets: ALWAYS start with Monday as the first day column — ignore any content, empty columns, banners, or trailing days that appear BEFORE Monday. Do NOT stop early — extract every reading you can see. Return the FULL JSON with every reading. Return JSON only.' },
+        { type: 'image_url', image_url: { url: base64DataUrl, detail: 'auto' } }
       ]}
     ],
     temperature: 0.05,
-    max_tokens: 16000,  // was 4000 — bumped so full-week sheets (~150+ readings) don't get truncated mid-JSON
+    max_tokens: 8000,  // half sheets need ~50-80 readings each = ~10-15k tokens is plenty
     response_format: { type: 'json_object' },
   }
   const res = await fetch(EMERGENT_URL, {
