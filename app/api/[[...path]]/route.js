@@ -713,6 +713,18 @@ COMMON LAYOUTS — identify which one this sheet uses BEFORE extracting data:
     * SUB-COLUMNS under each day = "am" and "pm"
     * "Week Commencing: DD/MM/YY" date at the top — USE THIS as the base date.
     * MANY cells will be EMPTY (blank) if the week isn't complete — SKIP empty cells entirely.
+    * ⚠️ CRITICAL RULE: ALWAYS start reading with MONDAY as the FIRST day column.
+      IGNORE everything that appears BEFORE Monday, including:
+        - Decorative banners / kitchen names / logos / margin space on the left
+        - A "Previous week Sunday" trailing column if visible
+        - Any leading empty columns or headers
+      The FIRST day column you extract MUST be Monday. Everything to the LEFT
+      of Monday is header/decoration and MUST be skipped completely.
+    * The 7 day columns are ALWAYS in this exact order, left to right:
+        Monday → Tuesday → Wednesday → Thursday → Friday → Saturday → Sunday.
+    * If you see a day label that doesn't match (e.g. "Sun" as first column),
+      it means the previous week bled in — SKIP that column and begin with
+      the Monday column.
 
   Layout B — Daily / Single-day sheet:
     * Rows = locations, columns = am / pm only (or times like 08:00 / 17:00). One date.
@@ -769,7 +781,7 @@ Return ONLY valid JSON, no prose, no markdown fences:
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: [
-        { type: 'text', text: 'Read this HACCP temperature log sheet CAREFULLY. Identify the layout first (weekly grid vs single-day), find the week-commencing date, then extract EVERY non-empty temperature reading with its correct date, day, and time-of-day. Do NOT stop early — a weekly sheet may have 100+ readings across 7 days × AM/PM columns. Return the FULL JSON with every reading. Return JSON only.' },
+        { type: 'text', text: 'Read this HACCP temperature log sheet CAREFULLY. Identify the layout first (weekly grid vs single-day), find the week-commencing date, then extract EVERY non-empty temperature reading with its correct date, day, and time-of-day. CRITICAL for weekly sheets: ALWAYS start with Monday as the first day column — ignore any content, empty columns, banners, or trailing days that appear BEFORE Monday. Do NOT stop early — a weekly sheet may have 100+ readings across 7 days × AM/PM columns. Return the FULL JSON with every reading. Return JSON only.' },
         { type: 'image_url', image_url: { url: base64DataUrl, detail: 'high' } }
       ]}
     ],
