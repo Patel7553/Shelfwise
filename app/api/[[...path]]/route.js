@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
+import webpush from 'web-push'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { getAuthContext, generateChefCode, signChefToken, newCodeSeed } from '@/lib/auth'
 
@@ -17,6 +18,47 @@ function json(data, status = 200) {
 
 function escapeLike(s) {
   return String(s).replace(/[%_]/g, c => '\\' + c)
+}
+
+// ============================================================================
+// Web Push helpers (VAPID)
+// ============================================================================
+let _vapidReady = false
+function getWebPush() {
+  const pub = process.env.VAPID_PUBLIC_KEY
+  const priv = process.env.VAPID_PRIVATE_KEY
+  if (!pub || !priv) throw new Error('VAPID keys not configured — set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY env vars.')
+  if (!_vapidReady) {
+    webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@shelfwise.app', pub, priv)
+    _vapidReady = true
+  }
+  return webpush
+}
+
+// Send a push payload to every subscription of a kitchen.
+// Silently prunes dead subscriptions (endpoint gone = 404/410).
+async function sendPushToKitchen(sb, kitchenId, payload) {
+  const { data: subs, error } = await sb.from('push_subscriptions').select('*').eq('kitchen_id', kitchenId)
+  if (error) {
+    if (/does not exist/i.test(error.message || '')) return { sent: 0, failed: 0, missingTable: true }
+    throw error
+  }
+  if (!subs || subs.length === 0) return { sent: 0, failed: 0 }
+  const wp = getWebPush()
+  const body = JSON.stringify(payload)
+  let sent = 0, failed = 0
+  await Promise.allSettled(subs.map(async (s) => {
+    try {
+      await wp.sendNotification(s.subscription, body)
+      sent++
+    } catch (e) {
+      failed++
+      if (e && (e.statusCode === 404 || e.statusCode === 410)) {
+        await sb.from('push_subscriptions').delete().eq('id', s.id)
+      }
+    }
+  }))
+  return { sent, failed }
 }
 
 // ----- Row transforms (products) --------------------------------------------
@@ -435,6 +477,67 @@ function buildDigestHtml(digest) {
 
 function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+}
+
+// ============================================================================
+// Suppliers + purchase-order email helpers
+// ============================================================================
+function supplierFromDb(row) {
+  return {
+    id: row.id,
+    name: row.name || '',
+    email: row.email || '',
+    phone: row.phone || '',
+    notes: row.notes || '',
+    createdAt: row.created_at || null,
+  }
+}
+
+function buildOrderEmailHtml({ kitchenName, supplierName, items, message, ownerEmail }) {
+  const today = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
+  const rows = items.map((i, idx) => `
+    <tr style="background:${idx % 2 ? '#f8fafc' : '#ffffff'}">
+      <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:14px;color:#0f172a">${escapeHtml(i.name)}</td>
+      <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:14px;color:#0f172a;text-align:right;font-weight:600">${escapeHtml(String(i.quantity))}</td>
+      <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:14px;color:#64748b">${escapeHtml(i.unit || '')}</td>
+      <td style="padding:10px 14px;border-bottom:1px solid #e2e8f0;font-size:13px;color:#64748b">${escapeHtml(i.note || '')}</td>
+    </tr>`).join('')
+  return `<!doctype html>
+<html><body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+<div style="max-width:640px;margin:0 auto;padding:24px 12px">
+  <div style="background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e2e8f0">
+    <div style="background:#059669;padding:20px 24px">
+      <h1 style="margin:0;font-size:20px;color:#ffffff">Purchase Order — ${escapeHtml(kitchenName)}</h1>
+      <p style="margin:4px 0 0;font-size:13px;color:#d1fae5">${today}</p>
+    </div>
+    <div style="padding:24px">
+      <p style="margin:0 0 16px;font-size:14px;color:#334155">
+        Hello${supplierName ? ' ' + escapeHtml(supplierName) : ''},<br/><br/>
+        Please supply the following items to <b>${escapeHtml(kitchenName)}</b>:
+      </p>
+      <table role="presentation" style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:8px">
+        <thead>
+          <tr style="background:#f1f5f9">
+            <th style="padding:10px 14px;text-align:left;font-size:12px;color:#475569;text-transform:uppercase;letter-spacing:0.05em">Item</th>
+            <th style="padding:10px 14px;text-align:right;font-size:12px;color:#475569;text-transform:uppercase;letter-spacing:0.05em">Qty</th>
+            <th style="padding:10px 14px;text-align:left;font-size:12px;color:#475569;text-transform:uppercase;letter-spacing:0.05em">Unit</th>
+            <th style="padding:10px 14px;text-align:left;font-size:12px;color:#475569;text-transform:uppercase;letter-spacing:0.05em">Note</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      ${message ? `<p style="margin:16px 0 0;font-size:14px;color:#334155;white-space:pre-wrap;border-left:3px solid #059669;padding-left:12px">${escapeHtml(message)}</p>` : ''}
+      <p style="margin:20px 0 0;font-size:14px;color:#334155">
+        Please reply to this email to confirm availability and delivery date.
+      </p>
+      ${ownerEmail ? `<p style="margin:8px 0 0;font-size:13px;color:#64748b">Contact: ${escapeHtml(ownerEmail)}</p>` : ''}
+    </div>
+    <div style="padding:14px 24px;background:#f8fafc;border-top:1px solid #e2e8f0">
+      <p style="margin:0;font-size:11px;color:#94a3b8">Sent automatically via ShelfWise kitchen management</p>
+    </div>
+  </div>
+</div>
+</body></html>`
 }
 
 // ============================================================================
@@ -1212,6 +1315,81 @@ export async function GET(request, { params }) {
       return json({ found: true, ...result })
     }
 
+    // ---- Web Push: public VAPID key (needed by the browser to subscribe) ----
+    if (path === 'push/public-key') {
+      const { error } = await requireAuth(request)
+      if (error) return error
+      const key = process.env.VAPID_PUBLIC_KEY || ''
+      if (!key) return json({ error: 'Push not configured on the server (VAPID_PUBLIC_KEY missing)' }, 500)
+      return json({ key })
+    }
+
+    // ---- CRON: daily push alerts (expiry + HACCP reminders) ----
+    // Vercel calls this daily. Sends a push to every subscribed device per kitchen:
+    //  • items expiring today/tomorrow (or already expired)
+    //  • HACCP reminder if no fridge temperature has been logged yet today
+    if (path === 'cron/push-alerts') {
+      const authz = request.headers.get('authorization') || ''
+      const cronSecret = process.env.CRON_SECRET
+      if (cronSecret && authz !== `Bearer ${cronSecret}`) {
+        return json({ error: 'unauthorized' }, 401)
+      }
+      // Which kitchens have at least one push subscription?
+      const { data: subRows, error: subErr } = await sb.from('push_subscriptions').select('kitchen_id')
+      if (subErr) {
+        if (/does not exist/i.test(subErr.message || '')) return json({ ok: true, note: 'push_subscriptions table missing — run migration-14', results: [] })
+        throw subErr
+      }
+      const kitchenIds = [...new Set((subRows || []).map(r => r.kitchen_id))]
+      const today = new Date().toISOString().slice(0, 10)
+      const tomorrowD = new Date(); tomorrowD.setDate(tomorrowD.getDate() + 1)
+      const tomorrow = tomorrowD.toISOString().slice(0, 10)
+      const results = []
+      for (const kid of kitchenIds) {
+        try {
+          // 1) Expiring / expired items
+          const { data: prods } = await sb.from('products')
+            .select('name,expiry_date,quantity,unit')
+            .eq('kitchen_id', kid)
+            .not('expiry_date', 'is', null)
+            .lte('expiry_date', tomorrow)
+            .limit(50)
+          const expired = (prods || []).filter(p => p.expiry_date < today)
+          const expiring = (prods || []).filter(p => p.expiry_date >= today && p.expiry_date <= tomorrow)
+          if (expired.length || expiring.length) {
+            const parts = []
+            if (expired.length) parts.push(`${expired.length} item${expired.length !== 1 ? 's' : ''} EXPIRED`)
+            if (expiring.length) parts.push(`${expiring.length} expiring by tomorrow`)
+            const names = [...expired, ...expiring].slice(0, 4).map(p => p.name).join(', ')
+            await sendPushToKitchen(sb, kid, {
+              title: `⚠️ Stock alert — ${parts.join(', ')}`,
+              body: names + ((expired.length + expiring.length) > 4 ? '…' : ''),
+              tag: 'shelfwise-expiry',
+              url: '/?view=inventory',
+            })
+          }
+          // 2) HACCP reminder — no temperature logged today?
+          const { data: temps } = await sb.from('haccp_temperature_logs')
+            .select('id')
+            .eq('kitchen_id', kid)
+            .gte('recorded_at', `${today}T00:00:00`)
+            .limit(1)
+          if (!temps || temps.length === 0) {
+            await sendPushToKitchen(sb, kid, {
+              title: '🌡️ HACCP reminder',
+              body: "No fridge temperatures logged yet today. Don't forget your checks!",
+              tag: 'shelfwise-haccp',
+              url: '/?view=haccp',
+            })
+          }
+          results.push({ kitchen: kid, ok: true })
+        } catch (e) {
+          results.push({ kitchen: kid, ok: false, error: e.message })
+        }
+      }
+      return json({ ok: true, kitchens: kitchenIds.length, results })
+    }
+
     // ---- CRON: weekly digest — Vercel calls this every Monday 8am UTC ----
     // Auth: shared secret in Authorization header (Vercel Cron sets it automatically
     // to `Bearer $CRON_SECRET` when the env var is defined).
@@ -1299,11 +1477,47 @@ export async function GET(request, { params }) {
     }
 
     // ----- OWNER / CHEF endpoints (kitchen-scoped) -----
-    const ownerOrChef = ['products','settings','facets','stats','recipes','rota','waste','haccp'].some(p => path === p || path.startsWith(p + '/'))
+    const ownerOrChef = ['products','settings','facets','stats','recipes','rota','waste','haccp','suppliers'].some(p => path === p || path.startsWith(p + '/'))
     if (ownerOrChef) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
       const kid = ctx.kitchenId
+
+      // ------- Suppliers directory -------
+      if (path === 'suppliers') {
+        const { data, error } = await sb.from('suppliers').select('*').eq('kitchen_id', kid).order('name', { ascending: true })
+        if (error) {
+          if (/does not exist/i.test(error.message || '')) return json([]) // migration not run yet — degrade gracefully
+          throw error
+        }
+        return json((data || []).map(supplierFromDb))
+      }
+
+      // ------- Low-stock items grouped by supplier (for one-tap ordering) -------
+      if (path === 'suppliers/low-stock') {
+        const { data, error } = await sb.from('products')
+          .select('id,name,quantity,unit,reorder_point,supplier')
+          .eq('kitchen_id', kid)
+          .not('reorder_point', 'is', null)
+          .limit(5000)
+        if (error) throw error
+        const low = (data || []).filter(p => Number(p.quantity) <= Number(p.reorder_point))
+        const groups = {}
+        for (const p of low) {
+          const key = String(p.supplier || '').trim() || 'No supplier set'
+          if (!groups[key]) groups[key] = []
+          groups[key].push({
+            id: p.id,
+            name: p.name,
+            quantity: Number(p.quantity) || 0,
+            unit: p.unit || '',
+            reorderPoint: Number(p.reorder_point) || 0,
+            // Sensible default order quantity: enough to get back above the reorder point
+            suggestedQty: Math.max(1, (Number(p.reorder_point) || 1) * 2 - (Number(p.quantity) || 0)),
+          })
+        }
+        return json({ groups, total: low.length })
+      }
 
       if (path === 'products') {
         const url = new URL(request.url)
@@ -1928,11 +2142,128 @@ Output strictly valid JSON with no other text.`
     }
 
     // -------- Kitchen-scoped mutations --------
-    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries'].some(p => path === p)
+    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test'].some(p => path === p)
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
       const kid = ctx.kitchenId
+
+      // ------- Web Push: save this device's subscription -------
+      if (path === 'push/subscribe') {
+        const body = await request.json()
+        const sub = body.subscription
+        if (!sub || !sub.endpoint || !sub.keys) return json({ error: 'Invalid push subscription' }, 400)
+        const row = {
+          kitchen_id: kid,
+          endpoint: String(sub.endpoint).slice(0, 1000),
+          subscription: sub,
+          user_label: String(body.userLabel || ctx.userEmail || ctx.role || '').slice(0, 120),
+        }
+        // Upsert by unique endpoint
+        const { error: upErr } = await sb.from('push_subscriptions').upsert({ id: uuidv4(), ...row }, { onConflict: 'endpoint' })
+        if (upErr) {
+          if (/does not exist/i.test(upErr.message || '')) {
+            return json({ error: 'push_subscriptions table missing — run supabase/migration-14-push-subscriptions.sql first.' }, 500)
+          }
+          throw upErr
+        }
+        return json({ ok: true })
+      }
+
+      // ------- Web Push: remove this device's subscription -------
+      if (path === 'push/unsubscribe') {
+        const body = await request.json()
+        const endpoint = String(body.endpoint || '')
+        if (!endpoint) return json({ error: 'endpoint required' }, 400)
+        await sb.from('push_subscriptions').delete().eq('endpoint', endpoint).eq('kitchen_id', kid)
+        return json({ ok: true })
+      }
+
+      // ------- Web Push: send a test notification to all of this kitchen's devices -------
+      if (path === 'push/test') {
+        const result = await sendPushToKitchen(sb, kid, {
+          title: '🔔 ShelfWise test notification',
+          body: 'Push notifications are working! You will get expiry alerts and HACCP reminders here.',
+          tag: 'shelfwise-test',
+          url: '/',
+        })
+        if (result.missingTable) return json({ error: 'push_subscriptions table missing — run migration-14 first.' }, 500)
+        if (result.sent === 0) return json({ error: 'No subscribed devices found — enable notifications on this device first.' }, 400)
+        return json({ ok: true, ...result })
+      }
+
+      // ------- Create a supplier -------
+      if (path === 'suppliers') {
+        const body = await request.json()
+        const name = String(body.name || '').trim().slice(0, 120)
+        if (!name) return json({ error: 'Supplier name required' }, 400)
+        const row = {
+          id: uuidv4(),
+          kitchen_id: kid,
+          name,
+          email: String(body.email || '').trim().slice(0, 200),
+          phone: String(body.phone || '').trim().slice(0, 40),
+          notes: String(body.notes || '').trim().slice(0, 500),
+        }
+        const { data, error } = await sb.from('suppliers').insert(row).select().single()
+        if (error) {
+          if (/does not exist/i.test(error.message || '')) {
+            return json({ error: 'Suppliers table missing — run supabase/migration-13-suppliers.sql in the Supabase SQL editor first.' }, 500)
+          }
+          throw error
+        }
+        return json(supplierFromDb(data), 201)
+      }
+
+      // ------- Send a purchase-order email to a supplier via Resend -------
+      if (path === 'suppliers/order-email') {
+        const apiKey = process.env.RESEND_API_KEY
+        if (!apiKey) return json({ error: 'RESEND_API_KEY not configured — add it in your deployment env vars.' }, 500)
+        const body = await request.json()
+        const toEmail = String(body.toEmail || '').trim()
+        if (!toEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(toEmail)) return json({ error: 'A valid supplier email address is required' }, 400)
+        const items = (Array.isArray(body.items) ? body.items : [])
+          .filter(i => i && String(i.name || '').trim() && Number(i.quantity) > 0)
+          .slice(0, 100)
+          .map(i => ({
+            name: String(i.name).trim().slice(0, 120),
+            quantity: Number(i.quantity),
+            unit: String(i.unit || '').slice(0, 20),
+            note: String(i.note || '').slice(0, 200),
+          }))
+        if (items.length === 0) return json({ error: 'At least one item with a quantity is required' }, 400)
+
+        // Kitchen name + owner contact (works for both owner and chef sessions)
+        let kitchenName = ctx.kitchen?.kitchen_name || ''
+        let fallbackOwnerEmail = ''
+        if ((!kitchenName || !ctx.userEmail) && kid) {
+          const { data: krow } = await sb.from('kitchens').select('kitchen_name, owner_email').eq('id', kid).maybeSingle()
+          if (!kitchenName) kitchenName = krow?.kitchen_name || 'Our kitchen'
+          fallbackOwnerEmail = krow?.owner_email || ''
+        }
+        const ownerEmail = ctx.userEmail || ctx.kitchen?.owner_email || fallbackOwnerEmail || ''
+        const supplierName = String(body.supplierName || '').trim().slice(0, 120)
+        const message = String(body.message || '').trim().slice(0, 1000)
+
+        const html = buildOrderEmailHtml({ kitchenName, supplierName, items, message, ownerEmail })
+        const payload = {
+          from: process.env.MAIL_FROM || 'ShelfWise <onboarding@resend.dev>',
+          to: [toEmail],
+          subject: `Purchase Order — ${kitchenName} (${items.length} item${items.length !== 1 ? 's' : ''})`,
+          html,
+        }
+        if (ownerEmail) payload.reply_to = ownerEmail
+        const r = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        const rData = await r.json().catch(() => ({}))
+        if (!r.ok) {
+          return json({ error: rData?.message || `Email send failed (${r.status})` }, 502)
+        }
+        return json({ ok: true, id: rData?.id || null, sentTo: toEmail, itemCount: items.length })
+      }
 
       // ------- Rota shifts (create OR upsert) -------
       if (path === 'rota') {
@@ -2253,6 +2584,26 @@ export async function PUT(request, { params }) {
     const path = segs.join('/')
     const sb = supabaseAdmin
 
+    if (segs[0] === 'suppliers' && segs[1]) {
+      const { ctx, error } = await requireOwnerOrChef(request)
+      if (error) return error
+      const body = await request.json()
+      const patch = {}
+      if (body.name !== undefined) {
+        const name = String(body.name || '').trim().slice(0, 120)
+        if (!name) return json({ error: 'Supplier name cannot be empty' }, 400)
+        patch.name = name
+      }
+      if (body.email !== undefined) patch.email = String(body.email || '').trim().slice(0, 200)
+      if (body.phone !== undefined) patch.phone = String(body.phone || '').trim().slice(0, 40)
+      if (body.notes !== undefined) patch.notes = String(body.notes || '').trim().slice(0, 500)
+      if (Object.keys(patch).length === 0) return json({ error: 'Nothing to update' }, 400)
+      const { data, error: e2 } = await sb.from('suppliers')
+        .update(patch).eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).select().single()
+      if (e2) throw e2
+      return json(supplierFromDb(data))
+    }
+
     if (segs[0] === 'settings') {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
@@ -2383,6 +2734,11 @@ export async function DELETE(request, { params }) {
     }
     if (segs[0] === 'recipes' && segs[1]) {
       const { error } = await sb.from('recipes').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
+      if (error) throw error
+      return json({ ok: true })
+    }
+    if (segs[0] === 'suppliers' && segs[1]) {
+      const { error } = await sb.from('suppliers').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
       return json({ ok: true })
     }

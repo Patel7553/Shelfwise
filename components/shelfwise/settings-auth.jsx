@@ -1,0 +1,1540 @@
+'use client'
+
+/* eslint-disable no-unused-vars */
+// Extracted from the former monolithic app/page.js (refactor: June 2025).
+// Uniform import header — unused imports are tolerated intentionally.
+
+import React, { useEffect, useMemo, useCallback, useRef, useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from '@/components/ui/dialog'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { toast } from 'sonner'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe } from 'lucide-react'
+import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
+import InstallAppPrompt from '@/components/InstallAppPrompt'
+import LanguageSwitcher from '@/components/LanguageSwitcher'
+import { useT } from '@/lib/i18n'
+import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText } from '@/components/shelfwise/shared'
+
+// `fetch` inside this file transparently uses `apiFetch` (auth token attached).
+const fetch = apiFetch
+
+export function SetupWizardV2({ settings, onComplete }) {
+  const [step, setStep] = useState(1)
+  const [modules, setModules] = useState([])
+  const [widgets, setWidgets] = useState([])
+  const [busy, setBusy] = useState(false)
+  // Step 0: kitchen basics — pre-filled if already saved
+  const [kitchenName, setKitchenName] = useState(settings?.kitchenName || settings?.kitchen_name || '')
+  const [kitchenType, setKitchenType] = useState(settings?.kitchenType || settings?.kitchen_type || '')
+  const [timezone, setTimezone] = useState(settings?.timezone || 'Asia/Kolkata')
+
+  const KITCHEN_TYPES = ['Restaurant', 'Cafe', 'Hospital', 'Hotel', 'School', 'Catering', 'Bakery', 'Ghost Kitchen', 'Other']
+  const TIMEZONES = [
+    { value: 'Asia/Kolkata', label: 'India (IST)' },
+    { value: 'America/Toronto', label: 'Canada Eastern (Toronto)' },
+    { value: 'America/Vancouver', label: 'Canada Pacific (Vancouver)' },
+    { value: 'America/New_York', label: 'US Eastern (New York)' },
+    { value: 'America/Chicago', label: 'US Central (Chicago)' },
+    { value: 'America/Los_Angeles', label: 'US Pacific (Los Angeles)' },
+    { value: 'Europe/London', label: 'UK (London)' },
+    { value: 'Europe/Paris', label: 'Europe Central (Paris)' },
+    { value: 'Asia/Dubai', label: 'UAE (Dubai)' },
+    { value: 'Asia/Singapore', label: 'Singapore' },
+    { value: 'Australia/Sydney', label: 'Australia Eastern (Sydney)' },
+  ]
+
+  const MODULES = [
+    { id: 'stock',     title: 'Stock Monitoring',        desc: 'Track expiries, low stock and inventory alerts.', icon: Package, ready: true },
+    { id: 'recipes',   title: 'Recipes',                 desc: 'Scan recipes & check ingredient availability.', icon: BookOpen, ready: true },
+    { id: 'rota',      title: 'Rota (Staff Scheduling)', desc: 'Plan weekly shifts, roles and days off.',        icon: ChefHat,  ready: true },
+    { id: 'analytics', title: 'Waste Analytics',         desc: 'Track disposed items, reasons and cost of waste.', icon: BarChart3, ready: true },
+    { id: 'haccp',     title: 'HACCP Compliance',        desc: 'Fridge temps, cleaning logs, delivery checks. Pass health inspections.', icon: ShieldCheck, ready: true },
+  ]
+
+  const WIDGETS_BY_MODULE = {
+    stock: [
+      { id: 'all_items', title: 'All Items',       desc: 'Total items count.' },
+      { id: 'critical',  title: 'Critical Stock',  desc: 'Very low quantity items.' },
+      { id: 'expired',   title: 'Expired',         desc: 'Items past expiry date.' },
+      { id: 'expiring',  title: 'Expiring Soon',   desc: 'Expiring within 7 days.' },
+      { id: 'in_date',   title: 'In Date',         desc: 'Items with valid future dates.' },
+      { id: 'use_today', title: 'Use Today',       desc: 'Urgent — use today or tomorrow.' },
+    ],
+    recipes: [
+      { id: 'recipes',   title: 'Recipes',         desc: 'Shortcut card to your saved recipes.' },
+    ],
+    rota: [
+      { id: 'rota_today', title: 'Today\'s Rota',  desc: 'Who is on shift today.' },
+    ],
+    analytics: [
+      { id: 'waste_week', title: 'Waste (this week)', desc: 'Items disposed in the last 7 days.' },
+    ],
+  }
+
+  const toggle = (list, setter, id) => {
+    setter(list.includes(id) ? list.filter(x => x !== id) : [...list, id])
+  }
+
+  const visibleGroups = modules
+    .filter(m => WIDGETS_BY_MODULE[m])
+    .map(m => ({ module: m, widgets: WIDGETS_BY_MODULE[m], title: MODULES.find(x => x.id === m)?.title }))
+
+  const canSkipWidgetStep = visibleGroups.every(g => g.widgets.length === 0)
+
+  async function finish() {
+    if (busy) return
+    setBusy(true)
+    try {
+      // Only include kitchenName/type if they're non-empty — never overwrite existing values with blanks
+      const payload = { modulesEnabled: modules, dashboardWidgets: widgets }
+      const kn = (kitchenName || '').trim()
+      if (kn) payload.kitchenName = kn
+      if (kitchenType) payload.kitchenType = kitchenType
+      if (timezone) payload.timezone = timezone
+      await onComplete(payload)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const totalSteps = canSkipWidgetStep ? 2 : 3
+
+  return (
+    <div className="fixed inset-0 z-50 bg-gradient-to-br from-emerald-50 via-white to-teal-50 overflow-y-auto">
+      <div className="max-w-2xl mx-auto p-4 md:p-8 min-h-full">
+        <div className="flex flex-col items-center mb-6">
+          <img src="/logo-icon.png" alt="ShelfWise" className="h-16 w-16 rounded-2xl object-contain bg-white shadow-md" />
+          <h1 className="text-2xl font-bold text-emerald-900 mt-3">Welcome to ShelfWise!</h1>
+          <p className="text-sm text-emerald-700/70 mt-1">Let's set up your kitchen. Takes about a minute.</p>
+        </div>
+
+        {/* Progress bar */}
+        <div className="flex items-center gap-2 mb-6 max-w-md mx-auto">
+          {Array.from({ length: totalSteps }).map((_, i) => (
+            <div key={i} className={`flex-1 h-1.5 rounded-full ${step >= i + 1 ? 'bg-emerald-500' : 'bg-slate-200'}`} />
+          ))}
+        </div>
+
+        {/* Step 1 — kitchen basics */}
+        {step === 1 && (
+          <Card className="shadow-lg border-emerald-100">
+            <CardContent className="p-6 space-y-4">
+              <div>
+                <h2 className="font-bold text-lg text-emerald-900">Step 1 · Kitchen details</h2>
+                <p className="text-sm text-muted-foreground">Tell us about your kitchen.</p>
+              </div>
+              <div>
+                <Label>Kitchen name *</Label>
+                <Input value={kitchenName} onChange={e => setKitchenName(e.target.value)} placeholder="e.g. Bella Cucina" required autoFocus />
+              </div>
+              <div>
+                <Label>Kitchen type</Label>
+                <Select value={kitchenType} onValueChange={setKitchenType}>
+                  <SelectTrigger><SelectValue placeholder="Choose one..." /></SelectTrigger>
+                  <SelectContent>
+                    {KITCHEN_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Timezone *</Label>
+                <Select value={timezone} onValueChange={setTimezone}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {TIMEZONES.map(t => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-slate-500 mt-1">Your chef codes rotate at midnight in this timezone.</p>
+              </div>
+              <div className="flex justify-end pt-2">
+                <Button onClick={() => setStep(2)} disabled={!kitchenName.trim()} className="bg-emerald-600 hover:bg-emerald-700">
+                  Next <ArrowRight className="h-4 w-4 ml-2" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Step 2 — module picker */}
+        {step === 2 && (
+          <Card className="shadow-lg border-emerald-100">
+            <CardContent className="p-6 space-y-4">
+              <div>
+                <h2 className="font-bold text-lg text-emerald-900">Step 2 · What do you want to track?</h2>
+                <p className="text-sm text-muted-foreground">Pick the tools your kitchen needs. You can add more later in Settings.</p>
+              </div>
+              <div className="space-y-2">
+                {MODULES.map(m => {
+                  const active = modules.includes(m.id)
+                  const Icon = m.icon
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      disabled={!m.ready}
+                      onClick={() => m.ready && toggle(modules, setModules, m.id)}
+                      className={`w-full text-left p-4 rounded-lg border-2 transition ${
+                        !m.ready ? 'opacity-60 cursor-not-allowed bg-slate-50 border-slate-200' :
+                        active ? 'bg-emerald-50 border-emerald-500' : 'bg-white border-slate-200 hover:border-emerald-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`h-11 w-11 rounded-lg flex items-center justify-center ${active ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                          <Icon className="h-5 w-5" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-semibold flex items-center gap-2">
+                            {m.title}
+                            {!m.ready && <span className="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded">coming soon</span>}
+                          </div>
+                          <div className="text-xs text-muted-foreground">{m.desc}</div>
+                        </div>
+                        <div className={`h-6 w-6 rounded-md border-2 flex items-center justify-center ${active ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300 bg-white'}`}>
+                          {active && <Check className="h-4 w-4 text-white" />}
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="flex justify-between pt-2">
+                <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
+                <Button
+                  onClick={() => canSkipWidgetStep ? finish() : setStep(3)}
+                  disabled={modules.length === 0 || busy}
+                  className="bg-emerald-600 hover:bg-emerald-700"
+                >
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                  {canSkipWidgetStep ? 'Finish Setup' : 'Next'} <ArrowRight className="h-4 w-4 ml-2" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Step 3 — widgets grouped by module */}
+        {step === 3 && !canSkipWidgetStep && (
+          <Card className="shadow-lg border-emerald-100">
+            <CardContent className="p-6 space-y-4">
+              <div>
+                <h2 className="font-bold text-lg text-emerald-900">Step 3 · Pick your dashboard cards</h2>
+                <p className="text-sm text-muted-foreground">Choose which cards appear on your dashboard. You can change these later in Settings.</p>
+              </div>
+
+              {visibleGroups.map(group => (
+                <div key={group.module} className="space-y-2">
+                  <div className="text-xs font-semibold text-emerald-800 uppercase tracking-wider">{group.title}</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {group.widgets.map(w => {
+                      const active = widgets.includes(w.id)
+                      return (
+                        <button
+                          key={w.id}
+                          type="button"
+                          onClick={() => toggle(widgets, setWidgets, w.id)}
+                          className={`text-left p-3 rounded-lg border-2 transition ${active ? 'bg-emerald-50 border-emerald-500' : 'bg-white border-slate-200 hover:border-emerald-300'}`}
+                        >
+                          <div className="flex items-start gap-2">
+                            <div className={`mt-0.5 h-5 w-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 ${active ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300 bg-white'}`}>
+                              {active && <Check className="h-3.5 w-3.5 text-white" />}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold text-sm">{w.title}</div>
+                              <div className="text-[11px] text-muted-foreground">{w.desc}</div>
+                            </div>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+
+              <div className="flex justify-between pt-2">
+                <Button variant="outline" onClick={() => setStep(2)}>Back</Button>
+                <Button onClick={finish} disabled={busy} className="bg-emerald-600 hover:bg-emerald-700">
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />}
+                  Finish Setup
+                </Button>
+              </div>
+              {widgets.length === 0 && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2">
+                  Tip: You haven't picked any cards. You can add them later from Settings → Dashboard.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function SetupWizard({ open, onClose, settings, saveSettings }) {
+  const [step, setStep] = useState(0)
+  const [name, setName] = useState('')
+  const [type, setType] = useState('Restaurant')
+  const [fields, setFields] = useState([])
+  const [widgets, setWidgets] = useState([])
+
+  const WIDGET_SUGGESTIONS = [
+    { key: 'all_items', label: 'All Items', desc: 'Total count of products in your stock', icon: Boxes, color: 'text-slate-600', bg: 'bg-slate-50' },
+    { key: 'expiring', label: 'Expiring Soon', desc: 'Items expiring within 7 days', icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
+    { key: 'expired', label: 'Expired', desc: 'Items already past their expiry date', icon: PackageX, color: 'text-red-600', bg: 'bg-red-50' },
+    { key: 'critical', label: 'Critical Stock', desc: 'Products running low on quantity', icon: AlertTriangle, color: 'text-orange-600', bg: 'bg-orange-50' },
+    { key: 'expiry_alerts', label: 'Expiry Alert Banner', desc: 'Big alert when items are expiring', icon: AlertCircle, color: 'text-rose-600', bg: 'bg-rose-50' },
+    { key: 'search', label: 'Global Search', desc: 'Quick search box on dashboard', icon: Search, color: 'text-blue-600', bg: 'bg-blue-50' },
+  ]
+
+  useEffect(() => {
+    if (open) {
+      setStep(0)
+      setName(settings.kitchenName || '')
+      setType(settings.kitchenType || 'Restaurant')
+      setFields(settings.customFields?.length ? [...settings.customFields] : [])
+      const existing = Array.isArray(settings.dashboardWidgets) && settings.dashboardWidgets.length
+        ? settings.dashboardWidgets
+        : WIDGET_SUGGESTIONS.map(w => w.key)
+      setWidgets(existing)
+    }
+  }, [open])
+
+  const toggleWidget = (k) => setWidgets(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
+
+  const addField = () => setFields([...fields, { key: `field_${fields.length + 1}`, label: '', type: 'text' }])
+  const updateField = (i, patch) => setFields(fields.map((f, idx) => idx === i ? { ...f, ...patch } : f))
+  const removeField = (i) => setFields(fields.filter((_, idx) => idx !== i))
+
+  const finish = async () => {
+    const cleanFields = fields
+      .filter(f => f.label.trim())
+      .map(f => ({
+        key: (f.key || f.label).toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 40),
+        label: f.label.trim(),
+        type: f.type || 'text'
+      }))
+    await saveSettings({
+      kitchenName: name.trim() || 'My Kitchen',
+      kitchenType: type,
+      customFields: cleanFields,
+      dashboardWidgets: widgets,
+      onboarded: true
+    })
+    onClose()
+    toast.success('Welcome to ShelfWise! 🎉')
+  }
+
+  if (!open) return null
+  const kitchenTypes = ['Restaurant', 'Cafe', 'Hotel', 'School', 'Hospital', 'Catering', 'Bakery', 'Other']
+  const totalSteps = 4
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-[640px] max-h-[92vh] overflow-y-auto">
+        <DialogHeader>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            {Array.from({ length: totalSteps }).map((_, i) => (
+              <div key={i} className={`h-1.5 rounded-full flex-1 transition ${i <= step ? 'bg-emerald-500' : 'bg-slate-200'}`} />
+            ))}
+          </div>
+          <DialogTitle className="pt-3 text-2xl">
+            {step === 0 && 'Welcome to ShelfWise 👋'}
+            {step === 1 && 'Set up your kitchen'}
+            {step === 2 && 'What do you want on your dashboard?'}
+            {step === 3 && 'Add custom fields (optional)'}
+          </DialogTitle>
+        </DialogHeader>
+
+        {step === 0 && (
+          <div className="py-4 space-y-4">
+            <p className="text-muted-foreground">Track perishable stock, reduce waste, and never miss an expiry again. Let's get you set up in under a minute.</p>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="rounded-lg border p-3 text-center">
+                <ScanLine className="h-6 w-6 mx-auto text-emerald-600" />
+                <p className="text-xs font-medium mt-1">AI Logbook Scan</p>
+                <p className="text-[10px] text-muted-foreground">Photo → inventory</p>
+              </div>
+              <div className="rounded-lg border p-3 text-center">
+                <BookOpen className="h-6 w-6 mx-auto text-purple-600" />
+                <p className="text-xs font-medium mt-1">Recipe Scan</p>
+                <p className="text-[10px] text-muted-foreground">Allergens & stock</p>
+              </div>
+              <div className="rounded-lg border p-3 text-center">
+                <Clock className="h-6 w-6 mx-auto text-amber-600" />
+                <p className="text-xs font-medium mt-1">Expiry Alerts</p>
+                <p className="text-[10px] text-muted-foreground">Never waste again</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 1 && (
+          <div className="py-4 space-y-4">
+            <div>
+              <Label>Kitchen Name</Label>
+              <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Bella Cucina" />
+            </div>
+            <div>
+              <Label>Kitchen Type</Label>
+              <div className="grid grid-cols-4 gap-2 mt-2">
+                {kitchenTypes.map(t => (
+                  <button key={t} onClick={() => setType(t)}
+                    className={`text-sm py-2 px-2 rounded-lg border transition ${type === t ? 'bg-emerald-600 text-white border-emerald-600' : 'hover:bg-slate-50 border-slate-200'}`}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {step === 2 && (
+          <div className="py-4 space-y-3">
+            <p className="text-sm text-muted-foreground">Tap the cards you want to see on your dashboard. Pick at least one — you can change this later in Settings.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {WIDGET_SUGGESTIONS.map(w => {
+                const Icon = w.icon
+                const active = widgets.includes(w.key)
+                return (
+                  <button
+                    key={w.key}
+                    type="button"
+                    onClick={() => toggleWidget(w.key)}
+                    className={`text-left flex items-start gap-3 p-3 rounded-lg border-2 transition ${active ? 'border-emerald-500 bg-emerald-50/60 shadow-sm' : 'border-slate-200 hover:border-emerald-300 bg-white'}`}
+                  >
+                    <div className={`h-9 w-9 rounded-lg ${w.bg} flex items-center justify-center flex-shrink-0`}>
+                      <Icon className={`h-5 w-5 ${w.color}`} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold">{w.label}</p>
+                        {active && <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">{w.desc}</p>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+            <p className="text-[11px] text-muted-foreground pt-1">{widgets.length} selected</p>
+          </div>
+        )}
+
+        {step === 3 && (
+          <div className="py-4 space-y-3">
+            <p className="text-sm text-muted-foreground">Add any extra fields your kitchen tracks — supplier, cost, batch number, etc. Skip if you don't need them.</p>
+            <div className="space-y-2">
+              {fields.map((f, i) => (
+                <div key={i} className="flex gap-2 items-end">
+                  <div className="flex-1">
+                    <Label className="text-xs">Field Name</Label>
+                    <Input value={f.label} onChange={e => updateField(i, { label: e.target.value })} placeholder="Supplier" />
+                  </div>
+                  <div className="w-32">
+                    <Label className="text-xs">Type</Label>
+                    <Select value={f.type} onValueChange={v => updateField(i, { type: v })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="text">Text</SelectItem>
+                        <SelectItem value="number">Number</SelectItem>
+                        <SelectItem value="date">Date</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button variant="ghost" size="icon" onClick={() => removeField(i)}><X className="h-4 w-4" /></Button>
+                </div>
+              ))}
+            </div>
+            <Button variant="outline" size="sm" onClick={addField}><Plus className="h-4 w-4 mr-2" /> Add field</Button>
+          </div>
+        )}
+
+        <DialogFooter className="flex justify-between sm:justify-between">
+          <Button variant="ghost" onClick={() => step > 0 ? setStep(step - 1) : onClose()}>{step === 0 ? 'Skip' : 'Back'}</Button>
+          {step < totalSteps - 1 ? (
+            <Button
+              onClick={() => setStep(step + 1)}
+              disabled={step === 2 && widgets.length === 0}
+              className="bg-emerald-600 hover:bg-emerald-700"
+            >
+              Next <ArrowRight className="h-4 w-4 ml-2" />
+            </Button>
+          ) : (
+            <Button onClick={finish} className="bg-emerald-600 hover:bg-emerald-700">
+              <Check className="h-4 w-4 mr-2" /> Finish Setup
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+export function ChefCodeCard() {
+  const [code, setCode] = useState('...')
+  const [kitchenName, setKitchenName] = useState('')
+  const [timezone, setTimezone] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [rotating, setRotating] = useState(false)
+
+  const loadCode = async () => {
+    setLoading(true)
+    try {
+      const res = await fetch('/api/owner/chef-code')
+      if (!res.ok) {
+        // Chef users can't see this; hide the card content.
+        setCode('—')
+      } else {
+        const data = await res.json()
+        setCode(data.code || '—')
+        setKitchenName(data.kitchenName || '')
+        setTimezone(data.timezone || '')
+      }
+    } catch {}
+    finally { setLoading(false) }
+  }
+
+  useEffect(() => { loadCode() }, [])
+
+  async function copyCode() {
+    try {
+      await navigator.clipboard.writeText(code)
+      toast.success('Code copied to clipboard')
+    } catch {
+      toast.error('Could not copy — long-press to copy manually')
+    }
+  }
+
+  async function rotate() {
+    if (!confirm("This will regenerate today's code and invalidate the current one. Continue?")) return
+    setRotating(true)
+    try {
+      const res = await fetch('/api/owner/rotate-code', { method: 'POST' })
+      if (!res.ok) throw new Error()
+      await loadCode()
+      toast.success('New code generated')
+    } catch {
+      toast.error('Could not rotate code')
+    } finally { setRotating(false) }
+  }
+
+  return (
+    <div className="rounded-lg border-2 border-emerald-200 bg-emerald-50 p-4">
+      <Label className="text-emerald-900 text-sm font-bold">🔑 Today's Chef Code</Label>
+      <p className="text-xs text-emerald-700 mt-1 mb-3">
+        Share this with your kitchen team so they can log in as chefs. Rotates daily at midnight ({timezone || 'kitchen time'}).
+      </p>
+      <div className="flex gap-2 items-center">
+        <div className="flex-1 text-center font-mono text-2xl tracking-[0.2em] bg-white rounded-md py-3 border-2 border-emerald-300 text-emerald-900">
+          {loading ? <Loader2 className="h-5 w-5 animate-spin inline text-emerald-600" /> : code}
+        </div>
+        <Button variant="outline" size="sm" onClick={copyCode} disabled={loading || code === '—'} type="button">
+          <Copy className="h-4 w-4 mr-1" /> Copy
+        </Button>
+      </div>
+      <div className="mt-2 flex justify-between items-center">
+        <p className="text-[11px] text-emerald-700/70">Kitchen: <b>{kitchenName || '—'}</b></p>
+        <Button variant="ghost" size="sm" onClick={rotate} disabled={rotating || code === '—'} type="button" className="text-emerald-700 hover:text-emerald-900 h-7 px-2">
+          {rotating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+          Rotate
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+export function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
+  const [tab, setTab] = useState('profile') // 'profile' | 'login' | 'dashboard' | 'fields'
+  const [name, setName] = useState('')
+  const [type, setType] = useState('Restaurant')
+  const [fields, setFields] = useState([])
+  const [inviteCode, setInviteCode] = useState('')
+  const [alertEmail, setAlertEmail] = useState('')
+  const [testing, setTesting] = useState(false)
+  const [widgets, setWidgets] = useState([])
+  const [modules, setModules] = useState([])
+  const [locations, setLocations] = useState([])  // HACCP fridge/freezer locations
+  const [currency, setCurrency] = useState('GBP')
+  const [weeklyDigest, setWeeklyDigest] = useState(true)
+  const [digestSending, setDigestSending] = useState(false)
+  // Dirty tracking — CRITICAL: only send fields user actually touched to backend.
+  // Prevents stale local state (e.g. if dialog opened before settings loaded)
+  // from clobbering DB values on save. Each section tracks its own dirty flag.
+  const [touched, setTouched] = useState({ profile: false, login: false, dashboard: false, fields: false, haccp: false })
+  const markTouched = (section) => setTouched(prev => prev[section] ? prev : { ...prev, [section]: true })
+  const ALL_WIDGETS = [
+    { key: 'all_items', label: 'All Items count' },
+    { key: 'expiring',  label: 'Expiring Soon' },
+    { key: 'expired',   label: 'Expired items' },
+    { key: 'critical',  label: 'Critical Stock level' },
+    { key: 'in_date',   label: 'In Date items' },
+    { key: 'use_today', label: 'Use Today (urgent)' },
+    { key: 'recipes',   label: 'Recipes shortcut' },
+    { key: 'rota_today', label: 'Today\'s Rota' },
+    { key: 'waste_week', label: 'Waste (this week)' },
+    { key: 'expiry_alerts', label: 'Expiry alert banner' },
+    { key: 'urgent_list',   label: 'Urgent items list' },
+    { key: 'search',        label: 'Global search box' },
+  ]
+  const ALL_MODULES = [
+    { key: 'stock',     label: 'Stock Monitoring', desc: 'Inventory + expiry tracking' },
+    { key: 'recipes',   label: 'Recipes',          desc: 'AI recipe parsing & ingredient match' },
+    { key: 'rota',      label: 'Rota',             desc: 'Weekly staff scheduling' },
+    { key: 'analytics', label: 'Waste Analytics',  desc: 'Track disposals, reasons & cost' },
+    { key: 'haccp',     label: 'HACCP Compliance', desc: 'Fridge temps, cleaning, delivery checks' },
+  ]
+
+  useEffect(() => {
+    if (open) {
+      // Only re-sync a section if the user hasn't touched it yet.
+      // This lets the dialog absorb late-arriving settings (fetchSettings resolved
+      // after dialog opened) WITHOUT clobbering the user's in-progress edits.
+      if (!touched.profile) {
+        setName(settings.kitchenName || '')
+        setType(settings.kitchenType || 'Restaurant')
+        setCurrency(settings.currency || 'GBP')
+      }
+      if (!touched.login) {
+        setInviteCode(settings.inviteCode || '')
+        setAlertEmail(settings.alertEmail || '')
+        setWeeklyDigest(settings.weeklyDigestEnabled !== false)
+      }
+      if (!touched.dashboard) {
+        setWidgets(Array.isArray(settings.dashboardWidgets) ? settings.dashboardWidgets : ALL_WIDGETS.map(w => w.key))
+        setModules(Array.isArray(settings.modulesEnabled) ? settings.modulesEnabled : ['stock', 'recipes'])
+      }
+      if (!touched.fields) {
+        setFields(settings.customFields?.length ? [...settings.customFields] : [])
+      }
+      if (!touched.haccp) {
+        setLocations(Array.isArray(settings.haccpLocations) ? [...settings.haccpLocations] : [])
+      }
+    } else {
+      // Reset dirty flags and tab when dialog closes so next open is clean.
+      setTouched({ profile: false, login: false, dashboard: false, fields: false, haccp: false })
+      setTab('profile')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, settings])
+
+  const toggleWidget = (k) => { markTouched('dashboard'); setWidgets(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]) }
+  const toggleModule = (k) => { markTouched('dashboard'); setModules(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]) }
+
+  const addField = () => {
+    markTouched('fields')
+    const newField = { key: `field_${fields.length + 1}_${Date.now().toString(36)}`, label: '', type: 'text' }
+    setFields(prev => [...prev, newField])
+    // Scroll to bottom of fields list after render
+    setTimeout(() => {
+      const el = document.getElementById('cf-list-end')
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }, 50)
+  }
+  const updateField = (i, patch) => { markTouched('fields'); setFields(prev => prev.map((f, idx) => idx === i ? { ...f, ...patch } : f)) }
+  const removeField = (i) => { markTouched('fields'); setFields(prev => prev.filter((_, idx) => idx !== i)) }
+  const rotateCode = () => { markTouched('login'); setInviteCode(Math.floor(100000 + Math.random() * 900000).toString()) }
+
+  const sendTestEmail = async () => {
+    if (!alertEmail.trim()) { toast.error('Set an alert email first'); return }
+    setTesting(true)
+    try {
+      // Only save NON-EMPTY name & email so we don't accidentally overwrite kitchen name.
+      const patch = { onboarded: true, alertEmail: alertEmail.trim() }
+      if (name.trim()) patch.kitchenName = name.trim()
+      if (type) patch.kitchenType = type
+      if (fields.length) patch.customFields = fields.filter(f => f.label.trim())
+      if (inviteCode) patch.inviteCode = inviteCode
+      await saveSettings(patch)
+      const res = await fetch('/api/email/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: alertEmail.trim() }) })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed')
+      toast.success(`Test email sent to ${alertEmail}! Check your inbox.`)
+    } catch (e) {
+      toast.error(e.message || 'Failed to send')
+    } finally { setTesting(false) }
+  }
+
+  const save = async () => {
+    // PATCH-STYLE PAYLOAD — only send fields user actually touched.
+    // Any untouched section is OMITTED from the request so the backend keeps
+    // whatever's already in the DB. This makes it impossible to overwrite
+    // kitchen name (or widgets, or fields) with stale/default values.
+    const payload = { onboarded: true }
+
+    if (touched.profile) {
+      const trimmedName = name.trim()
+      if (trimmedName) payload.kitchenName = trimmedName  // never send blank name
+      if (type) payload.kitchenType = type
+      if (currency) payload.currency = currency
+    }
+
+    if (touched.login) {
+      const trimmedEmail = alertEmail.trim()
+      if (trimmedEmail) payload.alertEmail = trimmedEmail
+      if (inviteCode) payload.inviteCode = inviteCode
+      payload.weeklyDigestEnabled = weeklyDigest
+    }
+
+    if (touched.dashboard) {
+      payload.dashboardWidgets = widgets
+      payload.modulesEnabled = modules
+    }
+
+    if (touched.fields) {
+      const cleanFields = fields.filter(f => f.label.trim()).map(f => ({
+        key: (f.key || f.label).toLowerCase().replace(/[^a-z0-9_]/g, '_').slice(0, 40),
+        label: f.label.trim(),
+        type: f.type || 'text'
+      }))
+      payload.customFields = cleanFields
+    }
+
+    if (touched.haccp) {
+      payload.haccpLocations = locations
+        .filter(l => l && String(l.name || '').trim())
+        .map(l => ({
+          id: l.id || `loc-${Math.random().toString(36).slice(2, 10)}`,
+          name: String(l.name).trim().slice(0, 60),
+          type: ['fridge', 'freezer', 'hot_hold', 'chiller'].includes(l.type) ? l.type : 'fridge',
+          minC: Number.isFinite(Number(l.minC)) ? Number(l.minC) : null,
+          maxC: Number.isFinite(Number(l.maxC)) ? Number(l.maxC) : null,
+          active: l.active !== false,
+        }))
+    }
+
+    // No touched section → nothing to save, just close.
+    const anyTouched = touched.profile || touched.login || touched.dashboard || touched.fields || touched.haccp
+    if (!anyTouched) { onClose(); return }
+
+    await saveSettings(payload)
+    onClose()
+  }
+
+  // Fire-off a live-preview of the weekly digest to the owner's email
+  const sendTestDigest = async () => {
+    setDigestSending(true)
+    try {
+      // Save current toggle first so backend knows the intent
+      await saveSettings({ weeklyDigestEnabled: weeklyDigest })
+      const res = await fetch('/api/digest/send-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed')
+      toast.success(`✅ Digest sent to ${data.to} — check your inbox`)
+    } catch (e) {
+      toast.error(e.message || 'Failed to send digest')
+    } finally { setDigestSending(false) }
+  }
+
+  const kitchenTypes = ['Restaurant', 'Cafe', 'Hotel', 'School', 'Hospital', 'Catering', 'Bakery', 'Other']
+
+  const tabs = [
+    { key: 'profile', label: 'Kitchen', longLabel: 'Kitchen Profile', icon: ChefHat },
+    { key: 'login', label: 'Login', longLabel: 'Login & Alerts', icon: Settings },
+    { key: 'dashboard', label: 'Dashboard', longLabel: 'Dashboard', icon: LayoutDashboard },
+    { key: 'haccp', label: 'Fridges', longLabel: 'Fridges & Freezers', icon: Thermometer },
+    { key: 'fields', label: 'Fields', longLabel: 'Custom Fields', icon: Package },
+  ]
+
+  // ---- HACCP location handlers ----
+  const [selectedLocIds, setSelectedLocIds] = useState(new Set())
+  const toggleLocSelected = (id) => {
+    setSelectedLocIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  const selectAllLocs = () => setSelectedLocIds(new Set(locations.map(l => l.id).filter(Boolean)))
+  const clearSelectedLocs = () => setSelectedLocIds(new Set())
+  const deleteSelectedLocs = () => {
+    if (selectedLocIds.size === 0) return
+    markTouched('haccp')
+    setLocations(prev => prev.filter(l => !selectedLocIds.has(l.id)))
+    setSelectedLocIds(new Set())
+  }
+  const addLocation = (defaults = {}) => {
+    markTouched('haccp')
+    const newLoc = {
+      id: `loc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      name: defaults.name || '',
+      type: defaults.type || 'fridge',
+      minC: defaults.minC ?? null,
+      maxC: defaults.maxC ?? null,
+      active: true,
+    }
+    setLocations(prev => [...prev, newLoc])
+    // Scroll list to newly added row
+    setTimeout(() => {
+      const el = document.getElementById('haccp-loc-end')
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }, 50)
+  }
+  const updateLocation = (i, patch) => { markTouched('haccp'); setLocations(prev => prev.map((l, idx) => idx === i ? { ...l, ...patch } : l)) }
+  const removeLocation = (i) => { markTouched('haccp'); setLocations(prev => prev.filter((_, idx) => idx !== i)) }
+  const LOCATION_TYPES = [
+    { key: 'fridge', label: '❄️ Fridge', defaultRange: '0 to 5°C' },
+    { key: 'chiller', label: '🧊 Chiller', defaultRange: '0 to 8°C' },
+    { key: 'freezer', label: '🥶 Freezer', defaultRange: '≤ -18°C' },
+    { key: 'hot_hold', label: '🔥 Hot Hold', defaultRange: '≥ 63°C' },
+  ]
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-[680px] max-h-[92vh] overflow-hidden flex flex-col p-0">
+        <DialogHeader className="px-4 sm:px-6 pt-5 pb-3 border-b">
+          <DialogTitle className="flex items-center gap-2"><Settings className="h-5 w-5" /> Kitchen Settings</DialogTitle>
+        </DialogHeader>
+
+        {/* Tabs — horizontally scrollable on mobile, equal-width on desktop */}
+        <div className="border-b bg-slate-50/60">
+          <div className="flex overflow-x-auto no-scrollbar px-2 sm:px-4 gap-0.5">
+            {tabs.map(t => {
+              const Icon = t.icon
+              const active = tab === t.key
+              return (
+                <button
+                  key={t.key}
+                  onClick={() => setTab(t.key)}
+                  className={`flex items-center gap-1.5 px-3 sm:px-4 py-3 text-xs sm:text-sm font-medium border-b-2 transition whitespace-nowrap flex-shrink-0 ${active ? 'border-emerald-600 text-emerald-700 bg-white/60' : 'border-transparent text-slate-600 hover:text-slate-900'}`}
+                >
+                  <Icon className="h-4 w-4 flex-shrink-0" />
+                  <span className="sm:hidden">{t.label}</span>
+                  <span className="hidden sm:inline">{t.longLabel}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5">
+          {tab === 'profile' && (
+            <div className="space-y-4">
+              <div>
+                <Label>Kitchen Name</Label>
+                <Input value={name} onChange={e => { markTouched('profile'); setName(e.target.value) }} placeholder="Bella Cucina" />
+              </div>
+              <div>
+                <Label>Kitchen Type</Label>
+                <Select value={type} onValueChange={v => { markTouched('profile'); setType(v) }}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>{kitchenTypes.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Currency</Label>
+                <Select value={currency || 'GBP'} onValueChange={v => { markTouched('profile'); setCurrency(v) }}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="GBP">🇬🇧 GBP (£)</SelectItem>
+                    <SelectItem value="USD">🇺🇸 USD ($)</SelectItem>
+                    <SelectItem value="EUR">🇪🇺 EUR (€)</SelectItem>
+                    <SelectItem value="INR">🇮🇳 INR (₹)</SelectItem>
+                    <SelectItem value="CAD">🇨🇦 CAD (C$)</SelectItem>
+                    <SelectItem value="AUD">🇦🇺 AUD (A$)</SelectItem>
+                    <SelectItem value="SGD">🇸🇬 SGD (S$)</SelectItem>
+                    <SelectItem value="AED">🇦🇪 AED</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1">Used for cost tracking, waste value, invoice imports.</p>
+              </div>
+
+              {/* App Language — persisted in browser (localStorage), reactive across the whole UI */}
+              <div>
+                <Label>🌍 App Language</Label>
+                <div className="mt-1">
+                  <LanguageSwitcher />
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">Menus, buttons and messages will use this language.</p>
+              </div>
+
+              <p className="text-xs text-muted-foreground">These appear in the header and your email alerts.</p>
+
+              {openWizard && (
+                <div className="pt-4 mt-2 border-t">
+                  <Label className="text-sm font-semibold">Setup Wizard</Label>
+                  <p className="text-xs text-muted-foreground mt-0.5 mb-2">Re-run the setup wizard to revisit kitchen type, dashboard widgets, and custom fields.</p>
+                  <Button variant="outline" size="sm" onClick={openWizard}>
+                    <Sparkles className="h-4 w-4 mr-2" /> Re-run setup wizard
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === 'login' && (
+            <div className="space-y-5">
+              <ChefCodeCard />
+
+              <div className="rounded-lg border-2 border-amber-200 bg-amber-50 p-4">
+                <Label className="text-amber-900 text-sm font-bold">📧 Alert Email</Label>
+                <p className="text-xs text-amber-700 mt-1 mb-3">Daily expiry alerts will be sent here.</p>
+                <div className="flex gap-2">
+                  <Input type="email" value={alertEmail} onChange={e => { markTouched('login'); setAlertEmail(e.target.value) }} placeholder="chef@kitchen.com" className="bg-white" />
+                  <Button variant="outline" size="sm" type="button" onClick={sendTestEmail} disabled={testing}>
+                    {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send Test'}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="rounded-lg border-2 border-emerald-200 bg-emerald-50 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <Label className="text-emerald-900 text-sm font-bold">📊 Weekly Digest Email</Label>
+                    <p className="text-xs text-emerald-700 mt-1">Every Monday 8am — waste, cost, expiring items and top-wasted items. Sent to the kitchen owner's email.</p>
+                  </div>
+                  <label className="inline-flex items-center gap-2 shrink-0 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={weeklyDigest}
+                      onChange={e => { markTouched('login'); setWeeklyDigest(e.target.checked) }}
+                      className="h-5 w-5 accent-emerald-600"
+                    />
+                    <span className="text-xs font-semibold text-emerald-900">{weeklyDigest ? 'ON' : 'OFF'}</span>
+                  </label>
+                </div>
+                <Button variant="outline" size="sm" type="button" onClick={sendTestDigest} disabled={digestSending} className="mt-3 bg-white">
+                  {digestSending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Sending…</> : '📤 Send me a test digest now'}
+                </Button>
+              </div>
+
+              <NotificationSettingsCard />
+            </div>
+          )}
+
+          {tab === 'dashboard' && (
+            <div className="space-y-5">
+              <div>
+                <Label className="text-base font-bold">Modules enabled</Label>
+                <p className="text-xs text-muted-foreground">Which features appear in your top navigation.</p>
+              </div>
+              <div className="space-y-2">
+                {ALL_MODULES.map(m => (
+                  <label key={m.key} className={`flex items-center gap-3 p-3 rounded-lg border-2 transition ${m.disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${modules.includes(m.key) ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-emerald-300'}`}>
+                    <input
+                      type="checkbox"
+                      disabled={m.disabled}
+                      checked={modules.includes(m.key)}
+                      onChange={() => !m.disabled && toggleModule(m.key)}
+                      className="h-4 w-4 accent-emerald-600"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium">{m.label}</div>
+                      <div className="text-xs text-muted-foreground">{m.desc}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              <div className="pt-3 border-t">
+                <Label className="text-base font-bold">Dashboard cards</Label>
+                <p className="text-xs text-muted-foreground">Tick the widgets you want to see on your dashboard.</p>
+              </div>
+              <div className="space-y-2">
+                {ALL_WIDGETS.map(w => (
+                  <label key={w.key} className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition ${widgets.includes(w.key) ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-emerald-300'}`}>
+                    <input type="checkbox" checked={widgets.includes(w.key)} onChange={() => toggleWidget(w.key)} className="h-4 w-4 accent-emerald-600" />
+                    <span className="text-sm font-medium">{w.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {tab === 'haccp' && (
+            <div className="space-y-3">
+              <div className="flex items-start justify-between gap-2 flex-wrap">
+                <div>
+                  <Label className="text-base font-bold">Fridges & Freezers</Label>
+                  <p className="text-xs text-muted-foreground">Add every fridge, freezer, chiller, and hot-hold unit in your kitchen. The AI scanner will match handwritten labels to these names.</p>
+                </div>
+                <Button size="sm" onClick={() => addLocation()} className="bg-emerald-600 hover:bg-emerald-700"><Plus className="h-4 w-4 mr-1" /> Add</Button>
+              </div>
+
+              {/* Quick-add presets — encourage adding common units in one tap */}
+              <div className="flex flex-wrap gap-1.5 text-xs">
+                <button type="button" onClick={() => addLocation({ name: 'Walk-in Fridge', type: 'fridge' })} className="px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100">+ Walk-in Fridge</button>
+                <button type="button" onClick={() => addLocation({ name: 'Walk-in Freezer', type: 'freezer' })} className="px-2 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100">+ Walk-in Freezer</button>
+                <button type="button" onClick={() => addLocation({ name: 'Upright Fridge', type: 'fridge' })} className="px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100">+ Upright Fridge</button>
+                <button type="button" onClick={() => addLocation({ name: 'Upright Freezer', type: 'freezer' })} className="px-2 py-1 rounded-full bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100">+ Upright Freezer</button>
+                <button type="button" onClick={() => addLocation({ name: 'Hot Hold', type: 'hot_hold' })} className="px-2 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100">+ Hot Hold</button>
+                <button type="button" onClick={() => addLocation({ name: 'Salad Chiller', type: 'chiller' })} className="px-2 py-1 rounded-full bg-cyan-50 text-cyan-700 border border-cyan-200 hover:bg-cyan-100">+ Salad Chiller</button>
+              </div>
+
+              {locations.length === 0 ? (
+                <div className="text-center py-10 text-muted-foreground border-2 border-dashed rounded-lg">
+                  <Thermometer className="h-10 w-10 mx-auto mb-2 opacity-30" />
+                  <p className="text-sm font-medium">No fridges or freezers yet</p>
+                  <p className="text-xs">Tap a preset above or "Add" to create your first unit.</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {/* Multi-select toolbar — appears when any row selected */}
+                  {selectedLocIds.size > 0 && (
+                    <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                      <span className="text-xs font-semibold text-red-800">{selectedLocIds.size} selected</span>
+                      <div className="flex-1" />
+                      <Button size="sm" variant="outline" onClick={clearSelectedLocs} className="h-7 text-xs">Cancel</Button>
+                      <Button size="sm" onClick={deleteSelectedLocs} className="h-7 text-xs bg-red-600 hover:bg-red-700 text-white">
+                        <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete selected
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Select-all bar */}
+                  {locations.length > 1 && (
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground pl-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedLocIds.size === locations.length && locations.length > 0}
+                        onChange={() => selectedLocIds.size === locations.length ? clearSelectedLocs() : selectAllLocs()}
+                        className="h-3.5 w-3.5 accent-emerald-600"
+                      />
+                      Select all
+                    </label>
+                  )}
+
+                  {locations.map((l, i) => {
+                    const meta = LOCATION_TYPES.find(t => t.key === l.type) || LOCATION_TYPES[0]
+                    const isSelected = selectedLocIds.has(l.id)
+                    return (
+                      <div key={l.id || i} className={`bg-white border rounded-lg p-3 space-y-2 ${l.active === false ? 'opacity-50' : ''} ${isSelected ? 'ring-2 ring-red-300 bg-red-50/30' : ''}`}>
+                        <div className="flex gap-2 items-center">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleLocSelected(l.id)}
+                            className="h-4 w-4 accent-emerald-600 shrink-0"
+                            title="Select for bulk delete"
+                          />
+                          <span className="text-xs text-muted-foreground font-semibold w-4 text-center shrink-0">{i + 1}</span>
+                          <Input value={l.name || ''} onChange={e => updateLocation(i, { name: e.target.value })} placeholder="e.g. Walk-in Fridge #2" className="flex-1 min-w-0" />
+                          <Select value={l.type || 'fridge'} onValueChange={v => updateLocation(i, { type: v })}>
+                            <SelectTrigger className="w-32 shrink-0"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {LOCATION_TYPES.map(t => <SelectItem key={t.key} value={t.key}>{t.label}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                          <Button variant="ghost" size="icon" onClick={() => removeLocation(i)} className="text-red-600 hover:bg-red-50 shrink-0"><X className="h-4 w-4" /></Button>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 pl-8 text-xs">
+                          <span className="text-muted-foreground">Safe range:</span>
+                          <span className="font-medium text-slate-700">Default {meta.defaultRange}</span>
+                          <span className="text-muted-foreground">or set custom:</span>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={l.minC ?? ''}
+                            onChange={e => updateLocation(i, { minC: e.target.value === '' ? null : Number(e.target.value) })}
+                            placeholder="Min °C"
+                            className="h-7 w-20 text-xs"
+                          />
+                          <span className="text-muted-foreground">to</span>
+                          <Input
+                            type="number"
+                            step="0.1"
+                            value={l.maxC ?? ''}
+                            onChange={e => updateLocation(i, { maxC: e.target.value === '' ? null : Number(e.target.value) })}
+                            placeholder="Max °C"
+                            className="h-7 w-20 text-xs"
+                          />
+                          <label className="ml-auto flex items-center gap-1 cursor-pointer">
+                            <input type="checkbox" checked={l.active !== false} onChange={e => updateLocation(i, { active: e.target.checked })} className="h-3.5 w-3.5 accent-emerald-600" />
+                            <span className="text-muted-foreground">Active</span>
+                          </label>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  <div id="haccp-loc-end" />
+                </div>
+              )}
+
+              {locations.length > 0 && (
+                <div className="text-[11px] text-muted-foreground bg-emerald-50/60 border border-emerald-100 rounded-lg p-2.5">
+                  💡 <span className="font-medium">Tip:</span> The AI scanner uses these names to match handwritten labels on your temperature log sheets — no matter how they're written (e.g. "walk-in", "WIF", "Walkin fridge" all map to your "Walk-in Fridge").
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === 'fields' && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label>Custom Fields</Label>
+                  <p className="text-xs text-muted-foreground">Track extras like supplier, cost, batch number, etc.</p>
+                </div>
+                <Button variant="default" size="sm" onClick={addField} className="bg-emerald-600 hover:bg-emerald-700"><Plus className="h-4 w-4 mr-1" /> Add Field</Button>
+              </div>
+
+              {fields.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground border-2 border-dashed rounded-lg">
+                  <Package className="h-10 w-10 mx-auto mb-2 opacity-30" />
+                  <p className="text-sm font-medium">No custom fields yet</p>
+                  <p className="text-xs">Click "Add Field" above to create one.</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {fields.map((f, i) => (
+                    <div key={f.key || i} className="flex gap-2 items-center bg-white border rounded-lg p-2">
+                      <span className="text-xs text-muted-foreground font-semibold w-6 text-center">{i + 1}</span>
+                      <Input value={f.label} onChange={e => updateField(i, { label: e.target.value })} placeholder="Field name (e.g. Supplier)" className="flex-1" />
+                      <Select value={f.type} onValueChange={v => updateField(i, { type: v })}>
+                        <SelectTrigger className="w-28 shrink-0"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="text">Text</SelectItem>
+                          <SelectItem value="number">Number</SelectItem>
+                          <SelectItem value="date">Date</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button variant="ghost" size="icon" onClick={() => removeField(i)} className="text-red-600 hover:bg-red-50 shrink-0"><X className="h-4 w-4" /></Button>
+                    </div>
+                  ))}
+                  <div id="cf-list-end" />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter className="px-6 py-4 border-t bg-slate-50/60">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={save} className="bg-emerald-600 hover:bg-emerald-700"><Check className="h-4 w-4 mr-2" /> Save All</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+export function LoginGate({ settings, onAuth, saveSettings }) {
+  const [mode, setMode] = useState('email')
+  const [code, setCode] = useState('')
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [kitchenName, setKitchenName] = useState('')
+  const [kitchenType, setKitchenType] = useState('Restaurant')
+  const [generatedCode, setGeneratedCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [step, setStep] = useState('login') // 'login' | 'type' | 'widgets' | 'code'
+  const KITCHEN_TYPES = ['Restaurant', 'Cafe', 'Hotel', 'School', 'Hospital', 'Catering', 'Bakery', 'Other']
+  const ALL_WIDGETS = [
+    { key: 'all_items', label: 'All Items', desc: 'Total products in stock', icon: Boxes, color: 'text-slate-600', bg: 'bg-slate-50' },
+    { key: 'expiring', label: 'Expiring Soon', desc: 'Items expiring within 7 days', icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
+    { key: 'expired', label: 'Expired', desc: 'Items already past expiry', icon: PackageX, color: 'text-red-600', bg: 'bg-red-50' },
+    { key: 'critical', label: 'Critical Stock', desc: 'Products running low', icon: AlertTriangle, color: 'text-orange-600', bg: 'bg-orange-50' },
+    { key: 'expiry_alerts', label: 'Expiry Alert Banner', desc: 'Big alert when items expire', icon: AlertCircle, color: 'text-rose-600', bg: 'bg-rose-50' },
+    { key: 'search', label: 'Global Search', desc: 'Quick search box on dashboard', icon: Search, color: 'text-blue-600', bg: 'bg-blue-50' },
+  ]
+  const [chosenWidgets, setChosenWidgets] = useState(ALL_WIDGETS.map(w => w.key))
+  const hasInvite = !!(settings && settings.inviteCode)
+
+  const toggleWidget = (k) => setChosenWidgets(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])
+
+  const tryCode = async (e) => {
+    e?.preventDefault()
+    if (!code.trim()) { toast.error('Enter the kitchen code'); return }
+    if (!hasInvite) { toast.error('No kitchen set up yet. Use the Owner tab first.'); return }
+    setBusy(true)
+    try {
+      const res = await fetch('/api/auth/verify-code', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code.trim() })
+      })
+      if (!res.ok) { const d = await res.json().catch(() => ({})); toast.error(d.error || 'Invalid code'); return }
+      if (name.trim()) localStorage.setItem('shelfwise_user', name.trim())
+      toast.success(`Welcome${name ? ', ' + name : ''}! 🎉`)
+      onAuth()
+    } finally { setBusy(false) }
+  }
+
+  const signInEmail = async (e) => {
+    e?.preventDefault()
+    if (!email.trim()) { toast.error('Email required'); return }
+    if (hasInvite) {
+      // existing kitchen — just sign in
+      localStorage.setItem('shelfwise_user', name.trim() || email.trim())
+      toast.success(`Welcome${name ? ', ' + name : ''}! 🎉`)
+      onAuth()
+      return
+    }
+    if (!name.trim()) { toast.error('Your name is required'); return }
+    // First time setup — generate code immediately so they can share it
+    setBusy(true)
+    try {
+      const newCode = Math.floor(100000 + Math.random() * 900000).toString()
+      const next = {
+        ...settings,
+        alertEmail: email.trim(),
+        inviteCode: newCode,
+        onboarded: false,
+      }
+      await saveSettings(next)
+      setGeneratedCode(newCode)
+      if (name.trim()) localStorage.setItem('shelfwise_user', name.trim())
+      setStep('code')
+    } finally { setBusy(false) }
+  }
+
+  const finishSetup = async () => {
+    setBusy(true)
+    try {
+      const next = {
+        ...settings,
+        kitchenName: kitchenName.trim() || 'My Kitchen',
+        kitchenType,
+        alertEmail: email.trim() || settings.alertEmail,
+        inviteCode: generatedCode || settings.inviteCode,
+        onboarded: true,
+        dashboardWidgets: chosenWidgets,
+      }
+      await saveSettings(next)
+      toast.success(`Welcome to ${next.kitchenName}! 🎉`)
+      onAuth()
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-gradient-to-br from-emerald-50 via-white to-amber-50 flex items-center justify-center p-4 overflow-y-auto">
+      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border p-8">
+        <div className="text-center mb-6">
+          <div className="h-14 w-14 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 mx-auto flex items-center justify-center mb-3 shadow-md">
+            <ChefHat className="h-7 w-7 text-white" />
+          </div>
+          <h1 className="text-2xl font-bold">ShelfWise</h1>
+          <p className="text-sm text-muted-foreground mt-1">From shelf to plate — never lose track.</p>
+        </div>
+
+        {step === 'code' && generatedCode && (
+          <div className="space-y-4">
+            <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 p-5 text-center">
+              <p className="text-xs font-semibold text-emerald-800 uppercase tracking-wider">Your kitchen code</p>
+              <p className="text-4xl font-bold tracking-[0.3em] text-emerald-700 my-3 font-mono">{generatedCode}</p>
+              <p className="text-xs text-emerald-700">Share this code with your team. They'll use it to log in.</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={async () => {
+                try {
+                  if (navigator.share) {
+                    await navigator.share({ title: 'ShelfWise Kitchen Code', text: `Join my kitchen on ShelfWise — code: ${generatedCode}` })
+                  } else if (navigator.clipboard) {
+                    await navigator.clipboard.writeText(generatedCode)
+                    toast.success('Code copied!')
+                  }
+                } catch {}
+              }}
+            >
+              📋 Share / Copy code
+            </Button>
+            <Button className="w-full bg-emerald-600 hover:bg-emerald-700" onClick={() => setStep('kitchen-name')}>
+              Continue <ArrowRight className="h-4 w-4 ml-2" />
+            </Button>
+          </div>
+        )}
+
+        {step === 'kitchen-name' && (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-bold">Name your kitchen</h2>
+              <p className="text-xs text-muted-foreground mt-1">This shows in the header and on email alerts.</p>
+            </div>
+            <div>
+              <Label>Kitchen Name</Label>
+              <Input value={kitchenName} onChange={e => setKitchenName(e.target.value)} placeholder="e.g. Bella Cucina" autoFocus />
+            </div>
+            <div className="flex justify-between pt-2">
+              <Button variant="ghost" onClick={() => setStep('code')}>Back</Button>
+              <Button
+                onClick={() => {
+                  if (!kitchenName.trim()) { toast.error('Kitchen name required'); return }
+                  setStep('type')
+                }}
+                className="bg-emerald-600 hover:bg-emerald-700"
+              >
+                Next <ArrowRight className="h-4 w-4 ml-2" />
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {step === 'type' && (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-bold">What type of kitchen?</h2>
+              <p className="text-xs text-muted-foreground mt-1">This helps us tailor your dashboard.</p>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {KITCHEN_TYPES.map(t => (
+                <button key={t} type="button" onClick={() => setKitchenType(t)}
+                  className={`text-sm py-3 px-3 rounded-lg border-2 font-medium transition ${kitchenType === t ? 'bg-emerald-600 text-white border-emerald-600' : 'hover:border-emerald-300 border-slate-200 bg-white'}`}>
+                  {t}
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-between pt-2">
+              <Button variant="ghost" onClick={() => setStep('kitchen-name')}>Back</Button>
+              <Button onClick={() => setStep('widgets')} className="bg-emerald-600 hover:bg-emerald-700">
+                Next <ArrowRight className="h-4 w-4 ml-2" />
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {step === 'widgets' && (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-bold">What do you want on your dashboard?</h2>
+              <p className="text-xs text-muted-foreground mt-1">Tap the cards you want. Pick at least one — you can change this anytime in Settings.</p>
+            </div>
+            <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
+              {ALL_WIDGETS.map(w => {
+                const Icon = w.icon
+                const active = chosenWidgets.includes(w.key)
+                return (
+                  <button
+                    key={w.key}
+                    type="button"
+                    onClick={() => toggleWidget(w.key)}
+                    className={`w-full text-left flex items-start gap-3 p-3 rounded-lg border-2 transition ${active ? 'border-emerald-500 bg-emerald-50/60 shadow-sm' : 'border-slate-200 hover:border-emerald-300 bg-white'}`}
+                  >
+                    <div className={`h-9 w-9 rounded-lg ${w.bg} flex items-center justify-center flex-shrink-0`}>
+                      <Icon className={`h-5 w-5 ${w.color}`} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-semibold">{w.label}</p>
+                        {active && <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">{w.desc}</p>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+            <p className="text-[11px] text-muted-foreground">{chosenWidgets.length} selected</p>
+            <div className="flex justify-between">
+              <Button variant="ghost" onClick={() => setStep('type')}>Back</Button>
+              <Button onClick={finishSetup} disabled={busy || chosenWidgets.length === 0} className="bg-emerald-600 hover:bg-emerald-700">
+                {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />} Finish Setup
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {step === 'login' && (
+          <>
+            <p className="text-center text-sm text-muted-foreground mb-4">Sign in with</p>
+            <div className="flex gap-2 mb-5 p-1 bg-slate-100 rounded-lg">
+              <button onClick={() => setMode('email')} className={`flex-1 py-2.5 text-sm font-semibold rounded-md transition flex items-center justify-center gap-1.5 ${mode === 'email' ? 'bg-white shadow text-slate-900' : 'text-slate-600 hover:text-slate-800'}`}>
+                👑 Owner
+              </button>
+              <button onClick={() => setMode('code')} className={`flex-1 py-2.5 text-sm font-semibold rounded-md transition flex items-center justify-center gap-1.5 ${mode === 'code' ? 'bg-white shadow text-slate-900' : 'text-slate-600 hover:text-slate-800'}`}>
+                👨‍🍳 Chef
+              </button>
+            </div>
+
+            {mode === 'code' && (
+              <form onSubmit={tryCode} className="space-y-4">
+                <p className="text-xs text-muted-foreground">{hasInvite ? 'Enter the 6-digit code your head chef shared.' : '⚠️ No kitchen set up yet. Use the Email tab first.'}</p>
+                <div>
+                  <Label>Your name <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                  <Input value={name} onChange={e => setName(e.target.value)} placeholder="Chef Anna" />
+                </div>
+                <div>
+                  <Label>Kitchen code</Label>
+                  <Input value={code} onChange={e => setCode(e.target.value)} placeholder="6-digit code" className="text-center text-2xl tracking-[0.3em] font-mono h-14" maxLength={10} />
+                </div>
+                <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700" disabled={busy || !hasInvite}>
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />} Enter Kitchen
+                </Button>
+              </form>
+            )}
+
+            {mode === 'email' && (
+              <form onSubmit={signInEmail} className="space-y-4">
+                <p className="text-xs text-muted-foreground">{hasInvite ? 'Sign in with your email.' : 'First time? Enter your details — we\'ll set up your kitchen in the next few steps.'}</p>
+                <div>
+                  <Label>Your name</Label>
+                  <Input value={name} onChange={e => setName(e.target.value)} placeholder="Head Chef" />
+                </div>
+                <div>
+                  <Label>Email <span className="text-muted-foreground font-normal">{!hasInvite && '(for alerts)'}</span></Label>
+                  <Input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="chef@kitchen.com" />
+                </div>
+                <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700" disabled={busy}>
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : (hasInvite ? <Check className="h-4 w-4 mr-2" /> : <Sparkles className="h-4 w-4 mr-2" />)} {hasInvite ? 'Sign In' : 'Create Kitchen →'}
+                </Button>
+              </form>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+
+// ============================================================================
+// Notification settings card — browser Notification API opt-in.
+// ============================================================================
+export function NotificationSettingsCard() {
+  // Real Web Push (server-sent): works even when the app is closed.
+  // Requires: /sw.js service worker + VAPID keys on the server + migration-14.
+  const [supported, setSupported] = useState(true)
+  const [permission, setPermission] = useState('default')
+  const [subscribed, setSubscribed] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [isIOSBrowser, setIsIOSBrowser] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
+    setIsIOSBrowser(iOS && !standalone)
+    if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setSupported(false)
+      return
+    }
+    setPermission(Notification.permission)
+    ;(async () => {
+      try {
+        const reg = await navigator.serviceWorker.getRegistration()
+        const sub = reg ? await reg.pushManager.getSubscription() : null
+        setSubscribed(!!sub)
+      } catch {}
+    })()
+  }, [])
+
+  const urlBase64ToUint8Array = (base64String) => {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+    const rawData = window.atob(base64)
+    const outputArray = new Uint8Array(rawData.length)
+    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i)
+    return outputArray
+  }
+
+  const enable = async () => {
+    if (!supported) { toast.error("Your browser doesn't support push notifications"); return }
+    setBusy(true)
+    try {
+      const perm = await Notification.requestPermission()
+      setPermission(perm)
+      if (perm !== 'granted') { toast.error('Permission denied. Re-enable it in your browser settings.'); return }
+      // 1) Register the service worker
+      const reg = await navigator.serviceWorker.register('/sw.js')
+      await navigator.serviceWorker.ready
+      // 2) Get the server's public VAPID key
+      const keyRes = await fetch('/api/push/public-key')
+      const keyData = await keyRes.json().catch(() => ({}))
+      if (!keyRes.ok || !keyData.key) throw new Error(keyData.error || 'Push not configured on the server')
+      // 3) Subscribe this device
+      let sub = await reg.pushManager.getSubscription()
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(keyData.key),
+        })
+      }
+      // 4) Save it on the server
+      const saveRes = await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription: sub.toJSON() }),
+      })
+      const saveData = await saveRes.json().catch(() => ({}))
+      if (!saveRes.ok) throw new Error(saveData.error || 'Could not save subscription')
+      setSubscribed(true)
+      toast.success('Push notifications enabled on this device ✅')
+    } catch (e) {
+      toast.error(e.message || 'Could not enable push notifications')
+    } finally { setBusy(false) }
+  }
+
+  const disable = async () => {
+    setBusy(true)
+    try {
+      const reg = await navigator.serviceWorker.getRegistration()
+      const sub = reg ? await reg.pushManager.getSubscription() : null
+      if (sub) {
+        await fetch('/api/push/unsubscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint: sub.endpoint }),
+        }).catch(() => {})
+        await sub.unsubscribe()
+      }
+      setSubscribed(false)
+      toast.success('Push notifications turned off on this device')
+    } catch {
+      toast.error('Could not unsubscribe')
+    } finally { setBusy(false) }
+  }
+
+  const test = async () => {
+    setBusy(true)
+    try {
+      const res = await fetch('/api/push/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Test failed')
+      toast.success(`Test sent to ${data.sent} device${data.sent !== 1 ? 's' : ''} — check your notifications!`)
+    } catch (e) {
+      toast.error(e.message || 'Test failed')
+    } finally { setBusy(false) }
+  }
+
+  if (!supported) {
+    return (
+      <div className="rounded-lg border-2 border-slate-200 bg-slate-50 p-4">
+        <Label className="text-slate-700 text-sm font-bold">🔔 Push Notifications</Label>
+        <p className="text-xs text-slate-600 mt-1">
+          {isIOSBrowser
+            ? 'On iPhone/iPad: first install the app (Share → Add to Home Screen), then open it from your home screen to enable push notifications.'
+            : 'Not supported on this browser.'}
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className={`rounded-lg border-2 p-4 ${subscribed ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
+      <Label className="text-sm font-bold">🔔 Push Notifications</Label>
+      <p className="text-xs text-muted-foreground mt-1 mb-3">
+        Daily alerts sent to this device — items expiring soon and HACCP temperature-check reminders. Works even when the app is closed.
+      </p>
+      {subscribed ? (
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" size="sm" onClick={test} disabled={busy}>
+            {busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null} Send test
+          </Button>
+          <Button variant="outline" size="sm" onClick={disable} disabled={busy} className="text-red-600">
+            <BellOff className="h-4 w-4 mr-1" /> Turn off
+          </Button>
+        </div>
+      ) : (
+        <Button size="sm" onClick={enable} disabled={busy} className="bg-emerald-600 hover:bg-emerald-700">
+          {busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Bell className="h-4 w-4 mr-1" />}
+          {permission === 'denied' ? 'Blocked — allow in browser settings' : 'Enable push notifications'}
+        </Button>
+      )}
+      {isIOSBrowser && (
+        <p className="text-[11px] text-amber-700 mt-2">iPhone/iPad: install the app first (Share → Add to Home Screen) for push to work.</p>
+      )}
+    </div>
+  )
+}
+
+
+// ============================================================================
+// Dispose (waste-log) dialog — asks the user WHY a product is being removed.
+// "Used up" is NOT logged as waste. Anything else creates a waste_log row.
+// ============================================================================
