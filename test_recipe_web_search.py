@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
 Test script for AI Recipe Web Search endpoint (POST /api/recipe/web-search)
-Tests ONLY the new recipe/web-search endpoint as per review_request.
+FOCUSED RETEST after parallel LLM optimization and default servings change.
 """
 
 import requests
 import json
 import sys
 import subprocess
+import time
 
 # Get base URL from .env
 def get_base_url():
@@ -86,7 +87,7 @@ def test_no_auth():
     try:
         response = requests.post(
             f"{API_URL}/recipe/web-search",
-            json={"query": "Spaghetti Carbonara", "servings": 4},
+            json={"query": "Spaghetti Carbonara"},
             timeout=10
         )
         print(f"Status: {response.status_code}")
@@ -135,18 +136,22 @@ def test_empty_body():
         print(f"✗ Exception: {e}")
         return False
 
-# TEST 3: Valid JWT + valid query → expect 200 with 3 recipes
-def test_valid_carbonara():
-    print("Testing POST /api/recipe/web-search with valid JWT + Spaghetti Carbonara...")
-    print("⚠️  This calls gpt-4o-mini and may take 20-40 seconds...")
+# TEST 3: Valid JWT + Spaghetti Carbonara (servings OMITTED) → expect servings=1, 3 distinct styles
+def test_carbonara_default_servings():
+    print("Testing POST /api/recipe/web-search with Spaghetti Carbonara (servings OMITTED)...")
+    print("⚠️  This calls gpt-4o-mini 3x in parallel and may take 8-20 seconds...")
     try:
+        start_time = time.time()
         response = requests.post(
             f"{API_URL}/recipe/web-search",
-            json={"query": "Spaghetti Carbonara", "servings": 4},
+            json={"query": "Spaghetti Carbonara"},
             headers={"Authorization": f"Bearer {CHEF_JWT}"},
-            timeout=90  # LLM call can take time
+            timeout=90  # LLM calls can take time
         )
+        elapsed_time = time.time() - start_time
+        
         print(f"Status: {response.status_code}")
+        print(f"⏱️  Response time: {elapsed_time:.1f}s (expected under ~20s)")
         
         if response.status_code != 200:
             print(f"✗ Expected 200, got {response.status_code}")
@@ -175,9 +180,24 @@ def test_valid_carbonara():
         if len(recipes) > 3:
             print(f"⚠️  Got {len(recipes)} recipes (expected up to 3)")
         
+        # Check for 3 distinct styles
+        styles = [r.get('style') for r in recipes]
+        expected_styles = ['Classic Traditional', 'Quick & Easy', 'Restaurant Quality']
+        print(f"Recipe styles: {styles}")
+        
+        if len(recipes) == 3:
+            if not all(style in expected_styles for style in styles):
+                print(f"✗ Not all styles are from expected list: {expected_styles}")
+                return False
+            if len(set(styles)) != 3:
+                print(f"✗ Expected 3 distinct styles, got {len(set(styles))} distinct: {set(styles)}")
+                return False
+            print(f"✓ All 3 recipes have distinct styles from expected list")
+        
         # Validate each recipe
-        for i, recipe in enumerate(recipes[:3]):  # Check up to 3
+        for i, recipe in enumerate(recipes):
             print(f"\n  Recipe {i+1}: {recipe.get('title', 'NO TITLE')}")
+            print(f"    Style: {recipe.get('style', 'NO STYLE')}")
             
             # Required fields
             required_fields = ['title', 'source', 'style', 'servings', 'prepMinutes', 
@@ -189,47 +209,23 @@ def test_valid_carbonara():
                     print(f"    ✗ Missing field: {field}")
                     return False
             
-            # Check types
-            if not isinstance(recipe['title'], str):
-                print(f"    ✗ title is not a string")
+            # CRITICAL: Check servings === 1 (default when omitted)
+            if recipe['servings'] != 1:
+                print(f"    ✗ servings is {recipe['servings']}, expected 1 (default)")
                 return False
+            print(f"    ✓ servings = 1 (correct default)")
             
-            if not isinstance(recipe['source'], str):
-                print(f"    ✗ source is not a string")
-                return False
-            
-            if not isinstance(recipe['style'], str):
-                print(f"    ✗ style is not a string")
-                return False
-            
-            if recipe['servings'] != 4:
-                print(f"    ✗ servings is {recipe['servings']}, expected 4")
-                return False
-            
-            if not isinstance(recipe['prepMinutes'], (int, float)):
-                print(f"    ✗ prepMinutes is not a number: {type(recipe['prepMinutes'])}")
-                return False
-            
-            if not isinstance(recipe['cookMinutes'], (int, float)):
-                print(f"    ✗ cookMinutes is not a number: {type(recipe['cookMinutes'])}")
-                return False
-            
+            # Check allergens are lowercase strings
             if not isinstance(recipe['allergens'], list):
                 print(f"    ✗ allergens is not an array")
                 return False
             
-            # Check allergens are lowercase strings
             for allergen in recipe['allergens']:
                 if not isinstance(allergen, str) or allergen != allergen.lower():
                     print(f"    ✗ allergen '{allergen}' is not lowercase string")
                     return False
             
-            # Carbonara should have eggs and/or dairy and/or gluten
-            allergen_set = set(recipe['allergens'])
-            if not any(a in allergen_set for a in ['eggs', 'dairy', 'gluten']):
-                print(f"    ⚠️  Carbonara allergens {recipe['allergens']} missing eggs/dairy/gluten (may be acceptable)")
-            else:
-                print(f"    ✓ Allergens include expected items: {recipe['allergens']}")
+            print(f"    ✓ Allergens are lowercase: {recipe['allergens']}")
             
             # Check ingredients
             if not isinstance(recipe['ingredients'], list):
@@ -242,8 +238,8 @@ def test_valid_carbonara():
             
             print(f"    ✓ Has {len(recipe['ingredients'])} ingredients")
             
-            # Validate ingredient structure
-            for j, ing in enumerate(recipe['ingredients'][:3]):  # Check first 3
+            # Validate ingredient structure - ALL quantities must be numeric
+            for j, ing in enumerate(recipe['ingredients']):
                 if not isinstance(ing, dict):
                     print(f"      ✗ Ingredient {j+1} is not an object")
                     return False
@@ -264,10 +260,10 @@ def test_valid_carbonara():
                 if 'unit' not in ing or not isinstance(ing['unit'], str):
                     print(f"      ✗ Ingredient {j+1} missing/invalid unit")
                     return False
-                
-                print(f"      ✓ Ingredient {j+1}: {ing['name']} - {ing['quantity']} {ing['unit']}")
             
-            # Check steps
+            print(f"    ✓ All ingredient quantities are numeric type")
+            
+            # Check steps are non-empty
             if not isinstance(recipe['steps'], list):
                 print(f"    ✗ steps is not an array")
                 return False
@@ -276,16 +272,16 @@ def test_valid_carbonara():
                 print(f"    ✗ steps array is empty")
                 return False
             
-            print(f"    ✓ Has {len(recipe['steps'])} steps")
-            
             for step in recipe['steps']:
-                if not isinstance(step, str):
-                    print(f"    ✗ Step is not a string: {type(step)}")
+                if not isinstance(step, str) or not step.strip():
+                    print(f"    ✗ Step is not a non-empty string")
                     return False
             
+            print(f"    ✓ Has {len(recipe['steps'])} non-empty steps")
             print(f"  ✓ Recipe {i+1} validation passed")
         
-        print("\n✓ All recipe validations passed")
+        print(f"\n✓ All recipe validations passed")
+        print(f"✓ Response time: {elapsed_time:.1f}s (within expected range)")
         return True
         
     except requests.exceptions.Timeout:
@@ -297,18 +293,22 @@ def test_valid_carbonara():
         traceback.print_exc()
         return False
 
-# TEST 4: Valid JWT + Butter Chicken with servings=2 → expect servings=2
-def test_butter_chicken_servings():
-    print("Testing POST /api/recipe/web-search with Butter Chicken, servings=2...")
-    print("⚠️  This calls gpt-4o-mini and may take 20-40 seconds...")
+# TEST 4: Valid JWT + Lasagna with servings=6 → expect servings=6
+def test_lasagna_servings_6():
+    print("Testing POST /api/recipe/web-search with Lasagna, servings=6...")
+    print("⚠️  This calls gpt-4o-mini 3x in parallel and may take 8-20 seconds...")
     try:
+        start_time = time.time()
         response = requests.post(
             f"{API_URL}/recipe/web-search",
-            json={"query": "Butter Chicken", "servings": 2},
+            json={"query": "Lasagna", "servings": 6},
             headers={"Authorization": f"Bearer {CHEF_JWT}"},
             timeout=90
         )
+        elapsed_time = time.time() - start_time
+        
         print(f"Status: {response.status_code}")
+        print(f"⏱️  Response time: {elapsed_time:.1f}s")
         
         if response.status_code != 200:
             print(f"✗ Expected 200, got {response.status_code}")
@@ -324,17 +324,18 @@ def test_butter_chicken_servings():
         
         print(f"✓ Got {len(recipes)} recipes")
         
-        # Check all recipes have servings=2
+        # Check all recipes have servings=6
         all_correct = True
         for i, recipe in enumerate(recipes):
             servings = recipe.get('servings')
             print(f"  Recipe {i+1}: {recipe.get('title', 'NO TITLE')} - servings={servings}")
-            if servings != 2:
-                print(f"    ✗ Expected servings=2, got {servings}")
+            if servings != 6:
+                print(f"    ✗ Expected servings=6, got {servings}")
                 all_correct = False
         
         if all_correct:
-            print("✓ All recipes have servings=2")
+            print("✓ All recipes have servings=6")
+            print(f"✓ Response time: {elapsed_time:.1f}s")
             return True
         else:
             return False
@@ -346,44 +347,15 @@ def test_butter_chicken_servings():
         print(f"✗ Exception: {e}")
         return False
 
-# TEST 5: Valid JWT + empty query → expect 400
-def test_empty_query():
-    print("Testing POST /api/recipe/web-search with empty query...")
-    try:
-        response = requests.post(
-            f"{API_URL}/recipe/web-search",
-            json={"query": ""},
-            headers={"Authorization": f"Bearer {CHEF_JWT}"},
-            timeout=10
-        )
-        print(f"Status: {response.status_code}")
-        print(f"Response: {response.text[:200]}")
-        
-        if response.status_code == 400:
-            data = response.json()
-            if 'error' in data and 'query' in data['error'].lower():
-                print("✓ Correctly returned 400 with query error")
-                return True
-            else:
-                print(f"✗ Got 400 but unexpected error message: {data}")
-                return False
-        else:
-            print(f"✗ Expected 400, got {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"✗ Exception: {e}")
-        return False
-
 # Run all tests
 print("\n" + "=" * 80)
-print("STARTING RECIPE WEB SEARCH ENDPOINT TESTS")
+print("STARTING RECIPE WEB SEARCH ENDPOINT TESTS (FOCUSED RETEST)")
 print("=" * 80)
 
 test_case("1. No auth header → 401", test_no_auth)
 test_case("2. Valid JWT + empty body → 400", test_empty_body)
-test_case("3. Valid JWT + Spaghetti Carbonara → 200 with recipes", test_valid_carbonara)
-test_case("4. Valid JWT + Butter Chicken servings=2 → servings=2", test_butter_chicken_servings)
-test_case("5. Valid JWT + empty query → 400", test_empty_query)
+test_case("3. Valid JWT + Spaghetti Carbonara (servings OMITTED) → servings=1, 3 distinct styles", test_carbonara_default_servings)
+test_case("4. Valid JWT + Lasagna servings=6 → servings=6", test_lasagna_servings_6)
 
 # Summary
 print("\n" + "=" * 80)

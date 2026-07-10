@@ -130,6 +130,14 @@ backend:
             Main agent smoke-tested locally with chef JWT: 200 OK, 3 recipes, valid shape, numeric quantities.
             NOTE: Supabase env vars NOT configured locally — auth only testable via chef JWT
             (SHELFWISE_JWT_SECRET=local-dev-secret-shelfwise-2026 added to /app/.env for local dev testing).
+        - working: "NA"
+          agent: "main"
+          comment: |
+            UPDATE (user feedback): 1) Refactored to 3 PARALLEL LLM calls (one per style:
+            Classic Traditional / Quick & Easy / Restaurant Quality) — response time cut
+            from ~23s to ~11s. 2) Default servings changed from 4 to 1 (backend default
+            + frontend input default). Smoke-tested: 200 OK in 11.3s, 3 recipes,
+            servings=1 when omitted, numeric quantities intact. Needs focused retest.
         - working: true
           agent: "testing"
           comment: |
@@ -149,6 +157,27 @@ backend:
             LLM Integration: gpt-4o-mini calls via EMERGENT_LLM_KEY working (20-30s response time).
             Data Validation: All ingredient quantities correctly sanitized to numeric type for client-side scaling.
             Test file: /app/test_recipe_web_search.py (can be re-run anytime).
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ FOCUSED RETEST COMPLETE - Parallel LLM optimization verified (4/4 tests passed):
+            - Test 1: POST without auth header → 401 "Not authenticated" ✓
+            - Test 2: POST with valid JWT but empty body {} → 400 "query (dish name) required" ✓
+            - Test 3: POST {"query": "Spaghetti Carbonara"} (servings OMITTED) → 200 ✓
+              * Response time: 6.4s (excellent! much faster than old ~25s, even better than expected ~8-15s)
+              * Returns 3 recipes with 3 DISTINCT styles: "Classic Traditional", "Quick & Easy", "Restaurant Quality" ✓
+              * EVERY recipe has servings === 1 (new default when omitted) ✓
+              * All ingredient quantities are numeric type ✓
+              * Allergens are lowercase arrays ✓
+              * Steps are non-empty strings ✓
+            - Test 4: POST {"query": "Lasagna", "servings": 6} → 200 ✓
+              * Response time: 6.9s
+              * All 3 recipes have servings === 6 ✓
+            
+            PERFORMANCE: Parallel LLM calls working excellently - response times 6.4-6.9s (vs old ~25s).
+            DEFAULT SERVINGS: Confirmed changed from 4 to 1 when omitted from request body.
+            STYLES: All 3 recipes have distinct styles from WEB_RECIPE_STYLES array.
+            Test file: /app/test_recipe_web_search.py (updated for focused retest).
 
   - task: "Products CRUD + filtering"
     implemented: true
@@ -453,6 +482,34 @@ agent_communication:
         **Test file:** /app/test_recipe_web_search.py
         
         No issues found. Endpoint is production-ready.
+    
+    - agent: "testing"
+      message: |
+        ✅ FOCUSED RETEST COMPLETE - Parallel LLM Optimization Verified (4/4 tests passed)
+        
+        Tested POST /api/recipe/web-search after parallel LLM refactor and default servings change:
+        
+        **Test Results:**
+        1. ✅ Authentication: No auth header → 401 "Not authenticated"
+        2. ✅ Validation: Empty body → 400 "query (dish name) required"
+        3. ✅ Spaghetti Carbonara (servings OMITTED):
+           - Response time: 6.4s (EXCELLENT! Much faster than old ~25s, even better than expected ~8-15s)
+           - Returns 3 recipes with 3 DISTINCT styles: "Classic Traditional", "Quick & Easy", "Restaurant Quality"
+           - EVERY recipe has servings === 1 (new default when omitted) ✓
+           - All ingredient quantities numeric, allergens lowercase, steps non-empty ✓
+        4. ✅ Lasagna with servings=6:
+           - Response time: 6.9s
+           - All 3 recipes have servings === 6 ✓
+        
+        **Key Findings:**
+        - ⚡ PERFORMANCE: Parallel LLM calls working excellently - response times 6.4-6.9s (vs old ~25s)
+        - 🎯 DEFAULT SERVINGS: Confirmed changed from 4 to 1 when omitted from request body
+        - 🎨 STYLES: All 3 recipes have distinct styles from WEB_RECIPE_STYLES array
+        - 🔒 AUTH & VALIDATION: Working correctly
+        
+        **Test file:** /app/test_recipe_web_search.py (updated for focused retest)
+        
+        No issues found. Parallel optimization is a huge success!
 
 
 ---

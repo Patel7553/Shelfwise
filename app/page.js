@@ -4225,7 +4225,7 @@ function RecipesView({ recipes, search, setSearch, openRecipe, onView, onDelete,
   const [tab, setTab] = useState('saved') // 'saved' | 'scan' | 'websearch'
   // Web recipe search state
   const [webQuery, setWebQuery] = useState('')
-  const [webServings, setWebServings] = useState(4)
+  const [webServings, setWebServings] = useState(1)
   const [webLoading, setWebLoading] = useState(false)
   const [webResults, setWebResults] = useState([])
   const [webSearched, setWebSearched] = useState(false)
@@ -4333,7 +4333,7 @@ function RecipesView({ recipes, search, setSearch, openRecipe, onView, onDelete,
                 <div className="flex items-center gap-1.5 shrink-0">
                   <Label className="text-xs text-muted-foreground whitespace-nowrap">Serves</Label>
                   <Input type="number" min="1" max="20" className="w-16" value={webServings}
-                    onChange={e => setWebServings(Math.max(1, Math.min(20, Number(e.target.value) || 4)))} />
+                    onChange={e => setWebServings(Math.max(1, Math.min(20, Number(e.target.value) || 1)))} />
                 </div>
                 <Button onClick={runWebSearch} disabled={webLoading} className="bg-sky-600 hover:bg-sky-700 text-white">
                   {webLoading ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Search className="h-4 w-4 mr-1.5" />}
@@ -4525,7 +4525,7 @@ function WebRecipeCard({ recipe: r, onSaved }) {
               {n}x
             </button>
           ))}
-          <span className="text-xs text-muted-foreground ml-1">= serves {(Number(r.servings) || 4) * scale}</span>
+          <span className="text-xs text-muted-foreground ml-1">= serves {(Number(r.servings) || 1) * scale}</span>
         </div>
 
         {/* Ingredients */}
