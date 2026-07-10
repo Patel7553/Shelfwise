@@ -198,6 +198,15 @@ export function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, 
     return (haccpLocations || []).filter(l => l && l.active !== false && l.name)
   }, [haccpLocations])
 
+  // TIMEZONE-SAFE date key: format a Date's LOCAL calendar date as YYYY-MM-DD.
+  // NEVER use toISOString() for day columns — in any non-UTC timezone it shifts
+  // local midnight into the previous/next UTC day (bug: 10 Jul reading shown
+  // under 11 Jul). Readings are stored as wall-clock strings ("...T17:00:00Z"),
+  // so we also read their date/hour straight from the STRING, never via Date.
+  const localDateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const weekStartKey = localDateKey(days[0])
+  const weekEndKey = localDateKey(days[6])
+
   // Also detect any locations in THIS week's readings that DON'T match any
   // configured fridge/freezer using AGGRESSIVE normalization to catch tiny
   // typos, extra spaces, hyphens, punctuation. "Ward Fridge" = "ward-fridge"
@@ -206,10 +215,9 @@ export function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, 
   const orphanLocations = React.useMemo(() => {
     const known = new Set(configuredLocations.map(l => normalizeName(l.name)))
     const found = new Map()
-    const start = days[0].getTime(); const end = days[6].getTime() + 86400000
     ;(temps || []).forEach(t => {
-      const ts = new Date(t.recordedAt).getTime()
-      if (ts < start || ts >= end) return
+      const dateKey = String(t.recordedAt || '').slice(0, 10)
+      if (!dateKey || dateKey < weekStartKey || dateKey > weekEndKey) return
       const key = normalizeName(t.location)
       if (!key || known.has(key)) return
       if (!found.has(key)) {
@@ -222,7 +230,7 @@ export function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, 
       }
     })
     return [...found.values()]
-  }, [configuredLocations, temps, days])
+  }, [configuredLocations, temps, weekStartKey, weekEndKey])
 
   // Combined for rendering — configured first, orphans after with a separator.
   const activeLocations = React.useMemo(() => {
@@ -232,20 +240,19 @@ export function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, 
   // Build cell map: readings[locName][YYYY-MM-DD][am|pm] = array of readings
   const readingsMap = React.useMemo(() => {
     const map = {}
-    const start = days[0].getTime(); const end = days[6].getTime() + 86400000
     ;(temps || []).forEach(t => {
-      const d = new Date(t.recordedAt)
-      const ts = d.getTime()
-      if (ts < start || ts >= end) return
-      const dateKey = d.toISOString().slice(0, 10)
-      const slot = d.getUTCHours() < 12 ? 'am' : 'pm'
+      const raw = String(t.recordedAt || '')
+      const dateKey = raw.slice(0, 10)                 // wall-clock date exactly as saved
+      if (!dateKey || dateKey < weekStartKey || dateKey > weekEndKey) return
+      const hour = Number(raw.slice(11, 13) || '0')    // wall-clock hour exactly as saved
+      const slot = hour < 12 ? 'am' : 'pm'
       const locKey = String(t.location || '').toLowerCase()
       if (!map[locKey]) map[locKey] = {}
       if (!map[locKey][dateKey]) map[locKey][dateKey] = { am: [], pm: [] }
       map[locKey][dateKey][slot].push(t)
     })
     return map
-  }, [temps, days])
+  }, [temps, weekStartKey, weekEndKey])
 
   // Compact author = initials (first + last) or first token before @ for emails
   const shortBy = (raw) => {
@@ -281,7 +288,7 @@ export function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, 
       const key = loc.name.toLowerCase()
       const cells = days.map(d => {
         if (blank) return `<td>&nbsp;</td><td>&nbsp;</td>`  // empty template cells
-        const dateKey = d.toISOString().slice(0, 10)
+        const dateKey = localDateKey(d)
         const cell = readingsMap[key]?.[dateKey] || { am: [], pm: [] }
         const fmt = (list) => list.length === 0 ? '&mdash;' : list.map(r => `${r.temperatureC}°`).join(', ')
         const amPass = cell.am.every(r => r.isPass !== false)
@@ -527,7 +534,7 @@ ${printLocs.length > 0 ? `<table>
                           {isOrphan && <span className="ml-1.5 text-[9px] font-bold uppercase tracking-wide bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded">Unmatched</span>}
                         </td>
                         {days.map((d, dIdx) => {
-                          const dateKey = d.toISOString().slice(0, 10)
+                          const dateKey = localDateKey(d)
                           const cell = readingsMap[key]?.[dateKey] || { am: [], pm: [] }
                           return (
                             <React.Fragment key={dIdx}>
@@ -661,9 +668,12 @@ ${printLocs.length > 0 ? `<table>
                 </label>
               )}
               {list.map(t => {
-                const dt = new Date(t.recordedAt)
-                const dateStr = dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
-                const timeStr = dt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+                // Wall-clock display: read date/time straight from the stored
+                // string — toLocale* would shift it in non-UTC timezones.
+                const raw = String(t.recordedAt || '')
+                const dtSafe = new Date(`${raw.slice(0, 10)}T12:00:00`)
+                const dateStr = raw.length >= 10 ? dtSafe.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—'
+                const timeStr = raw.slice(11, 16) || '—'
                 const pass = t.isPass !== false
                 const isSelected = selectedTempIds.has(t.id)
                 return (

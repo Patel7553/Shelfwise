@@ -653,7 +653,7 @@ export function ViewRecipeDialog({ recipe, onClose, onDelete }) {
   )
 }
 
-export function RecipeGenDialog({ open, onClose, seed = [], inventoryNames = [] }) {
+export function RecipeGenDialog({ open, onClose, seed = [], inventoryNames = [], kitchenType = '' }) {
   const [ingredients, setIngredients] = useState([])
   const [current, setCurrent] = useState('')
   const [servings, setServings] = useState(1)  // flexible default — start at 1 so single-portion meals work
@@ -705,6 +705,7 @@ export function RecipeGenDialog({ open, onClose, seed = [], inventoryNames = [] 
           cuisine: cuisine === 'Any' ? '' : cuisine,
           dietary,
           skillLevel,
+          kitchenType,
         }),
       })
       if (!res.ok) throw new Error('AI failed — try again')

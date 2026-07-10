@@ -1080,18 +1080,28 @@ function normalizeItemName(s) {
     .trim()
 }
 
-async function generateRecipesFromIngredients({ ingredients, servings = 4, cuisine = '', dietary = [], skillLevel = 'easy' }) {
+async function generateRecipesFromIngredients({ ingredients, servings = 4, cuisine = '', dietary = [], skillLevel = 'easy', kitchenType = '' }) {
   const key = process.env.EMERGENT_LLM_KEY
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
   const dietaryLine = Array.isArray(dietary) && dietary.length ? `Dietary requirements: ${dietary.join(', ')}.\n` : ''
   const cuisineLine = cuisine ? `Preferred cuisine: ${cuisine}.\n` : ''
   const skillLine = `Difficulty level: ${skillLevel}.\n`
+  // Tailor recipes to the type of kitchen (hospital vs restaurant vs cafe...)
+  let kitchenLine = ''
+  const kt = String(kitchenType || '').toLowerCase()
+  if (kt.includes('hospital') || kt.includes('care') || kt.includes('nursing')) {
+    kitchenLine = 'KITCHEN CONTEXT: This is a HOSPITAL/CARE kitchen serving patients. Recipes MUST be healthy and nutritious: low salt, low saturated fat, balanced macros, gentle on digestion, softer textures preferred, no overly spicy dishes. Favour steaming, baking and poaching over deep-frying.\n'
+  } else if (kt.includes('school') || kt.includes('nursery')) {
+    kitchenLine = 'KITCHEN CONTEXT: This is a SCHOOL kitchen serving children. Recipes must be child-friendly, nutritionally balanced, mildly seasoned, and avoid alcohol and excessive salt/sugar.\n'
+  } else if (kt.includes('restaurant') || kt.includes('cafe') || kt.includes('café') || kt.includes('pub') || kt.includes('hotel') || kt.includes('takeaway') || kt.includes('catering')) {
+    kitchenLine = `KITCHEN CONTEXT: This is a professional ${kitchenType} kitchen. Recipes should be menu-worthy dishes that suit the venue's style${cuisine ? ` and its ${cuisine} theme` : ''} — presentable, portionable and service-friendly.\n`
+  }
 
   const systemPrompt = `You are a professional chef. Generate 3 different practical recipes using the ingredients provided.
 
 Ingredients on hand: ${ingredients.join(', ')}
 Servings target: ${servings}
-${cuisineLine}${dietaryLine}${skillLine}
+${kitchenLine}${cuisineLine}${dietaryLine}${skillLine}
 Rules:
 - Prioritise recipes that use the MOST of the listed ingredients (to reduce waste).
 - Recipes must be REALISTIC and cookable — no obscure techniques or rare equipment.
@@ -2144,6 +2154,7 @@ export async function POST(request, { params }) {
           cuisine: String(body.cuisine || '').slice(0, 40),
           dietary: Array.isArray(body.dietary) ? body.dietary.slice(0, 8) : [],
           skillLevel: ['easy','medium','hard'].includes(body.skillLevel) ? body.skillLevel : 'easy',
+          kitchenType: String(body.kitchenType || '').slice(0, 60),
         }
         const parsed = await generateRecipesFromIngredients(opts)
         return json(parsed)

@@ -124,7 +124,149 @@ export function UseTodayPanel({ products, goToInventory, formatDate }) {
   )
 }
 
-export function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, openReceipt, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes, currency, openRecipeGen, openRecipeGenFromExpiring, openEdit }) {
+// ============================================================================
+// USE IT OR LOSE IT — top-of-dashboard panel (requested feature):
+// 1) groceries expiring within 2 days, ascending by expiry date
+// 2) one-tap kitchen-type-aware AI recipe suggestions from those items
+// 3) money-saved tracking: marking items "used" before expiry banks their
+//    invoice value (unitCost × qty) and celebrates the saving.
+// ============================================================================
+export function UseItOrLoseItPanel({ products, currency, openRecipeGenFromExpiring, refreshAll }) {
+  const [busyId, setBusyId] = useState(null)
+  const [savedTotal, setSavedTotal] = useState(0)
+  const sym = CURRENCY_SYMBOL[currency] || '£'
+
+  // device-local running total of money saved this month
+  const monthKey = () => `sw_savings_${new Date().getFullYear()}-${new Date().getMonth() + 1}`
+  useEffect(() => {
+    try { setSavedTotal(Number(localStorage.getItem(monthKey())) || 0) } catch {}
+  }, [])
+  const bankSaving = (amount) => {
+    try {
+      const next = (Number(localStorage.getItem(monthKey())) || 0) + amount
+      localStorage.setItem(monthKey(), String(next))
+      setSavedTotal(next)
+    } catch {}
+  }
+
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  const inTwoDays = new Date(today); inTwoDays.setDate(inTwoDays.getDate() + 2)
+
+  // Items expiring today..+2 days, ASCENDING by expiry (soonest first)
+  const expiring = useMemo(() => {
+    return (products || [])
+      .filter(p => {
+        if (!p.expiryDate) return false
+        const d = new Date(`${String(p.expiryDate).slice(0, 10)}T12:00:00`)
+        return d >= today && d <= inTwoDays && Number(p.quantity) > 0
+      })
+      .sort((a, b) => String(a.expiryDate).localeCompare(String(b.expiryDate)))
+  }, [products])
+
+  const valueOf = (p) => (Number(p.unitCost) || 0) * (Number(p.quantity) || 0)
+  const atRisk = expiring.reduce((s, p) => s + valueOf(p), 0)
+
+  const daysLabel = (p) => {
+    const d = new Date(`${String(p.expiryDate).slice(0, 10)}T12:00:00`)
+    const diff = Math.round((d - today) / 86400000)
+    if (diff <= 0) return { text: 'TODAY', cls: 'bg-red-600 text-white' }
+    if (diff === 1) return { text: 'Tomorrow', cls: 'bg-orange-500 text-white' }
+    return { text: 'In 2 days', cls: 'bg-amber-400 text-amber-950' }
+  }
+
+  const markUsed = async (p) => {
+    const val = valueOf(p)
+    if (!window.confirm(`Mark ALL ${p.quantity} ${p.unit} of "${p.name}" as used in cooking?`)) return
+    setBusyId(p.id)
+    try {
+      const res = await fetch('/api/usage/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: [{ id: p.id, used: Number(p.quantity) }] }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not update stock')
+      if (val > 0) {
+        bankSaving(val)
+        toast.success(`🎉 You saved ${sym}${val.toFixed(2)} by cooking "${p.name}" before it expired!`, { duration: 6000 })
+      } else {
+        toast.success(`"${p.name}" marked as used — nice work beating the expiry date! (add a unit cost to track savings)`)
+      }
+      refreshAll && refreshAll()
+    } catch (e) {
+      toast.error(e.message || 'Could not update stock')
+    } finally { setBusyId(null) }
+  }
+
+  if (expiring.length === 0) {
+    return (
+      <div className="rounded-2xl border-2 border-emerald-200 bg-emerald-50/60 p-4 flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-3">
+          <span className="text-2xl">✅</span>
+          <div>
+            <p className="font-semibold text-emerald-800">Nothing expiring in the next 2 days</p>
+            <p className="text-xs text-emerald-700">Your stock is under control.</p>
+          </div>
+        </div>
+        {savedTotal > 0 && (
+          <Badge className="bg-emerald-600 text-white hover:bg-emerald-600 text-sm px-3 py-1">💰 Saved this month: {sym}{savedTotal.toFixed(2)}</Badge>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-2xl border-2 border-orange-200 bg-gradient-to-br from-orange-50 to-amber-50/60 overflow-hidden">
+      {/* Header */}
+      <div className="px-4 sm:px-5 py-3.5 flex items-center justify-between flex-wrap gap-2 border-b border-orange-200/70">
+        <div className="flex items-center gap-2.5">
+          <span className="text-2xl">⏳</span>
+          <div>
+            <p className="font-bold text-orange-900">Use It or Lose It — {expiring.length} item{expiring.length !== 1 ? 's' : ''} expiring within 2 days</p>
+            <p className="text-xs text-orange-800">
+              {atRisk > 0 ? <><b>{sym}{atRisk.toFixed(2)}</b> of stock at risk — cook it before it becomes waste.</> : 'Cook these before they become waste.'}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {savedTotal > 0 && (
+            <Badge className="bg-emerald-600 text-white hover:bg-emerald-600">💰 Saved this month: {sym}{savedTotal.toFixed(2)}</Badge>
+          )}
+          <Button size="sm" onClick={openRecipeGenFromExpiring} className="bg-rose-600 hover:bg-rose-700 text-white">
+            <Sparkles className="h-4 w-4 mr-1.5" /> Get Recipe Ideas
+          </Button>
+        </div>
+      </div>
+      {/* Ascending expiry list */}
+      <div className="divide-y divide-orange-100">
+        {expiring.slice(0, 8).map(p => {
+          const badge = daysLabel(p)
+          const val = valueOf(p)
+          return (
+            <div key={p.id} className="flex items-center gap-3 px-4 sm:px-5 py-2.5 bg-white/60">
+              <span className={`text-[10px] font-bold rounded px-2 py-0.5 shrink-0 ${badge.cls}`}>{badge.text}</span>
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-sm truncate">{p.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {p.quantity} {p.unit}{val > 0 && <> · worth <b className="text-orange-800">{sym}{val.toFixed(2)}</b></>} · expires {new Date(`${String(p.expiryDate).slice(0, 10)}T12:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                </p>
+              </div>
+              <Button variant="outline" size="sm" className="shrink-0 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                disabled={busyId === p.id} onClick={() => markUsed(p)}>
+                {busyId === p.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Check className="h-3.5 w-3.5 mr-1" /> Cooked it</>}
+              </Button>
+            </div>
+          )
+        })}
+        {expiring.length > 8 && (
+          <p className="px-5 py-2 text-xs text-orange-800 bg-white/60">+ {expiring.length - 8} more — see Inventory → Expiring</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, openReceipt, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes, currency, openRecipeGen, openRecipeGenFromExpiring, openEdit, refreshAll }) {
   const [quickSearch, setQuickSearch] = useState('')
   const [globalResults, setGlobalResults] = useState(null)
   const [globalLoading, setGlobalLoading] = useState(false)
@@ -173,6 +315,10 @@ export function DashboardView({ stats, products, goToInventory, seedData, openAd
 
   return (
     <div className="space-y-6">
+      {/* 1) FIRST: groceries expiring in the next 2 days (ascending) + recipe
+          ideas + money-saved tracking — per user request this sits at the top. */}
+      <UseItOrLoseItPanel products={products} currency={currency} openRecipeGenFromExpiring={openRecipeGenFromExpiring} refreshAll={refreshAll} />
+
       {/* Hero header — gradient card with greeting + quick stats + primary actions */}
       <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-500 via-emerald-600 to-teal-700 text-white p-6 md:p-8 shadow-lg">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_100%_0%,rgba(255,255,255,0.15)_0%,transparent_50%)]" />

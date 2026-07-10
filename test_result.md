@@ -109,6 +109,32 @@ user_problem_statement: |
   with onboarding wizard + custom fields.
 
 backend:
+  - task: "Use It or Lose It dashboard panel + kitchen-type-aware recipes + HACCP timezone fix"
+    implemented: true
+    working: true
+    file: "components/shelfwise/dashboard.jsx, recipes.jsx, haccp.jsx, route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            1) BUG FIX (P0): HACCP logbook showed 10 Jul readings under 11 Jul.
+               Root cause: grid day-columns keyed via toISOString() on LOCAL midnight
+               Dates (shifts a day in any non-UTC tz). Readings are stored as wall-clock
+               strings ("...T17:00:00Z"). Fixed: columns now use localDateKey() (local
+               calendar parts), readings parsed straight from the string (slice), list
+               view shows wall-clock time. Never reintroduce toISOString for day keys.
+            2) NEW: UseItOrLoseItPanel at TOP of dashboard: items expiring <=2 days
+               ascending, at-risk value (unitCost x qty), "Get Recipe Ideas" button,
+               per-item "Cooked it" -> POST /api/usage/apply full qty -> savings toast
+               "You saved £X" + month total persisted in localStorage (device-local).
+            3) NEW: recipe/generate accepts kitchenType — Hospital/Care -> healthy
+               patient-friendly prompts (verified: steamed/poached recipes returned);
+               School -> child-friendly; Restaurant/Cafe -> menu-worthy + cuisine theme.
+               RecipeGenDialog passes settings.kitchenType automatically.
+
   - task: "End-of-Shift Usage Log (scan sheet + apply deductions)"
     implemented: true
     working: true
