@@ -231,11 +231,6 @@ export function DashboardView({ stats, products, goToInventory, seedData, openAd
           <span className="text-2xl">📒</span>
           <span className="text-xs font-semibold">Print Logbook</span>
         </button>
-        <button onClick={openRecipeGenFromExpiring} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-rose-200 bg-rose-50 hover:bg-rose-100 hover:border-rose-300 transition text-rose-800 relative">
-          <span className="text-2xl">🧑‍🍳</span>
-          <span className="text-xs font-semibold">Cook Expiring</span>
-          <span className="absolute top-1 right-1 text-[8px] font-bold bg-rose-600 text-white rounded px-1">AI</span>
-        </button>
       </div>
 
       <UseTodayPanel products={products} goToInventory={goToInventory} formatDate={(d) => new Date(d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} />

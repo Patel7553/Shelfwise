@@ -298,8 +298,8 @@ export function RecipesView({ recipes, search, setSearch, openRecipe, onView, on
               <Sparkles className="h-5 w-5" />
             </div>
             <div>
-              <p className="font-semibold">Cook What's Expiring</p>
-              <p className="text-xs text-muted-foreground">Expiring stock is loaded automatically → AI creates 3 recipes with allergens + timing</p>
+              <p className="font-semibold">Recipe Generator from Stock</p>
+              <p className="text-xs text-muted-foreground">Your expiring stock loads automatically → AI creates 3 recipes with allergens + timing</p>
             </div>
           </div>
         </button>
@@ -760,9 +760,9 @@ ${r.notes ? `<h2>Chef's Note</h2><p>${escapeText(r.notes)}</p>` : ''}
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
       <DialogContent className="sm:max-w-2xl max-h-[92vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">✨ AI Recipe Generator</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">✨ Recipe Generator from Stock</DialogTitle>
           <p className="text-sm text-muted-foreground">
-            Pick ingredients → we suggest 3 recipes. Prioritises using what's expiring first.
+            Your expiring items are loaded first — add or remove ingredients, then we suggest 3 recipes.
           </p>
         </DialogHeader>
 
