@@ -32,6 +32,7 @@ import { SetupWizardV2, SetupWizard, ChefCodeCard, SettingsDialog, LoginGate, No
 import { RotaView, RotaShiftDialog } from '@/components/shelfwise/rota'
 import { AnalyticsView } from '@/components/shelfwise/analytics'
 import { OrdersView } from '@/components/shelfwise/orders'
+import { UsageLogView } from '@/components/shelfwise/usage-log'
 import { QuickCheckDialog, TempLogbookView, HaccpView } from '@/components/shelfwise/haccp'
 
 function getInitialFromURL() {
@@ -1339,6 +1340,11 @@ function App() {
                 <Truck className="h-4 w-4 mr-2" /> Orders
               </Button>
             )}
+            {hasStock && (
+              <Button variant={view === 'usage' ? 'default' : 'ghost'} size="sm" onClick={() => setView('usage')}>
+                <ClipboardCheck className="h-4 w-4 mr-2" /> Shift Log
+              </Button>
+            )}
             {hasRota && (
               <Button variant={view === 'rota' ? 'default' : 'ghost'} size="sm" onClick={() => setView('rota')}>
                 <ChefHat className="h-4 w-4 mr-2" /> {T('nav_rota')}
@@ -1398,6 +1404,11 @@ function App() {
             {hasStock && (
               <Button variant={view === 'orders' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('orders'); setMobileNav(false) }}>
                 <Truck className="h-4 w-4 mr-2" /> Orders
+              </Button>
+            )}
+            {hasStock && (
+              <Button variant={view === 'usage' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('usage'); setMobileNav(false) }}>
+                <ClipboardCheck className="h-4 w-4 mr-2" /> Shift Log
               </Button>
             )}
             {hasRota && (
@@ -1485,6 +1496,9 @@ function App() {
         )}
         {view === 'orders' && (
           <OrdersView />
+        )}
+        {view === 'usage' && (
+          <UsageLogView kitchenName={settings.kitchenName || ''} />
         )}
         {view === 'analytics' && (
           <AnalyticsView products={products} />

@@ -994,6 +994,92 @@ Return ONLY valid JSON, no prose, no markdown fences:
   }
 }
 
+// ---- End-of-Shift Usage Log: count tally marks on a printed usage sheet ----
+// The sheet is PRINTED by the app (item names are machine-printed, row-numbered),
+// staff make tick/cross marks in pre-printed boxes. The AI ONLY counts marked
+// boxes per row — it never tries to read handwritten numbers.
+async function parseUsageSheetPhoto(base64DataUrl) {
+  const key = process.env.EMERGENT_LLM_KEY
+  if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+
+  const systemPrompt = `You are analysing a photo of a printed kitchen "End-of-Shift Usage Log" sheet.
+
+The sheet is a table. Each row contains:
+- a printed row number (leftmost column, like "1", "2", "3"...)
+- a printed item name (with unit in brackets, e.g. "Whole Milk (L)")
+- 15 small square boxes printed in THREE GROUPS OF FIVE, with a clear gap between groups (5 boxes, gap, 5 boxes, gap, 5 boxes)
+
+During the shift, staff made a handwritten mark (tick ✓, cross ✗, slash /, scribble, or filled-in box) inside ONE box for EACH unit of that item they used. Marks always start from the LEFT and are usually consecutive.
+
+YOUR TASK: examine every row, group by group. For each of the three groups of five boxes, look at EACH box ONE BY ONE from left to right, and report the state of every single box.
+
+STRICT RULES:
+- "groups" = an array of EXACTLY three strings, one per group of five boxes, left to right. Each string has EXACTLY five characters: "1" if that box contains a handwritten mark, "0" if it is empty.
+  Example: 7 marks = ["11111", "11000", "00000"]. 3 marks = ["11100", "00000", "00000"]. No marks = ["00000", "00000", "00000"].
+- Examine each box individually — do not guess or estimate totals.
+- A mark = clearly visible handwriting inside or over the box. Shadows, print lines and camera noise are NOT marks.
+- Do NOT read or interpret handwritten digits/numbers anywhere — if a digit is written inside a single box, that is 1 marked box.
+- Include EVERY row you can see, even all-zero rows.
+- confidence: "high" when every box in the row is clearly visible and unambiguous; "low" when the row is blurry, cut off, poorly lit, or any box is ambiguous.
+
+Return ONLY a JSON object (no prose, no markdown):
+{
+  "rows": [
+    { "row": 1, "name": "Whole Milk (L)", "groups": ["11100", "00000", "00000"], "confidence": "high" },
+    { "row": 2, "name": "Chicken Breast (kg)", "groups": ["00000", "00000", "00000"], "confidence": "high" }
+  ]
+}`
+
+  const body = {
+    // Claude is dramatically better than GPT-4o at counting marked boxes
+    // (A/B tested: 7/8 vs 4/8 on a synthetic ticked sheet). Keep Claude here.
+    model: 'claude-sonnet-4-5-20250929',
+    max_tokens: 4000,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: [
+        { type: 'text', text: 'Report the box states for every row on this usage sheet, checking each box one by one. Return ONLY JSON.' },
+        { type: 'image_url', image_url: { url: base64DataUrl } }
+      ]}
+    ],
+    temperature: 0,
+  }
+  const res = await fetch(EMERGENT_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`Emergent LLM ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  const content = data?.choices?.[0]?.message?.content || '{}'
+  let parsed
+  try { parsed = JSON.parse(content) } catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : {} }
+  const rows = Array.isArray(parsed.rows) ? parsed.rows : []
+  return rows.map(r => {
+    // Count derives from the per-box binary groups — far more reliable than
+    // asking the model for a total (LLMs are bad at counting in one shot).
+    const groups = Array.isArray(r?.groups) ? r.groups : [String(r?.boxes || '')]
+    const bits = groups.map(g => String(g || '').replace(/[^01]/g, '')).join('')
+    const count = (bits.match(/1/g) || []).length
+    return {
+      row: Number(r?.row) || null,
+      name: String(r?.name || '').slice(0, 160),
+      count: Math.max(0, Math.min(99, count)),
+      confidence: r?.confidence === 'low' ? 'low' : 'high',
+    }
+  }).filter(r => r.name)
+}
+
+// Normalise a product/sheet name for robust matching (same trick as HACCP scanner)
+function normalizeItemName(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, ' ')   // drop "(unit)" brackets
+    .replace(/[^a-z0-9]+/g, ' ')  // strip punctuation
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 async function generateRecipesFromIngredients({ ingredients, servings = 4, cuisine = '', dietary = [], skillLevel = 'easy' }) {
   const key = process.env.EMERGENT_LLM_KEY
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
@@ -2023,7 +2109,7 @@ export async function POST(request, { params }) {
     }
 
     // -------- AI passthrough (still requires auth, but not kitchen scoping)
-    if (path === 'scan' || path === 'scan-receipt' || path === 'parse-voice' || path === 'recipe-instructions' || path === 'identify-product' || path === 'recipe/generate' || path === 'recipe/web-search' || path === 'haccp/scan-temperatures') {
+    if (path === 'scan' || path === 'scan-receipt' || path === 'parse-voice' || path === 'recipe-instructions' || path === 'identify-product' || path === 'recipe/generate' || path === 'recipe/web-search' || path === 'haccp/scan-temperatures' || path === 'usage/scan-sheet') {
       const { ctx, error } = await requireAuth(request)
       if (error) return error
       const body = await request.json()
@@ -2074,6 +2160,45 @@ export async function POST(request, { params }) {
         }
         const parsed = await searchWebRecipes(opts)
         return json(parsed)
+      }
+
+      // ---- End-of-Shift Usage Log: scan a completed printed usage sheet ----
+      if (path === 'usage/scan-sheet') {
+        if (!body.image || !body.image.startsWith('data:image/')) return json({ error: 'Invalid or missing image' }, 400)
+        // 1) AI counts the tally marks per printed row
+        const rows = await parseUsageSheetPhoto(body.image)
+        // 2) Match each printed row name back to a real product (kitchen-scoped).
+        //    Sheet names are machine-printed by us, so matching is near-exact.
+        let products = []
+        if (ctx.kitchenId) {
+          try {
+            const { data } = await sb.from('products')
+              .select('id,name,quantity,unit')
+              .eq('kitchen_id', ctx.kitchenId)
+              .limit(5000)
+            products = data || []
+          } catch { products = [] }
+        }
+        const byNorm = new Map()
+        for (const p of products) byNorm.set(normalizeItemName(p.name), p)
+        const matched = []
+        const unmatched = []
+        for (const r of rows) {
+          const p = byNorm.get(normalizeItemName(r.name))
+          if (p) {
+            matched.push({
+              productId: p.id,
+              name: p.name,
+              unit: p.unit || '',
+              currentQty: Number(p.quantity) || 0,
+              count: r.count,
+              confidence: r.confidence,
+            })
+          } else {
+            unmatched.push({ name: r.name, count: r.count, confidence: r.confidence })
+          }
+        }
+        return json({ matched, unmatched, rowsScanned: rows.length })
       }
 
       // ---- HACCP: scan a physical temperature log sheet (photo) ----
@@ -2142,11 +2267,43 @@ Output strictly valid JSON with no other text.`
     }
 
     // -------- Kitchen-scoped mutations --------
-    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test'].some(p => path === p)
+    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','usage/apply'].some(p => path === p)
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
       const kid = ctx.kitchenId
+
+      // ------- End-of-Shift Usage Log: apply CONFIRMED deductions to stock -------
+      // Only ever called after the staff member reviews + confirms counts in the UI.
+      if (path === 'usage/apply') {
+        const body = await request.json()
+        const items = (Array.isArray(body.items) ? body.items : [])
+          .filter(i => i && i.id && Number(i.used) > 0)
+          .slice(0, 500)
+          .map(i => ({ id: String(i.id), used: Math.max(0, Math.min(9999, Math.round(Number(i.used)))) }))
+        if (items.length === 0) return json({ error: 'No items with a usage count above 0' }, 400)
+
+        const results = []
+        for (const it of items) {
+          const { data: prod, error: pErr } = await sb.from('products')
+            .select('id,name,quantity,unit')
+            .eq('id', it.id).eq('kitchen_id', kid).maybeSingle()
+          if (pErr || !prod) { results.push({ id: it.id, ok: false, reason: 'not found' }); continue }
+          const from = Number(prod.quantity) || 0
+          const to = Math.max(0, from - it.used)
+          const { error: uErr } = await sb.from('products')
+            .update({ quantity: to })
+            .eq('id', it.id).eq('kitchen_id', kid)
+          results.push({ id: it.id, name: prod.name, unit: prod.unit || '', ok: !uErr, from, used: it.used, to })
+        }
+        const applied = results.filter(r => r.ok)
+        return json({
+          ok: true,
+          applied: applied.length,
+          failed: results.length - applied.length,
+          results,
+        })
+      }
 
       // ------- Web Push: save this device's subscription -------
       if (path === 'push/subscribe') {
