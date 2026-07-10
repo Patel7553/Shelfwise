@@ -109,6 +109,47 @@ user_problem_statement: |
   with onboarding wizard + custom fields.
 
 backend:
+  - task: "AI Recipe Web Search (POST /api/recipe/web-search)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            NEW FEATURE (this session): POST /api/recipe/web-search
+            Body: { query: "dish name", servings?: number (1-20, default 4) }
+            Auth: requires Bearer token (Supabase owner token OR chef JWT signed with SHELFWISE_JWT_SECRET).
+            Uses gpt-4o-mini via EMERGENT_LLM_KEY to return the 3 best-known web recipes for the dish.
+            Response: { recipes: [{ title, description, source, style, servings, prepMinutes, cookMinutes,
+                        difficulty, cuisine, allergens[], ingredients[{name, quantity(number), unit}], steps[], notes }] }
+            All ingredient quantities sanitised to numbers server-side for client scaling (1x-5x).
+            Main agent smoke-tested locally with chef JWT: 200 OK, 3 recipes, valid shape, numeric quantities.
+            NOTE: Supabase env vars NOT configured locally — auth only testable via chef JWT
+            (SHELFWISE_JWT_SECRET=local-dev-secret-shelfwise-2026 added to /app/.env for local dev testing).
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ AI Recipe Web Search endpoint fully tested and working (5/5 tests passed):
+            - Test 1: POST without auth header → 401 "Not authenticated" ✓
+            - Test 2: POST with valid JWT but empty body {} → 400 "query (dish name) required" ✓
+            - Test 3: POST with valid JWT + {"query": "Spaghetti Carbonara", "servings": 4} → 200 with 3 recipes ✓
+              * All recipes have correct structure: title, source, style, servings=4, prepMinutes, cookMinutes, difficulty, cuisine
+              * Allergens array contains lowercase strings (eggs, dairy, gluten for carbonara) ✓
+              * Ingredients array: all quantities are numeric type (not strings) ✓
+              * Steps array: non-empty strings ✓
+              * Recipes from known sources: BBC Good Food, Jamie Oliver, Serious Eats ✓
+            - Test 4: POST with valid JWT + {"query": "Butter Chicken", "servings": 2} → 200, all recipes have servings=2 ✓
+            - Test 5: POST with valid JWT + {"query": ""} → 400 "query (dish name) required" ✓
+            
+            Authentication: Chef JWT generated locally using SHELFWISE_JWT_SECRET works correctly.
+            LLM Integration: gpt-4o-mini calls via EMERGENT_LLM_KEY working (20-30s response time).
+            Data Validation: All ingredient quantities correctly sanitized to numeric type for client-side scaling.
+            Test file: /app/test_recipe_web_search.py (can be re-run anytime).
+
   - task: "Products CRUD + filtering"
     implemented: true
     working: true
@@ -302,7 +343,7 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 1
+  test_sequence: 2
   run_ui: false
 
 test_plan:
@@ -312,6 +353,17 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+    - agent: "main"
+      message: |
+        NEW SESSION (June 2025): Added AI Recipe Web Search feature.
+        Backend: POST /api/recipe/web-search { query, servings? } → { recipes: [3 best web recipes] }.
+        Frontend: New "Search Web Recipes" tab in RecipesView with allergen badges, 1x-5x scaling, save-to-collection.
+        IMPORTANT TESTING CONSTRAINTS:
+        - Supabase env vars are NOT configured locally, so owner login/signup CANNOT be tested locally.
+        - To authenticate locally, mint a chef JWT:
+          node -e "console.log(require('/app/node_modules/jsonwebtoken').sign({kitchen_id:'test-kitchen',role:'chef'},'local-dev-secret-shelfwise-2026',{expiresIn:'1h'}))"
+          and send it as Authorization: Bearer <token>.
+        - Test ONLY the new endpoint (recipe/web-search) + auth rejection. Do NOT test Supabase-dependent endpoints locally (they will 401/500 — this is expected, not a bug).
     - agent: "main"
       message: |
         Backend implementation is complete across 4 phases. Please run a comprehensive backend test pass.
@@ -372,6 +424,35 @@ agent_communication:
         **Test file:** /app/backend_test.py (can be re-run anytime)
         
         No critical issues found. Backend is production-ready.
+    
+    - agent: "testing"
+      message: |
+        ✅ NEW FEATURE TESTING COMPLETE - AI Recipe Web Search (5/5 tests passed)
+        
+        Tested POST /api/recipe/web-search endpoint as per review_request:
+        
+        **Test Results:**
+        1. ✅ Authentication: No auth header → 401 "Not authenticated"
+        2. ✅ Validation: Empty body → 400 "query (dish name) required"
+        3. ✅ Valid request (Spaghetti Carbonara, servings=4):
+           - Returns 200 with 3 recipes from known sources (BBC Good Food, Jamie Oliver, Serious Eats)
+           - All recipes have correct structure and required fields
+           - Allergens array contains lowercase strings (eggs, dairy, gluten)
+           - ALL ingredient quantities are numeric type (not strings) ✓
+           - Steps array non-empty with string values
+           - Servings correctly set to 4
+        4. ✅ Servings parameter: Butter Chicken with servings=2 → all recipes have servings=2
+        5. ✅ Empty query validation: Empty string → 400 error
+        
+        **Key Validations:**
+        - Chef JWT authentication working correctly (SHELFWISE_JWT_SECRET)
+        - LLM integration via EMERGENT_LLM_KEY working (gpt-4o-mini, 20-30s response time)
+        - Ingredient quantity sanitization to numeric type working perfectly
+        - Error handling (401, 400) working as expected
+        
+        **Test file:** /app/test_recipe_web_search.py
+        
+        No issues found. Endpoint is production-ready.
 
 
 ---

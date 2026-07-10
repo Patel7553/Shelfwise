@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
@@ -1536,6 +1536,7 @@ function App() {
             onView={setViewRecipe}
             onDelete={deleteRecipe}
             openRecipeGen={openRecipeGen}
+            onSaved={fetchRecipes}
           />
         )}
         {view === 'rota' && (
@@ -4220,18 +4221,47 @@ function RecipeResult({ result, setResult, onBack, onClose, goToInventory, onSav
   )
 }
 
-function RecipesView({ recipes, search, setSearch, openRecipe, onView, onDelete, openRecipeGen }) {
-  const [tab, setTab] = useState('saved') // 'saved' | 'scan'
+function RecipesView({ recipes, search, setSearch, openRecipe, onView, onDelete, openRecipeGen, onSaved }) {
+  const [tab, setTab] = useState('saved') // 'saved' | 'scan' | 'websearch'
+  // Web recipe search state
+  const [webQuery, setWebQuery] = useState('')
+  const [webServings, setWebServings] = useState(4)
+  const [webLoading, setWebLoading] = useState(false)
+  const [webResults, setWebResults] = useState([])
+  const [webSearched, setWebSearched] = useState(false)
+
+  const runWebSearch = async () => {
+    const q = webQuery.trim()
+    if (!q) { toast.error('Type a dish name first, e.g. "Chicken Tikka Masala"'); return }
+    setWebLoading(true)
+    setWebResults([])
+    try {
+      const res = await fetch('/api/recipe/web-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: q, servings: webServings })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Search failed — try again')
+      const list = Array.isArray(data.recipes) ? data.recipes : []
+      if (list.length === 0) throw new Error('No recipes found — try a different dish name')
+      setWebResults(list)
+      setWebSearched(true)
+      toast.success(`Found ${list.length} top recipes for "${q}"`)
+    } catch (e) {
+      toast.error(e.message || 'Search failed')
+    } finally { setWebLoading(false) }
+  }
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-3xl font-bold tracking-tight">Recipes</h2>
-        <p className="text-muted-foreground mt-1">Browse saved recipes, scan an existing one, or generate a new one from ingredients with AI</p>
+        <p className="text-muted-foreground mt-1">Browse saved recipes, search the web's best recipes, scan an existing one, or generate from ingredients with AI</p>
       </div>
 
-      {/* Three-tab toggle */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      {/* Four-tab toggle */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
         <button onClick={() => setTab('saved')}
           className={`text-left rounded-xl border-2 p-5 transition ${tab === 'saved' ? 'border-purple-500 bg-purple-50' : 'border-slate-200 hover:border-purple-300 bg-white'}`}>
           <div className="flex items-center gap-3">
@@ -4241,6 +4271,19 @@ function RecipesView({ recipes, search, setSearch, openRecipe, onView, onDelete,
             <div>
               <p className="font-semibold">Saved Recipes</p>
               <p className="text-xs text-muted-foreground">{recipes.length} recipe{recipes.length !== 1 ? 's' : ''} in your collection</p>
+            </div>
+          </div>
+        </button>
+        <button onClick={() => setTab('websearch')}
+          className={`text-left rounded-xl border-2 p-5 transition relative ${tab === 'websearch' ? 'border-sky-500 bg-sky-50' : 'border-sky-200 hover:border-sky-400 bg-sky-50/40'}`}>
+          <span className="absolute top-2 right-2 text-[9px] font-bold bg-sky-600 text-white rounded px-1.5 py-0.5">NEW</span>
+          <div className="flex items-center gap-3">
+            <div className={`h-11 w-11 rounded-lg flex items-center justify-center ${tab === 'websearch' ? 'bg-sky-600 text-white' : 'bg-sky-100 text-sky-600'}`}>
+              <Globe className="h-5 w-5" />
+            </div>
+            <div>
+              <p className="font-semibold">Search Web Recipes</p>
+              <p className="text-xs text-muted-foreground">Type a dish → get the 3 best recipes with allergens + scaling</p>
             </div>
           </div>
         </button>
@@ -4270,6 +4313,71 @@ function RecipesView({ recipes, search, setSearch, openRecipe, onView, onDelete,
           </div>
         </button>
       </div>
+
+      {tab === 'websearch' && (
+        <Card className="border-0 shadow-sm">
+          <CardContent className="pt-6 space-y-5">
+            {/* Search bar */}
+            <div className="flex flex-col sm:flex-row gap-2">
+              <div className="relative flex-1">
+                <Globe className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-sky-500" />
+                <Input
+                  className="pl-9"
+                  placeholder='Type any dish name... e.g. "Chicken Tikka Masala", "Carbonara", "Butter Chicken"'
+                  value={webQuery}
+                  onChange={e => setWebQuery(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !webLoading) runWebSearch() }}
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Label className="text-xs text-muted-foreground whitespace-nowrap">Serves</Label>
+                  <Input type="number" min="1" max="20" className="w-16" value={webServings}
+                    onChange={e => setWebServings(Math.max(1, Math.min(20, Number(e.target.value) || 4)))} />
+                </div>
+                <Button onClick={runWebSearch} disabled={webLoading} className="bg-sky-600 hover:bg-sky-700 text-white">
+                  {webLoading ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Search className="h-4 w-4 mr-1.5" />}
+                  {webLoading ? 'Searching...' : 'Find Best Recipes'}
+                </Button>
+              </div>
+            </div>
+
+            {/* Loading state */}
+            {webLoading && (
+              <div className="text-center py-14">
+                <Loader2 className="h-10 w-10 mx-auto mb-3 animate-spin text-sky-500" />
+                <p className="font-medium">Searching the web's best recipe sites...</p>
+                <p className="text-sm text-muted-foreground mt-1">Comparing versions from BBC Good Food, Serious Eats, AllRecipes & more</p>
+              </div>
+            )}
+
+            {/* Empty / hint state */}
+            {!webLoading && webResults.length === 0 && (
+              <div className="text-center py-14 text-muted-foreground">
+                <Globe className="h-12 w-12 mx-auto mb-3 opacity-30" />
+                <p className="font-medium">{webSearched ? 'No results — try another dish name' : 'Search any dish'}</p>
+                <p className="text-sm mt-1">We'll find the 3 best versions from trusted cooking sites — with allergen warnings and 1x-5x scaling.</p>
+                <div className="flex flex-wrap justify-center gap-2 mt-4">
+                  {['Chicken Tikka Masala', 'Spaghetti Carbonara', 'Beef Wellington', 'Pad Thai'].map(s => (
+                    <button key={s} onClick={() => { setWebQuery(s) }} className="px-3 py-1.5 rounded-full border border-sky-200 bg-sky-50 text-sky-700 text-xs font-medium hover:bg-sky-100 transition">
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Results */}
+            {!webLoading && webResults.length > 0 && (
+              <div className="space-y-4">
+                {webResults.map((r, idx) => (
+                  <WebRecipeCard key={idx} recipe={r} onSaved={onSaved} />
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {tab === 'saved' && (
         <Card className="border-0 shadow-sm">
@@ -4316,6 +4424,153 @@ function RecipesView({ recipes, search, setSearch, openRecipe, onView, onDelete,
           </CardContent>
         </Card>
       )}
+    </div>
+  )
+}
+
+function WebRecipeCard({ recipe: r, onSaved }) {
+  const [scale, setScale] = useState(1)
+  const [showSteps, setShowSteps] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  const scaleQty = (q) => {
+    const n = Number(q) || 0
+    const scaled = n * scale
+    return Number.isInteger(scaled) ? scaled : Math.round(scaled * 100) / 100
+  }
+
+  const saveRecipe = async () => {
+    setSaving(true)
+    try {
+      const res = await fetch('/api/recipes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: r.title,
+          servings: `Serves ${r.servings || 4}`,
+          ingredients: (r.ingredients || []).map(i => ({ name: i.name, quantity: i.quantity, unit: i.unit })),
+          allergens: r.allergens || [],
+          steps: r.steps || [],
+          summary: {
+            source: r.source || '',
+            style: r.style || '',
+            description: r.description || '',
+            prepMinutes: r.prepMinutes || 0,
+            cookMinutes: r.cookMinutes || 0,
+            cuisine: r.cuisine || '',
+            difficulty: r.difficulty || '',
+            notes: r.notes || '',
+          }
+        })
+      })
+      if (!res.ok) throw new Error('Save failed')
+      setSaved(true)
+      toast.success(`"${r.title}" saved to your collection`)
+      onSaved && onSaved()
+    } catch (e) {
+      toast.error(e.message || 'Failed to save recipe')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="rounded-xl border-2 border-sky-100 bg-white overflow-hidden">
+      {/* Header */}
+      <div className="p-4 sm:p-5 bg-gradient-to-r from-sky-50 to-white border-b border-sky-100">
+        <div className="flex flex-wrap items-center gap-2 mb-1.5">
+          {r.style && <Badge className="bg-sky-600 text-white hover:bg-sky-600 text-[10px]">{r.style}</Badge>}
+          {r.source && (
+            <Badge variant="outline" className="border-sky-300 text-sky-700 bg-sky-50 text-[10px]">
+              <Globe className="h-3 w-3 mr-1" /> Inspired by {r.source}
+            </Badge>
+          )}
+        </div>
+        <h3 className="text-lg font-bold leading-tight">{r.title}</h3>
+        {r.description && <p className="text-sm text-muted-foreground mt-0.5">{r.description}</p>}
+        <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-1"><Clock className="h-3.5 w-3.5" /> Prep {r.prepMinutes || 0} min</span>
+          <span className="inline-flex items-center gap-1"><ChefHat className="h-3.5 w-3.5" /> Cook {r.cookMinutes || 0} min</span>
+          {r.difficulty && <span className="capitalize inline-flex items-center gap-1"><BarChart3 className="h-3.5 w-3.5" /> {r.difficulty}</span>}
+          {r.cuisine && <span>{r.cuisine}</span>}
+        </div>
+      </div>
+
+      <div className="p-4 sm:p-5 space-y-4">
+        {/* Allergens */}
+        {Array.isArray(r.allergens) && r.allergens.length > 0 ? (
+          <div className="rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="h-5 w-5 text-amber-700 shrink-0" />
+              <p className="text-xs font-bold text-amber-900 uppercase tracking-wider">Contains Allergens</p>
+            </div>
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {r.allergens.map(a => (
+                <span key={a} className="px-2.5 py-0.5 rounded-full bg-amber-200 text-amber-900 text-xs font-semibold capitalize border border-amber-400">{a}</span>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 flex items-center gap-2">
+            <ShieldCheck className="h-5 w-5 text-emerald-600 shrink-0" />
+            <p className="text-xs font-semibold text-emerald-800">No major allergens detected (always double-check labels)</p>
+          </div>
+        )}
+
+        {/* Scale toggle */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Scale recipe</span>
+          {[1, 2, 3, 4, 5].map(n => (
+            <button key={n} onClick={() => setScale(n)}
+              className={`px-3 py-1 rounded-full text-sm font-bold transition border-2 ${scale === n ? 'bg-sky-600 text-white border-sky-600' : 'bg-white text-slate-600 border-slate-200 hover:border-sky-400'}`}>
+              {n}x
+            </button>
+          ))}
+          <span className="text-xs text-muted-foreground ml-1">= serves {(Number(r.servings) || 4) * scale}</span>
+        </div>
+
+        {/* Ingredients */}
+        <div>
+          <p className="text-sm font-bold mb-2">Ingredients {scale > 1 && <span className="text-sky-600">(scaled {scale}x)</span>}</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5">
+            {(r.ingredients || []).map((i, idx) => (
+              <div key={idx} className="flex items-baseline gap-2 text-sm">
+                <span className="font-semibold text-sky-700 whitespace-nowrap">{scaleQty(i.quantity) || ''} {i.unit || ''}</span>
+                <span className="text-slate-700">{i.name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Steps (collapsible) */}
+        <div>
+          <button onClick={() => setShowSteps(s => !s)} className="text-sm font-bold text-sky-700 hover:text-sky-900 inline-flex items-center gap-1">
+            {showSteps ? 'Hide method' : `Show method (${(r.steps || []).length} steps)`}
+            <ArrowRight className={`h-3.5 w-3.5 transition-transform ${showSteps ? 'rotate-90' : ''}`} />
+          </button>
+          {showSteps && (
+            <ol className="mt-2 space-y-2">
+              {(r.steps || []).map((s, idx) => (
+                <li key={idx} className="flex gap-2.5 text-sm">
+                  <span className="h-5 w-5 rounded-full bg-sky-100 text-sky-700 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">{idx + 1}</span>
+                  <span className="text-slate-700">{String(s).replace(/^\d+\.\s*/, '')}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+          {showSteps && r.notes && (
+            <p className="mt-3 text-xs text-muted-foreground italic border-l-2 border-sky-200 pl-3">💡 {r.notes}</p>
+          )}
+        </div>
+
+        {/* Actions */}
+        <div className="flex justify-end pt-1">
+          <Button onClick={saveRecipe} disabled={saving || saved}
+            className={saved ? 'bg-emerald-600 hover:bg-emerald-600 text-white' : 'bg-sky-600 hover:bg-sky-700 text-white'}>
+            {saving ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : saved ? <Check className="h-4 w-4 mr-1.5" /> : <BookOpen className="h-4 w-4 mr-1.5" />}
+            {saved ? 'Saved to Collection' : 'Save Recipe'}
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }

@@ -959,6 +959,87 @@ Output STRICT JSON. No trailing commas.`
   return { recipes: recipes.slice(0, 5) }
 }
 
+// ---- Web Recipe Search: find the best-known recipes for a dish name ----
+async function searchWebRecipes({ query, servings = 4, dietary = [] }) {
+  const key = process.env.EMERGENT_LLM_KEY
+  if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+  const dietaryLine = Array.isArray(dietary) && dietary.length ? `Dietary requirements: ${dietary.join(', ')}.\n` : ''
+
+  const systemPrompt = `You are a world-class culinary researcher with encyclopedic knowledge of the most popular and highly-rated recipes published on the web's best cooking sites (BBC Good Food, Serious Eats, AllRecipes, Jamie Oliver, RecipeTin Eats, NYT Cooking, Bon Appétit, Delia Online, etc.).
+
+The user will give you a dish name. Return the 3 BEST, most trusted and popular versions of that dish — each in a distinctly different style (e.g. classic/traditional, quick/easy, restaurant-quality).
+
+${dietaryLine}Rules:
+- Base servings for every recipe MUST be exactly ${servings}. All ingredient quantities are for ${servings} servings.
+- Every ingredient quantity MUST be a plain NUMBER (decimals allowed) so the app can scale it (1x, 2x, 3x). Never write "1-2" or "a pinch" as quantity — use a number and put nuance in the name (e.g. quantity 0.5, unit "tsp", name "Chilli flakes (to taste)").
+- "source" = the well-known website or chef whose popular version this recipe is faithful to (e.g. "BBC Good Food", "Serious Eats", "Jamie Oliver"). Never invent obscure sources.
+- "style" = 2-4 word label like "Classic Traditional", "Quick 30-Minute", "Restaurant Quality".
+- Detect allergens using the UK/EU Natasha's Law 14 list: gluten, crustaceans, eggs, fish, peanuts, soy, dairy, nuts, celery, mustard, sesame, sulphites, lupin, molluscs.
+- 5-12 numbered cooking steps, each 12-30 words, mention temperatures, times, and pans/tools.
+- Recipes must be authentic and realistic — exactly how the trusted source would make them.
+
+Return ONLY a JSON object of this shape (no prose, no markdown):
+{
+  "recipes": [
+    {
+      "title": "Dish name (source's version)",
+      "description": "1-sentence enticing description",
+      "source": "BBC Good Food",
+      "style": "Classic Traditional",
+      "servings": ${servings},
+      "prepMinutes": number,
+      "cookMinutes": number,
+      "difficulty": "easy" | "medium" | "hard",
+      "cuisine": "cuisine type",
+      "allergens": ["gluten","dairy"],
+      "ingredients": [
+        { "name": "Chicken breast", "quantity": 400, "unit": "g" },
+        { "name": "Double cream", "quantity": 150, "unit": "mL" }
+      ],
+      "steps": ["1. Preheat oven to 200°C...", "2. ..."],
+      "notes": "Optional serving suggestion or substitution tip"
+    }
+  ]
+}
+
+Output STRICT JSON. No trailing commas.`
+
+  const body = {
+    model: 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: `Find the 3 best recipes from top cooking websites for: "${query}". Return JSON.` }
+    ],
+    temperature: 0.4,
+    response_format: { type: 'json_object' },
+  }
+  const res = await fetch(EMERGENT_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`Emergent LLM ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  const content = data?.choices?.[0]?.message?.content || '{}'
+  let parsed
+  try { parsed = JSON.parse(content) } catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : {} }
+  const recipes = Array.isArray(parsed.recipes) ? parsed.recipes : []
+  // Sanitise: guarantee numeric quantities so client-side scaling never breaks
+  for (const r of recipes) {
+    if (Array.isArray(r.ingredients)) {
+      r.ingredients = r.ingredients.map(i => ({
+        name: String(i?.name || '').slice(0, 120),
+        quantity: Number(i?.quantity) || 0,
+        unit: String(i?.unit || '').slice(0, 20),
+      }))
+    } else r.ingredients = []
+    r.allergens = Array.isArray(r.allergens) ? r.allergens.map(a => String(a).toLowerCase()) : []
+    r.steps = Array.isArray(r.steps) ? r.steps.map(s => String(s)) : []
+    r.servings = Number(r.servings) || servings
+  }
+  return { recipes: recipes.slice(0, 3) }
+}
+
 
 async function scanRecipe({ image, text }) {
   const key = process.env.EMERGENT_LLM_KEY
@@ -1713,7 +1794,7 @@ export async function POST(request, { params }) {
     }
 
     // -------- AI passthrough (still requires auth, but not kitchen scoping)
-    if (path === 'scan' || path === 'scan-receipt' || path === 'parse-voice' || path === 'recipe-instructions' || path === 'identify-product' || path === 'recipe/generate' || path === 'haccp/scan-temperatures') {
+    if (path === 'scan' || path === 'scan-receipt' || path === 'parse-voice' || path === 'recipe-instructions' || path === 'identify-product' || path === 'recipe/generate' || path === 'recipe/web-search' || path === 'haccp/scan-temperatures') {
       const { ctx, error } = await requireAuth(request)
       if (error) return error
       const body = await request.json()
@@ -1750,6 +1831,19 @@ export async function POST(request, { params }) {
           skillLevel: ['easy','medium','hard'].includes(body.skillLevel) ? body.skillLevel : 'easy',
         }
         const parsed = await generateRecipesFromIngredients(opts)
+        return json(parsed)
+      }
+
+      // ---- Web Recipe Search: type a dish name, get the 3 best recipes ----
+      if (path === 'recipe/web-search') {
+        const query = String(body.query || '').trim().slice(0, 120)
+        if (!query) return json({ error: 'query (dish name) required' }, 400)
+        const opts = {
+          query,
+          servings: Math.max(1, Math.min(20, Number(body.servings) || 4)),
+          dietary: Array.isArray(body.dietary) ? body.dietary.slice(0, 8) : [],
+        }
+        const parsed = await searchWebRecipes(opts)
         return json(parsed)
       }
 
