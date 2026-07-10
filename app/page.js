@@ -60,7 +60,7 @@ function ThemeToggle() { return null }
 function App() {
   const T = useT()  // language-aware translator — re-renders whole app when user changes language
   // Deploy version marker — helps us verify a deploy actually shipped. Change this string each release.
-  const BUILD_VERSION = 'v16-widget-persist-fix-2026-07-08'
+  const BUILD_VERSION = 'v17-useitorloseit-haccpdatefix-2026-07-11'
   useEffect(() => { try { console.log('%cShelfWise build:', 'color:#059669;font-weight:700', BUILD_VERSION) } catch (_) {} }, [])
   // Register the service worker (Web Push + PWA). Safe no-op if unsupported.
   useEffect(() => {
