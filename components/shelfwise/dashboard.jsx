@@ -150,15 +150,19 @@ export function UseItOrLoseItPanel({ products, currency, openRecipeGenFromExpiri
   }
 
   const today = new Date(); today.setHours(0, 0, 0, 0)
-  const inTwoDays = new Date(today); inTwoDays.setDate(inTwoDays.getDate() + 2)
+  // Calendar-day difference (0 = today, 1 = tomorrow, 2 = in 2 days)
+  const daysUntil = (p) => {
+    const dMid = new Date(`${String(p.expiryDate).slice(0, 10)}T00:00:00`)
+    return Math.round((dMid - today) / 86400000)
+  }
 
   // Items expiring today..+2 days, ASCENDING by expiry (soonest first)
   const expiring = useMemo(() => {
     return (products || [])
       .filter(p => {
-        if (!p.expiryDate) return false
-        const d = new Date(`${String(p.expiryDate).slice(0, 10)}T12:00:00`)
-        return d >= today && d <= inTwoDays && Number(p.quantity) > 0
+        if (!p.expiryDate || Number(p.quantity) <= 0) return false
+        const diff = daysUntil(p)
+        return diff >= 0 && diff <= 2
       })
       .sort((a, b) => String(a.expiryDate).localeCompare(String(b.expiryDate)))
   }, [products])
@@ -167,8 +171,7 @@ export function UseItOrLoseItPanel({ products, currency, openRecipeGenFromExpiri
   const atRisk = expiring.reduce((s, p) => s + valueOf(p), 0)
 
   const daysLabel = (p) => {
-    const d = new Date(`${String(p.expiryDate).slice(0, 10)}T12:00:00`)
-    const diff = Math.round((d - today) / 86400000)
+    const diff = daysUntil(p)
     if (diff <= 0) return { text: 'TODAY', cls: 'bg-red-600 text-white' }
     if (diff === 1) return { text: 'Tomorrow', cls: 'bg-orange-500 text-white' }
     return { text: 'In 2 days', cls: 'bg-amber-400 text-amber-950' }
