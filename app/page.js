@@ -32,7 +32,6 @@ import { SetupWizardV2, SetupWizard, ChefCodeCard, SettingsDialog, LoginGate, No
 import { RotaView, RotaShiftDialog } from '@/components/shelfwise/rota'
 import { AnalyticsView } from '@/components/shelfwise/analytics'
 import { OrdersView } from '@/components/shelfwise/orders'
-import { UsageLogView } from '@/components/shelfwise/usage-log'
 import { QuickCheckDialog, TempLogbookView, HaccpView } from '@/components/shelfwise/haccp'
 
 function getInitialFromURL() {
@@ -60,7 +59,7 @@ function ThemeToggle() { return null }
 function App() {
   const T = useT()  // language-aware translator — re-renders whole app when user changes language
   // Deploy version marker — helps us verify a deploy actually shipped. Change this string each release.
-  const BUILD_VERSION = 'v17-useitorloseit-haccpdatefix-2026-07-11'
+  const BUILD_VERSION = 'v18-shiftlog-removed-2026-07-11'
   useEffect(() => { try { console.log('%cShelfWise build:', 'color:#059669;font-weight:700', BUILD_VERSION) } catch (_) {} }, [])
   // Register the service worker (Web Push + PWA). Safe no-op if unsupported.
   useEffect(() => {
@@ -1340,11 +1339,6 @@ function App() {
                 <Truck className="h-4 w-4 mr-2" /> Orders
               </Button>
             )}
-            {hasStock && (
-              <Button variant={view === 'usage' ? 'default' : 'ghost'} size="sm" onClick={() => setView('usage')}>
-                <ClipboardCheck className="h-4 w-4 mr-2" /> Shift Log
-              </Button>
-            )}
             {hasRota && (
               <Button variant={view === 'rota' ? 'default' : 'ghost'} size="sm" onClick={() => setView('rota')}>
                 <ChefHat className="h-4 w-4 mr-2" /> {T('nav_rota')}
@@ -1404,11 +1398,6 @@ function App() {
             {hasStock && (
               <Button variant={view === 'orders' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('orders'); setMobileNav(false) }}>
                 <Truck className="h-4 w-4 mr-2" /> Orders
-              </Button>
-            )}
-            {hasStock && (
-              <Button variant={view === 'usage' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('usage'); setMobileNav(false) }}>
-                <ClipboardCheck className="h-4 w-4 mr-2" /> Shift Log
               </Button>
             )}
             {hasRota && (
@@ -1496,9 +1485,6 @@ function App() {
         )}
         {view === 'orders' && (
           <OrdersView />
-        )}
-        {view === 'usage' && (
-          <UsageLogView kitchenName={settings.kitchenName || ''} />
         )}
         {view === 'analytics' && (
           <AnalyticsView products={products} />

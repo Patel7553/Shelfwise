@@ -201,22 +201,9 @@ export function UseItOrLoseItPanel({ products, currency, openRecipeGenFromExpiri
     } finally { setBusyId(null) }
   }
 
-  if (expiring.length === 0) {
-    return (
-      <div className="rounded-2xl border-2 border-emerald-200 bg-emerald-50/60 p-4 flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-3">
-          <span className="text-2xl">✅</span>
-          <div>
-            <p className="font-semibold text-emerald-800">Nothing expiring in the next 2 days</p>
-            <p className="text-xs text-emerald-700">Your stock is under control.</p>
-          </div>
-        </div>
-        {savedTotal > 0 && (
-          <Badge className="bg-emerald-600 text-white hover:bg-emerald-600 text-sm px-3 py-1">💰 Saved this month: {sym}{savedTotal.toFixed(2)}</Badge>
-        )}
-      </div>
-    )
-  }
+  // Show NOTHING when no items are expiring within 2 days — the panel only
+  // appears when there is genuinely something to act on (user request).
+  if (expiring.length === 0) return null
 
   return (
     <div className="rounded-2xl border-2 border-orange-200 bg-gradient-to-br from-orange-50 to-amber-50/60 overflow-hidden">
