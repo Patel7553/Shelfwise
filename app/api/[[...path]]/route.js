@@ -994,6 +994,88 @@ Return ONLY valid JSON, no prose, no markdown fences:
   }
 }
 
+// ---- Stock Count Sheet: read handwritten quantities from a printed count sheet ----
+// The sheet is PRINTED by the app (row numbers + item names are machine-printed).
+// Staff walk the fridge/store and WRITE the current quantity in a single large
+// box per row. The AI reads one handwritten number per row (or blank = skipped).
+async function parseStockCountPhoto(base64DataUrl) {
+  const key = process.env.EMERGENT_LLM_KEY
+  if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+
+  const systemPrompt = `You are analysing a photo of a printed kitchen "Stock Count Sheet".
+
+The sheet is a table. Each row contains:
+- a printed row number (leftmost column: "1", "2", "3"...)
+- a printed item name with unit in brackets (e.g. "Whole Milk (L)")
+- ONE large empty box labelled COUNT where staff handwrote the current stock quantity
+
+YOUR TASK: for every row, read the handwritten number in the COUNT box.
+
+STRICT RULES:
+- "count": the handwritten number as digits (integers or decimals like 2.5 are valid). If the box is EMPTY or has no legible number, use null — never guess.
+- Only read what is inside/over the COUNT box. Ignore any other stray handwriting.
+- Common handwriting quirks: "1" may look like "l", "7" may have a bar, "0" may look like "O". Interpret sensibly as digits.
+- Include EVERY row you can see, even rows with an empty box (count: null).
+- confidence: "high" when the digits are clearly legible; "low" when smudged, ambiguous, cut off or partially visible. Empty boxes are "high" confidence null.
+
+Return ONLY a JSON object (no prose, no markdown):
+{
+  "rows": [
+    { "row": 1, "name": "Whole Milk (L)", "count": 12, "confidence": "high" },
+    { "row": 2, "name": "Chicken Breast (kg)", "count": null, "confidence": "high" },
+    { "row": 3, "name": "Eggs (ea)", "count": 4.5, "confidence": "low" }
+  ]
+}`
+
+  const body = {
+    // Claude reads handwriting far better than GPT-4o (verified in prior A/B tests).
+    model: 'claude-sonnet-4-5-20250929',
+    max_tokens: 4000,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: [
+        { type: 'text', text: 'Read the handwritten COUNT number for every row on this stock count sheet. Return ONLY JSON.' },
+        { type: 'image_url', image_url: { url: base64DataUrl } }
+      ]}
+    ],
+    temperature: 0,
+  }
+  const res = await fetch(EMERGENT_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`Emergent LLM ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  const content = data?.choices?.[0]?.message?.content || '{}'
+  let parsed
+  try { parsed = JSON.parse(content) } catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : {} }
+  const rows = Array.isArray(parsed.rows) ? parsed.rows : []
+  return rows.map(r => {
+    let count = null
+    if (r?.count !== null && r?.count !== undefined && r?.count !== '') {
+      const n = Number(r.count)
+      if (Number.isFinite(n) && n >= 0 && n <= 99999) count = n
+    }
+    return {
+      row: Number(r?.row) || null,
+      name: String(r?.name || '').slice(0, 160),
+      count,
+      confidence: r?.confidence === 'low' ? 'low' : 'high',
+    }
+  }).filter(r => r.name)
+}
+
+// Normalise a product/sheet name for robust matching
+function normalizeItemName(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, ' ')   // drop "(unit)" brackets
+    .replace(/[^a-z0-9]+/g, ' ')  // strip punctuation
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 async function generateRecipesFromIngredients({ ingredients, servings = 4, cuisine = '', dietary = [], skillLevel = 'easy', kitchenType = '' }) {
   const key = process.env.EMERGENT_LLM_KEY
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
