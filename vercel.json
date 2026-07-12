@@ -7,10 +7,6 @@
     {
       "path": "/api/cron/push-alerts",
       "schedule": "0 7 * * *"
-    },
-    {
-      "path": "/api/cron/sensor-sync",
-      "schedule": "0 6 * * *"
     }
   ]
 }

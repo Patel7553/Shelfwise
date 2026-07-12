@@ -56,7 +56,7 @@ export function QuickCheckDialog({ open, onClose, locations, currentUser, onDone
     const t = loc.type || 'fridge'
     if (t === 'fridge') return val >= 0 && val <= 5
     if (t === 'chiller') return val >= 0 && val <= 8
-    if (t === 'freezer') return val <= -15
+    if (t === 'freezer') return val <= -18
     if (t === 'hot_hold') return val >= 63
     return true
   }
@@ -1192,7 +1192,7 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
             let isPass = true
             if (t === 'fridge') isPass = temperatureC >= 0 && temperatureC <= 5
             else if (t === 'chiller') isPass = temperatureC >= 0 && temperatureC <= 8
-            else if (t === 'freezer') isPass = temperatureC <= -15
+            else if (t === 'freezer') isPass = temperatureC <= -18
             else if (t === 'hot_hold') isPass = temperatureC >= 63
             const time = timeOfDay === 'morning' ? '08:00' : timeOfDay === 'evening' ? '17:00' : '12:00'
             const recordedAt = `${dateISO}T${time}:00Z`

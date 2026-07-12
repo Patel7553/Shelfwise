@@ -81,7 +81,7 @@ function sensorPassFor(loc, val) {
   const t = loc?.type || 'fridge'
   if (t === 'fridge') return val >= 0 && val <= 5
   if (t === 'chiller') return val >= 0 && val <= 8
-  if (t === 'freezer') return val <= -15
+  if (t === 'freezer') return val <= -18
   if (t === 'hot_hold') return val >= 63
   return true
 }
@@ -991,7 +991,7 @@ EXTRACTION RULES:
 8. PASS/FAIL flag (isPass):
    * fridge / chilled / salad / larder: 0 to 5°C → PASS. Otherwise FAIL.
    * chiller: 0 to 8°C → PASS.
-   * freezer / ice cream: at or below -18°C → PASS. Warmer than -15°C → FAIL.
+   * freezer / ice cream: at or below -18°C → PASS. Warmer than -18°C (e.g. -17, -16) → FAIL.
    * hot_hold: at or above 63°C → PASS. Below → FAIL.
    * Otherwise → isPass=true.
 9. Preserve the original numeric value INCLUDING negative sign (e.g. "-18.6" → -18.6).
@@ -1537,13 +1537,16 @@ export async function GET(request, { params }) {
 
     // ---- CRON: sensor sync — call this URL every 15-30 min for 24/7 polling ----
     // Works with Vercel Pro crons OR any free external pinger (cron-job.org).
-    // Also runs opportunistically when kitchens open the HACCP view.
+    // Add ?force=1 to guarantee a reading is taken at the exact ping time
+    // (e.g. scheduled 8:00 AM / 8:00 PM readings), bypassing the per-kitchen
+    // interval throttle. Also runs opportunistically when kitchens open HACCP.
     if (path === 'cron/sensor-sync') {
       const authz = request.headers.get('authorization') || ''
       const cronSecret = process.env.CRON_SECRET
       if (cronSecret && authz !== `Bearer ${cronSecret}`) {
         return json({ error: 'unauthorized' }, 401)
       }
+      const force = new URL(request.url).searchParams.get('force') === '1'
       const { data: conns, error: cErr } = await sb.from('sensor_connections').select('*').eq('enabled', true)
       if (cErr) {
         if (/does not exist/i.test(cErr.message || '')) return json({ ok: true, note: 'sensor_connections table missing — run migration-15', results: [] })
@@ -1551,7 +1554,7 @@ export async function GET(request, { params }) {
       }
       const results = []
       for (const conn of (conns || [])) {
-        const r = await syncSensorConnection(sb, conn)   // respects each kitchen's interval
+        const r = await syncSensorConnection(sb, conn, { force })   // force=1 → exact-time reading; else respects interval
         results.push({ kitchen: conn.kitchen_id, vendor: conn.vendor, ...r })
       }
       return json({ ok: true, connections: (conns || []).length, results })
