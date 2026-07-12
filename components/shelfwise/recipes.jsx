@@ -29,6 +29,29 @@ export function RecipeResult({ result, setResult, onBack, onClose, goToInventory
   const [genLoading, setGenLoading] = useState(false)
   const [newAllergen, setNewAllergen] = useState('')
   const [addingAllergen, setAddingAllergen] = useState(false)
+  const [editMode, setEditMode] = useState(false)
+
+  // ---- Edit helpers (keep matched + ingredients arrays in sync by index) ----
+  const updIng = (i, field, val) => {
+    const matched = [...(result.matched || [])]
+    matched[i] = { ...matched[i], [field]: val }
+    const ingredients = [...(result.ingredients || [])]
+    if (ingredients[i]) ingredients[i] = { ...ingredients[i], [field]: val }
+    setResult({ ...result, matched, ingredients })
+  }
+  const delIng = (i) => setResult({
+    ...result,
+    matched: (result.matched || []).filter((_, x) => x !== i),
+    ingredients: (result.ingredients || []).filter((_, x) => x !== i),
+  })
+  const addIng = () => setResult({
+    ...result,
+    matched: [...(result.matched || []), { name: '', quantity: '', unit: '', notes: '', allergens: [], status: 'missing', product: null }],
+    ingredients: [...(result.ingredients || []), { name: '', quantity: '', unit: '', notes: '', allergens: [] }],
+  })
+  const updStep = (i, val) => { const steps = [...(result.steps || [])]; steps[i] = val; setResult({ ...result, steps }) }
+  const delStep = (i) => setResult({ ...result, steps: (result.steps || []).filter((_, x) => x !== i) })
+  const addStep = () => setResult({ ...result, steps: [...(result.steps || []), ''] })
 
   const addAllergen = () => {
     const v = newAllergen.trim().toLowerCase()
@@ -135,9 +158,23 @@ export function RecipeResult({ result, setResult, onBack, onClose, goToInventory
         </div>
       </div>
 
-      <div>
-        <h3 className="text-2xl font-bold">{result.title || 'Recipe Analysis'}</h3>
-        {result.servings && <p className="text-sm text-muted-foreground">{result.servings}</p>}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          {editMode ? (
+            <div className="space-y-2">
+              <Input value={result.title || ''} onChange={e => setResult({ ...result, title: e.target.value })} placeholder="Recipe title" className="text-lg font-bold" />
+              <Input value={result.servings || ''} onChange={e => setResult({ ...result, servings: e.target.value })} placeholder="e.g. Serves 4" className="max-w-[200px]" />
+            </div>
+          ) : (
+            <>
+              <h3 className="text-2xl font-bold">{result.title || 'Recipe Analysis'}</h3>
+              {result.servings && <p className="text-sm text-muted-foreground">{result.servings}</p>}
+            </>
+          )}
+        </div>
+        <Button size="sm" variant={editMode ? 'default' : 'outline'} onClick={() => setEditMode(!editMode)} className={editMode ? 'bg-emerald-600 hover:bg-emerald-700 shrink-0' : 'shrink-0'}>
+          {editMode ? <><Check className="h-3.5 w-3.5 mr-1.5" /> Done editing</> : <><Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit</>}
+        </Button>
       </div>
 
       {/* Scale selector */}
@@ -156,23 +193,63 @@ export function RecipeResult({ result, setResult, onBack, onClose, goToInventory
         <p className="font-semibold mb-2 text-sm">Ingredients ({result.matched?.length || 0})</p>
         <div className="border rounded-lg divide-y overflow-hidden max-h-[360px] overflow-y-auto">
           {(result.matched || []).map((m, i) => (
-            <div key={i} className="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-slate-50">
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-sm capitalize">{m.name}</p>
-                <p className="text-xs text-muted-foreground">{scaleQty(m.quantity)} {m.unit}{m.notes ? ` · ${m.notes}` : ''}</p>
+            editMode ? (
+              <div key={i} className="flex items-center gap-2 px-3 py-2">
+                <Input value={m.name || ''} onChange={e => updIng(i, 'name', e.target.value)} placeholder="Ingredient" className="flex-1 h-8 text-sm" />
+                <Input value={m.quantity ?? ''} onChange={e => updIng(i, 'quantity', e.target.value)} placeholder="Qty" className="w-16 h-8 text-sm" />
+                <Input value={m.unit || ''} onChange={e => updIng(i, 'unit', e.target.value)} placeholder="Unit" className="w-16 h-8 text-sm" />
+                <button onClick={() => delIng(i)} aria-label="Remove ingredient" className="h-7 w-7 rounded-full hover:bg-red-50 text-red-500 flex items-center justify-center shrink-0">
+                  <Trash2 className="h-4 w-4" />
+                </button>
               </div>
-            </div>
+            ) : (
+              <div key={i} className="flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-slate-50">
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-sm capitalize">{m.name}</p>
+                  <p className="text-xs text-muted-foreground">{scaleQty(m.quantity)} {m.unit}{m.notes ? ` · ${m.notes}` : ''}</p>
+                  {Array.isArray(m.allergens) && m.allergens.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {m.allergens.map(a => (
+                        <span key={a} className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-semibold capitalize">⚠ {a}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
           ))}
         </div>
+        {editMode && (
+          <Button size="sm" variant="outline" onClick={addIng} className="mt-2">
+            <Plus className="h-3.5 w-3.5 mr-1" /> Add ingredient
+          </Button>
+        )}
       </div>
 
       {/* Cooking method extracted from the scanned recipe itself */}
-      {result.steps?.length > 0 && (
+      {(result.steps?.length > 0 || editMode) && (
         <div className="border-2 border-emerald-200 bg-emerald-50/40 rounded-xl p-4">
           <p className="font-semibold text-sm flex items-center gap-1.5">👨‍🍳 Cooking Method <span className="text-[10px] font-normal text-muted-foreground">· from your recipe</span></p>
-          <ol className="list-decimal list-outside ml-5 space-y-2 text-sm text-slate-700 mt-3">
-            {result.steps.map((s, i) => <li key={i} className="leading-relaxed">{s}</li>)}
-          </ol>
+          {editMode ? (
+            <div className="space-y-2 mt-3">
+              {(result.steps || []).map((s, i) => (
+                <div key={i} className="flex items-start gap-2">
+                  <span className="text-xs font-bold text-emerald-700 mt-2.5 w-5 shrink-0">{i + 1}.</span>
+                  <textarea value={s} onChange={e => updStep(i, e.target.value)} rows={2} className="flex-1 rounded-md border border-input bg-white p-2 text-sm" />
+                  <button onClick={() => delStep(i)} aria-label="Remove step" className="h-7 w-7 rounded-full hover:bg-red-50 text-red-500 flex items-center justify-center shrink-0 mt-1.5">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+              <Button size="sm" variant="outline" onClick={addStep}>
+                <Plus className="h-3.5 w-3.5 mr-1" /> Add step
+              </Button>
+            </div>
+          ) : (
+            <ol className="list-decimal list-outside ml-5 space-y-2 text-sm text-slate-700 mt-3">
+              {result.steps.map((s, i) => <li key={i} className="leading-relaxed">{s}</li>)}
+            </ol>
+          )}
         </div>
       )}
 
@@ -459,6 +536,11 @@ export function WebRecipeCard({ recipe: r, onSaved }) {
           }
         })
       })
+      if (res.status === 409) {
+        toast.info(`"${r.title}" is already in your collection`)
+        setSaved(true)
+        return
+      }
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error || 'Save failed')
@@ -573,74 +655,208 @@ export function WebRecipeCard({ recipe: r, onSaved }) {
   )
 }
 
-export function ViewRecipeDialog({ recipe, onClose, onDelete }) {
+export function ViewRecipeDialog({ recipe, onClose, onDelete, onUpdated }) {
   const [scale, setScale] = useState(1)
-  useEffect(() => { setScale(1) }, [recipe?.id])
+  const [editMode, setEditMode] = useState(false)
+  const [draft, setDraft] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [newAllergen, setNewAllergen] = useState('')
+  useEffect(() => { setScale(1); setEditMode(false); setDraft(null); setNewAllergen('') }, [recipe?.id])
   const scaleQty = (q) => {
     const n = Number(q) || 0
     const scaled = n * scale
     return Number.isInteger(scaled) ? scaled : Math.round(scaled * 100) / 100
   }
   if (!recipe) return null
+
+  const startEdit = () => {
+    setDraft({
+      title: recipe.title || '',
+      servings: recipe.servings || '',
+      ingredients: JSON.parse(JSON.stringify(recipe.ingredients || [])),
+      steps: [...(recipe.steps || [])],
+      allergens: [...(recipe.allergens || [])],
+    })
+    setEditMode(true)
+  }
+  const saveEdit = async () => {
+    setSaving(true)
+    try {
+      const res = await fetch(`/api/recipes/${recipe.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(draft),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Update failed')
+      toast.success('Recipe updated')
+      setEditMode(false)
+      onUpdated && onUpdated(data)
+    } catch (e) {
+      toast.error(e.message || 'Update failed')
+    } finally { setSaving(false) }
+  }
+  const dUpdIng = (i, field, val) => { const ingredients = [...draft.ingredients]; ingredients[i] = { ...ingredients[i], [field]: val }; setDraft({ ...draft, ingredients }) }
+  const dDelIng = (i) => setDraft({ ...draft, ingredients: draft.ingredients.filter((_, x) => x !== i) })
+  const dAddIng = () => setDraft({ ...draft, ingredients: [...draft.ingredients, { name: '', quantity: '', unit: '', notes: '', allergens: [] }] })
+  const dUpdStep = (i, val) => { const steps = [...draft.steps]; steps[i] = val; setDraft({ ...draft, steps }) }
+  const dDelStep = (i) => setDraft({ ...draft, steps: draft.steps.filter((_, x) => x !== i) })
+  const dAddStep = () => setDraft({ ...draft, steps: [...draft.steps, ''] })
+  const dAddAllergen = () => {
+    const v = newAllergen.trim().toLowerCase()
+    if (!v) return
+    if (draft.allergens.map(a => a.toLowerCase()).includes(v)) { toast.info('Already in the list'); return }
+    setDraft({ ...draft, allergens: [...draft.allergens, v] })
+    setNewAllergen('')
+  }
+
   return (
     <Dialog open={!!recipe} onOpenChange={(v) => { if (!v) onClose() }}>
       <DialogContent className="sm:max-w-[760px] max-h-[92vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><BookOpen className="h-5 w-5 text-purple-600" /> {recipe.title || 'Untitled recipe'}</DialogTitle>
-          {recipe.servings && <p className="text-sm text-muted-foreground">{recipe.servings}</p>}
+          {editMode ? (
+            <div className="space-y-2 pr-8">
+              <Input value={draft.title} onChange={e => setDraft({ ...draft, title: e.target.value })} placeholder="Recipe title" className="text-lg font-bold" />
+              <Input value={draft.servings} onChange={e => setDraft({ ...draft, servings: e.target.value })} placeholder="e.g. Serves 4" className="max-w-[200px]" />
+            </div>
+          ) : (
+            <>
+              <DialogTitle className="flex items-center gap-2"><BookOpen className="h-5 w-5 text-purple-600" /> {recipe.title || 'Untitled recipe'}</DialogTitle>
+              {recipe.servings && <p className="text-sm text-muted-foreground">{recipe.servings}</p>}
+            </>
+          )}
         </DialogHeader>
 
-        {Array.isArray(recipe.allergens) && recipe.allergens.length > 0 && (
-          <div className="rounded-xl border-2 border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 p-4">
-            <div className="flex items-start gap-3">
-              <div className="h-10 w-10 rounded-full bg-amber-200 flex items-center justify-center shrink-0">
-                <ShieldAlert className="h-6 w-6 text-amber-700" />
-              </div>
-              <div className="flex-1">
-                <p className="text-sm font-bold text-amber-900 uppercase tracking-wider">⚠️ Contains Allergens</p>
-                <div className="flex flex-wrap gap-2 mt-2">
-                  {recipe.allergens.map(a => (
-                    <span key={a} className="px-3 py-1 rounded-full bg-amber-200 text-amber-900 text-sm font-semibold capitalize border border-amber-400">{a}</span>
-                  ))}
-                </div>
+        {/* Allergens — editable in edit mode */}
+        {editMode ? (
+          <div className="rounded-xl border-2 border-amber-300 bg-amber-50/60 p-4">
+            <p className="text-sm font-bold text-amber-900 uppercase tracking-wider">⚠️ Allergens</p>
+            <div className="flex flex-wrap gap-2 mt-2">
+              {draft.allergens.map(a => (
+                <span key={a} className="px-3 py-1 rounded-full bg-amber-200 text-amber-900 text-sm font-semibold capitalize border border-amber-400 inline-flex items-center gap-1.5">
+                  {a}
+                  <button onClick={() => setDraft({ ...draft, allergens: draft.allergens.filter(x => x !== a) })} className="hover:bg-amber-300 rounded-full h-5 w-5 flex items-center justify-center -mr-1" aria-label={`Remove ${a}`}>
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+              <div className="inline-flex items-center gap-1.5 bg-white rounded-full border-2 border-amber-400 pl-3 pr-1 py-0.5">
+                <input
+                  value={newAllergen}
+                  onChange={e => setNewAllergen(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') dAddAllergen() }}
+                  placeholder="add allergen..."
+                  className="text-sm border-0 outline-none bg-transparent w-32"
+                  maxLength={30}
+                />
+                <button onClick={dAddAllergen} className="h-6 w-6 rounded-full bg-emerald-600 text-white hover:bg-emerald-700 flex items-center justify-center">
+                  <Check className="h-3.5 w-3.5" />
+                </button>
               </div>
             </div>
           </div>
+        ) : (
+          Array.isArray(recipe.allergens) && recipe.allergens.length > 0 && (
+            <div className="rounded-xl border-2 border-amber-300 bg-gradient-to-r from-amber-50 to-orange-50 p-4">
+              <div className="flex items-start gap-3">
+                <div className="h-10 w-10 rounded-full bg-amber-200 flex items-center justify-center shrink-0">
+                  <ShieldAlert className="h-6 w-6 text-amber-700" />
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-bold text-amber-900 uppercase tracking-wider">⚠️ Contains Allergens</p>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {recipe.allergens.map(a => (
+                      <span key={a} className="px-3 py-1 rounded-full bg-amber-200 text-amber-900 text-sm font-semibold capitalize border border-amber-400">{a}</span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
         )}
 
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Scale recipe</span>
-          {[1, 2, 3, 4, 5].map(n => (
-            <button key={n} onClick={() => setScale(n)}
-              className={`h-9 w-12 rounded-lg border-2 font-bold text-sm transition ${scale === n ? 'border-purple-500 bg-purple-600 text-white' : 'border-slate-200 hover:border-purple-300 bg-white text-slate-700'}`}>
-              {n}×
-            </button>
-          ))}
-          {scale > 1 && <span className="text-xs text-muted-foreground italic">Quantities multiplied by {scale}</span>}
-        </div>
-
-        <div>
-          <p className="font-semibold text-sm mb-2">Ingredients</p>
-          <ul className="space-y-1 text-sm border rounded-lg divide-y">
-            {(recipe.ingredients || []).map((ing, i) => (
-              <li key={i} className="px-3 py-2 flex justify-between">
-                <span className="capitalize">{ing.name}</span>
-                <span className="text-muted-foreground">{scaleQty(ing.quantity)} {ing.unit}{ing.notes ? ` · ${ing.notes}` : ''}</span>
-              </li>
+        {!editMode && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Scale recipe</span>
+            {[1, 2, 3, 4, 5].map(n => (
+              <button key={n} onClick={() => setScale(n)}
+                className={`h-9 w-12 rounded-lg border-2 font-bold text-sm transition ${scale === n ? 'border-purple-500 bg-purple-600 text-white' : 'border-slate-200 hover:border-purple-300 bg-white text-slate-700'}`}>
+                {n}×
+              </button>
             ))}
-          </ul>
-        </div>
-
-        {recipe.steps?.length > 0 && (
-          <div>
-            <p className="font-semibold text-sm mb-2">Cooking Steps</p>
-            <ol className="list-decimal list-inside space-y-1 text-sm text-muted-foreground">
-              {recipe.steps.map((s, i) => <li key={i}>{s}</li>)}
-            </ol>
+            {scale > 1 && <span className="text-xs text-muted-foreground italic">Quantities multiplied by {scale}</span>}
           </div>
         )}
 
-        {Array.isArray(recipe.instructions) && recipe.instructions.length > 0 && (
+        <div>
+          <p className="font-semibold text-sm mb-2">Ingredients</p>
+          {editMode ? (
+            <div className="space-y-2">
+              {draft.ingredients.map((ing, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Input value={ing.name || ''} onChange={e => dUpdIng(i, 'name', e.target.value)} placeholder="Ingredient" className="flex-1 h-8 text-sm" />
+                  <Input value={ing.quantity ?? ''} onChange={e => dUpdIng(i, 'quantity', e.target.value)} placeholder="Qty" className="w-16 h-8 text-sm" />
+                  <Input value={ing.unit || ''} onChange={e => dUpdIng(i, 'unit', e.target.value)} placeholder="Unit" className="w-16 h-8 text-sm" />
+                  <button onClick={() => dDelIng(i)} aria-label="Remove ingredient" className="h-7 w-7 rounded-full hover:bg-red-50 text-red-500 flex items-center justify-center shrink-0">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+              <Button size="sm" variant="outline" onClick={dAddIng}>
+                <Plus className="h-3.5 w-3.5 mr-1" /> Add ingredient
+              </Button>
+            </div>
+          ) : (
+            <ul className="space-y-1 text-sm border rounded-lg divide-y">
+              {(recipe.ingredients || []).map((ing, i) => (
+                <li key={i} className="px-3 py-2">
+                  <div className="flex justify-between">
+                    <span className="capitalize">{ing.name}</span>
+                    <span className="text-muted-foreground">{scaleQty(ing.quantity)} {ing.unit}{ing.notes ? ` · ${ing.notes}` : ''}</span>
+                  </div>
+                  {Array.isArray(ing.allergens) && ing.allergens.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {ing.allergens.map(a => (
+                        <span key={a} className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-semibold capitalize">⚠ {a}</span>
+                      ))}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {editMode ? (
+          <div>
+            <p className="font-semibold text-sm mb-2">Cooking Steps</p>
+            <div className="space-y-2">
+              {draft.steps.map((s, i) => (
+                <div key={i} className="flex items-start gap-2">
+                  <span className="text-xs font-bold text-purple-700 mt-2.5 w-5 shrink-0">{i + 1}.</span>
+                  <textarea value={s} onChange={e => dUpdStep(i, e.target.value)} rows={2} className="flex-1 rounded-md border border-input bg-white p-2 text-sm" />
+                  <button onClick={() => dDelStep(i)} aria-label="Remove step" className="h-7 w-7 rounded-full hover:bg-red-50 text-red-500 flex items-center justify-center shrink-0 mt-1.5">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+              <Button size="sm" variant="outline" onClick={dAddStep}>
+                <Plus className="h-3.5 w-3.5 mr-1" /> Add step
+              </Button>
+            </div>
+          </div>
+        ) : (
+          recipe.steps?.length > 0 && (
+            <div>
+              <p className="font-semibold text-sm mb-2">Cooking Steps</p>
+              <ol className="list-decimal list-inside space-y-1 text-sm text-muted-foreground">
+                {recipe.steps.map((s, i) => <li key={i}>{s}</li>)}
+              </ol>
+            </div>
+          )
+        )}
+
+        {!editMode && Array.isArray(recipe.instructions) && recipe.instructions.length > 0 && (
           <div className="border-2 border-purple-200 bg-purple-50/40 rounded-xl p-4">
             <p className="font-semibold text-sm mb-1 flex items-center gap-1.5">👨‍🍳 Cooking Method <span className="text-[10px] font-normal text-muted-foreground">{recipe.source || '· AI-generated'}</span></p>
             <ol className="list-decimal list-outside ml-5 space-y-2 text-sm text-slate-700 mt-2">
@@ -650,10 +866,24 @@ export function ViewRecipeDialog({ recipe, onClose, onDelete }) {
         )}
 
         <DialogFooter>
-          <Button variant="ghost" className="text-red-600 hover:bg-red-50" onClick={() => { onDelete(recipe.id); onClose() }}>
-            <Trash2 className="h-4 w-4 mr-2" /> Delete
-          </Button>
-          <Button onClick={onClose} className="bg-purple-600 hover:bg-purple-700">Close</Button>
+          {editMode ? (
+            <>
+              <Button variant="ghost" onClick={() => { setEditMode(false); setDraft(null) }}>Cancel</Button>
+              <Button onClick={saveEdit} disabled={saving} className="bg-emerald-600 hover:bg-emerald-700">
+                {saving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving...</> : <><Check className="h-4 w-4 mr-2" /> Save changes</>}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="ghost" className="text-red-600 hover:bg-red-50" onClick={() => { onDelete(recipe.id); onClose() }}>
+                <Trash2 className="h-4 w-4 mr-2" /> Delete
+              </Button>
+              <Button variant="outline" onClick={startEdit}>
+                <Pencil className="h-4 w-4 mr-2" /> Edit
+              </Button>
+              <Button onClick={onClose} className="bg-purple-600 hover:bg-purple-700">Close</Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

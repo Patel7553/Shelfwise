@@ -131,6 +131,7 @@ function App() {
   const [recipeImages, setRecipeImages] = useState([])
   const [recipeLoading, setRecipeLoading] = useState(false)
   const [recipeResult, setRecipeResult] = useState(null)
+  const [dupExisting, setDupExisting] = useState(null)   // duplicate-recipe prompt
   // AI Recipe Generator (from ingredients) — new feature
   const [recipeGenOpen, setRecipeGenOpen] = useState(false)
   const [recipeGenSeed, setRecipeGenSeed] = useState([])   // pre-fill list of ingredient names
@@ -337,22 +338,48 @@ function App() {
     } catch {}
   }
 
-  const saveCurrentRecipe = async () => {
+  const saveCurrentRecipe = async (replaceId) => {
     if (!recipeResult) return
+    const rid = typeof replaceId === 'string' ? replaceId : null   // guard: onClick passes an event object
     setRecipeSaving(true)
     try {
       const res = await fetch('/api/recipes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(recipeResult)
+        body: JSON.stringify(rid ? { ...recipeResult, replaceId: rid } : recipeResult)
       })
       const data = await res.json().catch(() => ({}))
+      if (res.status === 409 && data.existing) {
+        // Same recipe already saved — ask what to do instead of adding twice
+        setDupExisting(data.existing)
+        return
+      }
       if (!res.ok) throw new Error(data.error || '')
-      toast.success('Recipe saved! Find it in the Recipes tab.')
+      toast.success(rid ? 'Old recipe replaced' : 'Recipe saved')
+      // Auto-close everything and refresh the list instantly
+      setDupExisting(null)
+      setRecipeOpen(false)
+      setRecipeResult(null)
+      fetchRecipes()
     } catch (e) {
       toast.error(e?.message ? `Failed to save recipe — ${e.message}` : 'Failed to save recipe')
     } finally {
       setRecipeSaving(false)
+    }
+  }
+
+  const openExistingRecipe = async (id) => {
+    try {
+      const res = await fetch(`/api/recipes/${id}`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not open recipe')
+      setDupExisting(null)
+      setRecipeOpen(false)
+      setRecipeResult(null)
+      setView('recipes')
+      setViewRecipe(data)
+    } catch (e) {
+      toast.error(e.message || 'Could not open recipe')
     }
   }
 
@@ -2369,8 +2396,32 @@ function App() {
         </DialogContent>
       </Dialog>
 
+      {/* Duplicate recipe prompt — never save the same recipe twice */}
+      <Dialog open={!!dupExisting} onOpenChange={(v) => { if (!v) setDupExisting(null) }}>
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">⚠️ Recipe already saved</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            <span className="font-semibold text-foreground">"{dupExisting?.title}"</span> is already in your recipe collection
+            {dupExisting?.created_at ? ` (saved ${new Date(dupExisting.created_at).toLocaleDateString()})` : ''}. What would you like to do?
+          </p>
+          <div className="flex flex-col gap-2 pt-1">
+            <Button onClick={() => saveCurrentRecipe(dupExisting?.id)} disabled={recipeSaving} className="bg-purple-600 hover:bg-purple-700 w-full justify-center">
+              {recipeSaving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null} Replace old recipe with this one
+            </Button>
+            <Button variant="outline" onClick={() => openExistingRecipe(dupExisting?.id)} className="w-full justify-center">
+              Open the old recipe (view / edit)
+            </Button>
+            <Button variant="ghost" onClick={() => setDupExisting(null)} className="w-full justify-center">
+              Close — keep the old one
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* View saved recipe */}
-      <ViewRecipeDialog recipe={viewRecipe} onClose={() => setViewRecipe(null)} onDelete={deleteRecipe} />
+      <ViewRecipeDialog recipe={viewRecipe} onClose={() => setViewRecipe(null)} onDelete={deleteRecipe} onUpdated={() => { setViewRecipe(null); fetchRecipes() }} />
 
       {/* Setup Wizard */}
       <SetupWizard open={wizardOpen} onClose={() => setWizardOpen(false)} settings={settings} saveSettings={saveSettings} />

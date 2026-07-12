@@ -1377,10 +1377,12 @@ async function scanRecipe({ image, images, text }) {
   const imgs = (Array.isArray(images) && images.length > 0) ? images : (image ? [image] : [])
   const systemPrompt = `You are a recipe parser for a professional kitchen. Extract structured recipe data and return it as JSON.
 The recipe may span MULTIPLE photos/pages — treat them as ONE single recipe: combine ALL ingredients (deduplicate) and keep steps in page order.
-Return ONLY a JSON object of shape: {"title","servings","ingredients":[{"name","quantity","unit","notes"}],"steps":["step 1","step 2",...],"allergens":[]}.
+Return ONLY a JSON object of shape: {"title","servings","ingredients":[{"name","quantity","unit","notes","allergens":[]}],"steps":["step 1","step 2",...],"allergens":[]}.
 "steps" = the cooking method / instructions EXACTLY as written in the recipe (one array item per step, strip any leading numbering). Do NOT invent steps — if the recipe truly shows no method, return "steps": [].
-"allergens" = analyse EVERY ingredient and list ALL of the 14 UK/EU declarable allergens present, even when not explicitly labelled. The 14: celery, gluten, crustaceans, eggs, fish, lupin, milk, molluscs, mustard, nuts, peanuts, sesame, soya, sulphites.
-Infer from ingredients — examples: flour/bread/pasta/beer → "gluten"; butter/cream/cheese/yoghurt → "milk"; mayonnaise/batter with egg → "eggs"; soy sauce → "soya" and "gluten"; prawns/crab → "crustaceans"; almonds/hazelnuts/walnuts → "nuts"; wine vinegar/dried fruit → "sulphites"; worcestershire sauce → "fish". Use lowercase names from the list above. If genuinely none, return [].
+Each ingredient's "allergens" = which of the 14 UK/EU declarable allergens THAT ingredient contains ([] if none). The 14: celery, gluten, crustaceans, eggs, fish, lupin, milk, molluscs, mustard, nuts, peanuts, sesame, soya, sulphites.
+Infer from the ingredient itself — examples: flour/bread/pasta/beer → "gluten"; butter/cream/cheese/yoghurt → "milk"; mayonnaise → "eggs"; soy sauce → "soya","gluten"; prawns/crab → "crustaceans"; almonds/hazelnuts/walnuts → "nuts"; worcestershire sauce → "fish".
+ACCURACY RULES: only flag an allergen the ingredient GENUINELY contains by its standard composition. Do NOT flag "may contain" traces, cross-contamination risks, or optional garnishes not in the ingredient list. Plain meat, rice, potatoes, fruit, vegetables, herbs, oil (except sesame/nut oils), salt, sugar and water contain NONE of the 14.
+Top-level "allergens" = the union of all ingredient allergens, lowercase. If genuinely none, return [].
 Output strictly valid JSON with no other text.`
 
   const body = {
@@ -1407,12 +1409,19 @@ Output strictly valid JSON with no other text.`
   const content = data?.choices?.[0]?.message?.content || '{}'
   let parsed
   try { parsed = JSON.parse(content) } catch { parsed = {} }
+  const ingredients = (Array.isArray(parsed.ingredients) ? parsed.ingredients : []).map(ing => ({
+    ...ing,
+    allergens: Array.isArray(ing?.allergens) ? ing.allergens.map(a => String(a).toLowerCase()).filter(Boolean) : [],
+  }))
+  // Top-level allergens = union of AI's list + every per-ingredient allergen (safety net)
+  const union = new Set((Array.isArray(parsed.allergens) ? parsed.allergens : []).map(a => String(a).toLowerCase()).filter(Boolean))
+  for (const ing of ingredients) for (const a of ing.allergens) union.add(a)
   return {
     title: parsed.title || 'Untitled',
     servings: parsed.servings || null,
-    ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients : [],
+    ingredients,
     steps: Array.isArray(parsed.steps) ? parsed.steps.map(s => String(s)).filter(Boolean) : [],
-    allergens: Array.isArray(parsed.allergens) ? parsed.allergens : [],
+    allergens: [...union],
   }
 }
 
@@ -2877,6 +2886,32 @@ Output strictly valid JSON with no other text.`
           matched: Array.isArray(body.matched) ? body.matched : [],
           summary: body.summary && typeof body.summary === 'object' ? body.summary : {},
         }
+
+        // REPLACE mode — overwrite an existing recipe instead of inserting a new one
+        if (body.replaceId) {
+          const { kitchen_id, ...patch } = row
+          let { data, error } = await sb.from('recipes').update(patch).eq('id', String(body.replaceId)).eq('kitchen_id', kid).select().single()
+          if (error && /column .* does not exist|could not find .*column/i.test(error.message || '')) {
+            const retry = await sb.from('recipes').update(patch).eq('id', String(body.replaceId)).select().single()
+            data = retry.data
+            error = retry.error
+          }
+          if (error) throw error
+          return json(data, 200)
+        }
+
+        // DUPLICATE guard — same title (case-insensitive) already saved in this kitchen?
+        // Client shows a "Replace old / open old / cancel" prompt on 409.
+        try {
+          const t = String(row.title).trim()
+          const { data: dupe, error: dErr } = await sb.from('recipes')
+            .select('id,title,created_at').eq('kitchen_id', kid)
+            .ilike('title', escapeLike(t)).limit(1).maybeSingle()
+          if (!dErr && dupe) {
+            return json({ error: `"${dupe.title}" is already in your recipes`, duplicate: true, existing: dupe }, 409)
+          }
+        } catch { /* legacy DB without kitchen_id — skip the duplicate check */ }
+
         let { data, error } = await sb.from('recipes').insert(row).select().single()
         // Legacy DBs may lack the kitchen_id column (migration-16 not run yet).
         // PostgREST reports it as "Could not find the 'kitchen_id' column ... in the schema cache".
@@ -2969,6 +3004,32 @@ export async function PUT(request, { params }) {
     const segs = params?.path || []
     const path = segs.join('/')
     const sb = supabaseAdmin
+
+    // ------- Recipes: edit a saved recipe -------
+    if (segs[0] === 'recipes' && segs[1]) {
+      const { ctx, error } = await requireOwnerOrChef(request)
+      if (error) return error
+      const body = await request.json()
+      const patch = {}
+      if (typeof body.title === 'string' && body.title.trim()) patch.title = body.title.trim().slice(0, 200)
+      if (body.servings !== undefined) patch.servings = body.servings || null
+      if (Array.isArray(body.ingredients)) patch.ingredients = body.ingredients
+      if (Array.isArray(body.allergens)) patch.allergens = body.allergens
+      if (Array.isArray(body.steps)) patch.steps = body.steps
+      if (Array.isArray(body.matched)) patch.matched = body.matched
+      if (body.summary && typeof body.summary === 'object') patch.summary = body.summary
+      if (Object.keys(patch).length === 0) return json({ error: 'Nothing to update' }, 400)
+      let { data, error: e2 } = await sb.from('recipes').update(patch).eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).select().single()
+      if (e2 && /column .* does not exist|could not find .*column/i.test(e2.message || '')) {
+        // Legacy DB without kitchen_id column (migration-16 not run yet)
+        const retry = await sb.from('recipes').update(patch).eq('id', segs[1]).select().single()
+        data = retry.data
+        e2 = retry.error
+      }
+      if (e2) return json({ error: e2.message }, 500)
+      if (!data) return json({ error: 'Not found' }, 404)
+      return json(data)
+    }
 
     if (segs[0] === 'suppliers' && segs[1]) {
       const { ctx, error } = await requireOwnerOrChef(request)
