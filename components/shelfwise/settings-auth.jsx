@@ -1940,22 +1940,57 @@ export function StaffActivityCard() {
         ) : (
           <div className="space-y-1.5">
             {staff.map(s => (
-              <div key={s.name} className="flex items-center justify-between gap-2 bg-white rounded-md border px-3 py-2">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold capitalize truncate">
-                    {s.name}
-                    {s.role === 'manager' && <span className="ml-1.5 text-[10px] font-bold bg-indigo-600 text-white rounded px-1.5 py-0.5 align-middle">👑 MANAGER</span>}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">Last active: {s.lastSeen ? fmtTime(s.lastSeen) : 'unknown'}</p>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <Button variant="outline" size="sm" type="button" onClick={() => toggleManager(s)} disabled={removing === s.name} className="h-8 px-2 text-[11px] bg-white">
-                    {s.role === 'manager' ? 'Remove manager' : 'Make manager'}
-                  </Button>
-                  <Button variant="ghost" size="sm" type="button" onClick={() => removeStaff(s.name)} disabled={removing === s.name} className="text-red-600 hover:bg-red-50 shrink-0 h-8 px-2">
+              <div key={s.name} className="bg-white rounded-lg border px-3 py-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold capitalize truncate">{s.name}</p>
+                    <p className={`text-[11px] font-medium ${s.role === 'manager' ? 'text-emerald-700' : 'text-muted-foreground'}`}>{accessSummary(s)}</p>
+                    <p className="text-[10px] text-muted-foreground">Last active: {s.lastSeen ? fmtTime(s.lastSeen) : 'unknown'}</p>
+                  </div>
+                  <Button variant="ghost" size="sm" type="button" onClick={() => removeStaff(s.name)} disabled={removing === s.name} className="text-red-600 hover:bg-red-50 shrink-0 h-8 px-2" title="Remove person">
                     {removing === s.name ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                   </Button>
                 </div>
+                <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                  {s.role === 'manager' ? (
+                    <Button variant="outline" size="sm" type="button" onClick={() => setFullAccess(s, false)} disabled={removing === s.name} className="h-7 px-2.5 text-[11px] bg-white border-red-200 text-red-700 hover:bg-red-50">
+                      Remove full access
+                    </Button>
+                  ) : (
+                    <>
+                      <Button size="sm" type="button" onClick={() => setFullAccess(s, true)} disabled={removing === s.name} className="h-7 px-2.5 text-[11px] bg-emerald-600 hover:bg-emerald-700">
+                        Give full access
+                      </Button>
+                      <Button variant="outline" size="sm" type="button" onClick={() => choosing === s.name ? setChoosing('') : openChooser(s)} disabled={removing === s.name} className="h-7 px-2.5 text-[11px] bg-white">
+                        {choosing === s.name ? 'Close' : 'Choose access'}
+                      </Button>
+                    </>
+                  )}
+                </div>
+                {choosing === s.name && s.role !== 'manager' && (
+                  <div className="mt-2 rounded-md border border-indigo-200 bg-indigo-50/50 p-2.5">
+                    <p className="text-[11px] text-indigo-900 font-semibold mb-1.5">Everyone always has: add/view items, recipes, temp logging. Extra access for {s.name}:</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                      {PERM_OPTIONS.map(o => (
+                        <label key={o.key} className="flex items-center gap-2 bg-white rounded-md border px-2.5 py-1.5 cursor-pointer hover:border-indigo-300">
+                          <input
+                            type="checkbox"
+                            checked={draftPerms.includes(o.key)}
+                            onChange={e => setDraftPerms(prev => e.target.checked ? [...prev, o.key] : prev.filter(p => p !== o.key))}
+                            className="h-4 w-4 accent-indigo-600"
+                          />
+                          <span className="text-xs font-medium">{o.emoji} {o.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="flex justify-end gap-1.5 mt-2">
+                      <Button variant="ghost" size="sm" type="button" onClick={() => setChoosing('')} className="h-7 px-2.5 text-[11px]">Cancel</Button>
+                      <Button size="sm" type="button" onClick={() => savePerms(s)} disabled={removing === s.name} className="h-7 px-2.5 text-[11px] bg-indigo-600 hover:bg-indigo-700">
+                        {removing === s.name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save access'}
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
