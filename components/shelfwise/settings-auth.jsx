@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe, Users } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
@@ -550,7 +550,7 @@ export function ChefCodeCard() {
   )
 }
 
-export function SettingsDialog({ open, onClose, settings, saveSettings, openWizard, isStaff }) {
+export function SettingsDialog({ open, onClose, settings, saveSettings, openWizard, isStaff, isOwner }) {
   const [tab, setTab] = useState('profile') // 'profile' | 'login' | 'dashboard' | 'fields'
   const [name, setName] = useState('')
   const [type, setType] = useState('Restaurant')
@@ -737,6 +737,7 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
   const tabs = [
     { key: 'profile', label: 'Kitchen', longLabel: 'Kitchen Profile', icon: ChefHat },
     { key: 'login', label: 'Login', longLabel: 'Login & Alerts', icon: Settings },
+    ...(isOwner ? [{ key: 'staff', label: 'Staff', longLabel: 'Staff & Activity', icon: Users }] : []),
     { key: 'dashboard', label: 'Dashboard', longLabel: 'Dashboard', icon: LayoutDashboard },
     { key: 'haccp', label: 'Fridges', longLabel: 'Fridges & Freezers', icon: Thermometer },
     { key: 'fields', label: 'Fields', longLabel: 'Custom Fields', icon: Package },
@@ -872,8 +873,6 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
             <div className="space-y-5">
               <ChefCodeCard />
 
-              <StaffActivityCard />
-
               <div className="rounded-lg border-2 border-amber-200 bg-amber-50 p-4">
                 <Label className="text-amber-900 text-sm font-bold">📧 Alert Email</Label>
                 <p className="text-xs text-amber-700 mt-1 mb-3">Daily expiry alerts will be sent here.</p>
@@ -907,6 +906,12 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
               </div>
 
               <NotificationSettingsCard />
+            </div>
+          )}
+
+          {tab === 'staff' && (
+            <div className="space-y-4">
+              <StaffActivityCard />
             </div>
           )}
 
@@ -1852,24 +1857,57 @@ export function StaffActivityCard() {
     } catch { toast.error('Could not remove name') } finally { setRemoving('') }
   }
 
-  // Promote/demote a person. Managers get FULL access (orders, waste, logbook,
-  // all settings) — handy when the owner is on holiday.
-  const toggleManager = async (s) => {
-    const promote = s.role !== 'manager'
-    if (!window.confirm(promote
-      ? `Make "${s.name}" a MANAGER?\n\nManagers get full access to everything (orders, waste, logbook, all settings) — like you.`
-      : `Remove manager access from "${s.name}"?\n\nThey go back to staff access (add items, view/add recipes, log temps).`)) return
+  // Access options a person can be granted on top of standard staff access
+  // (standard = add/view items, view/add recipes, log temps, notifications)
+  const PERM_OPTIONS = [
+    { key: 'orders', label: 'Orders', emoji: '🚚' },
+    { key: 'waste', label: 'Waste analytics', emoji: '♻️' },
+    { key: 'logbook', label: 'Print & scan logbook', emoji: '📒' },
+    { key: 'settings', label: 'Full kitchen settings', emoji: '⚙️' },
+  ]
+  const [choosing, setChoosing] = useState('')       // name whose access is being edited
+  const [draftPerms, setDraftPerms] = useState([])
+
+  const setFullAccess = async (s, full) => {
+    if (!window.confirm(full
+      ? `Give "${s.name}" FULL ACCESS?\n\nThey'll see and manage everything — orders, waste, logbook, all settings — just like you.`
+      : `Remove full access from "${s.name}"?\n\nThey go back to standard access (add items, view/add recipes, log temps).`)) return
     setRemoving(s.name)
     try {
       const res = await fetch(`/api/staff/${encodeURIComponent(s.name)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: promote ? 'manager' : 'staff' }),
+        body: JSON.stringify(full ? { role: 'manager' } : { role: 'staff', perms: [] }),
       })
       if (!res.ok) throw new Error()
-      toast.success(promote ? `${s.name} is now a Manager 👑` : `${s.name} is now Staff`)
-      setStaff(prev => prev.map(x => x.name === s.name ? { ...x, role: promote ? 'manager' : 'staff' } : x))
-    } catch { toast.error('Could not change role') } finally { setRemoving('') }
+      toast.success(full ? `${s.name} now has full access` : `${s.name} is back to standard access`)
+      setStaff(prev => prev.map(x => x.name === s.name ? { ...x, role: full ? 'manager' : 'staff', perms: full ? x.perms : [] } : x))
+    } catch { toast.error('Could not change access') } finally { setRemoving('') }
+  }
+
+  const openChooser = (s) => {
+    setChoosing(s.name)
+    setDraftPerms(Array.isArray(s.perms) ? [...s.perms] : [])
+  }
+  const savePerms = async (s) => {
+    setRemoving(s.name)
+    try {
+      const res = await fetch(`/api/staff/${encodeURIComponent(s.name)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ perms: draftPerms }),
+      })
+      if (!res.ok) throw new Error()
+      toast.success(`Access updated for ${s.name}`)
+      setStaff(prev => prev.map(x => x.name === s.name ? { ...x, role: 'staff', perms: [...draftPerms] } : x))
+      setChoosing('')
+    } catch { toast.error('Could not save access') } finally { setRemoving('') }
+  }
+
+  const accessSummary = (s) => {
+    if (s.role === 'manager') return '✅ Full access'
+    const extra = (s.perms || []).map(p => PERM_OPTIONS.find(o => o.key === p)?.label).filter(Boolean)
+    return extra.length ? `Standard + ${extra.join(', ')}` : 'Standard access'
   }
 
   const fmtTime = (t) => {

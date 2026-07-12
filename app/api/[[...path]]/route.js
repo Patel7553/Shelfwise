@@ -1725,6 +1725,7 @@ export async function GET(request, { params }) {
       // promotion applies on next app load — no re-login needed.
       let personName = null
       let personRole = null
+      let personPerms = []
       try {
         const h = request.headers.get('x-person-name')
         if (h) personName = decodeURIComponent(h).trim().slice(0, 40) || null
@@ -1733,6 +1734,9 @@ export async function GET(request, { params }) {
         const list = Array.isArray(ctx.kitchen.staff_names) ? ctx.kitchen.staff_names : []
         const entry = personName ? list.find(x => String(x?.name || '').toLowerCase() === personName.toLowerCase()) : null
         personRole = entry?.role === 'manager' ? 'manager' : 'staff'
+        personPerms = personRole === 'manager'
+          ? ['orders', 'waste', 'logbook', 'settings']
+          : (Array.isArray(entry?.perms) ? entry.perms : [])
       }
       return json({
         authed: true,
@@ -1741,6 +1745,7 @@ export async function GET(request, { params }) {
         userEmail: ctx.userEmail,
         personName,
         personRole,
+        personPerms,
         kitchen: kitchenToApi(ctx.kitchen),
       })
     }
@@ -2061,7 +2066,7 @@ export async function GET(request, { params }) {
       const staff = Array.isArray(k?.staff_names) ? k.staff_names : []
       return json({
         staff: staff
-          .map(s => ({ name: s?.name || '', lastSeen: s?.lastSeen || null, role: s?.role === 'manager' ? 'manager' : 'staff' }))
+          .map(s => ({ name: s?.name || '', lastSeen: s?.lastSeen || null, role: s?.role === 'manager' ? 'manager' : 'staff', perms: Array.isArray(s?.perms) ? s.perms : [] }))
           .filter(s => s.name)
           .sort((a, b) => new Date(b.lastSeen || 0) - new Date(a.lastSeen || 0)),
       })
@@ -2134,7 +2139,7 @@ export async function POST(request, { params }) {
       }
       const next = [
         ...list.filter(e => String(e?.name || '').toLowerCase() !== lower),
-        { name: personName, deviceId, role: existing?.role === 'manager' ? 'manager' : 'staff', lastSeen: new Date().toISOString() },
+        { name: personName, deviceId, role: existing?.role === 'manager' ? 'manager' : 'staff', perms: Array.isArray(existing?.perms) ? existing.perms : [], lastSeen: new Date().toISOString() },
       ].slice(-100)
       const { error: uErr } = await sb.from('kitchens').update({ staff_names: next }).eq('id', ctx.kitchenId)
       if (uErr) return json({ error: 'Could not save name — run migration-17 in Supabase' }, 500)
@@ -2276,7 +2281,7 @@ export async function POST(request, { params }) {
             }
             const next = [
               ...list.filter(e => String(e?.name || '').toLowerCase() !== lower),
-              { name: personName, deviceId, role: existing?.role === 'manager' ? 'manager' : 'staff', lastSeen: new Date().toISOString() },
+              { name: personName, deviceId, role: existing?.role === 'manager' ? 'manager' : 'staff', perms: Array.isArray(existing?.perms) ? existing.perms : [], lastSeen: new Date().toISOString() },
             ].slice(-100)
             await sb.from('kitchens').update({ staff_names: next }).eq('id', k.id)
             // (update error = staff_names column missing → uniqueness not enforced; ignore)
@@ -3155,26 +3160,38 @@ export async function PUT(request, { params }) {
     const path = segs.join('/')
     const sb = supabaseAdmin
 
-    // ------- Staff: owner sets a person's role ('manager' = full access) -------
+    // ------- Staff: owner sets a person's access -------
+    // {role:'manager'} = full access. {perms:['orders','waste',...]} = granular
+    // extras on top of standard staff access (items, recipes, temps).
     if (segs[0] === 'staff' && segs[1]) {
       const { ctx, error } = await requireAuth(request)
       if (error) return error
       if (ctx.role !== 'owner' && ctx.role !== 'admin') return json({ error: 'Owner only' }, 403)
       const body = await request.json()
-      const role = body.role === 'manager' ? 'manager' : 'staff'
+      const VALID_PERMS = ['orders', 'waste', 'logbook', 'settings']
       const target = decodeURIComponent(segs[1]).trim().toLowerCase()
       const kId = ctx.kitchenId || ctx.kitchen?.id
       const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', kId).maybeSingle()
       const list = Array.isArray(k?.staff_names) ? k.staff_names : []
       let found = false
+      let updated = null
       const next = list.map(e => {
-        if (String(e?.name || '').toLowerCase() === target) { found = true; return { ...e, role } }
+        if (String(e?.name || '').toLowerCase() === target) {
+          found = true
+          updated = { ...e }
+          if (body.role !== undefined) updated.role = body.role === 'manager' ? 'manager' : 'staff'
+          if (Array.isArray(body.perms)) {
+            updated.perms = body.perms.filter(p => VALID_PERMS.includes(p))
+            updated.role = 'staff'   // choosing granular access implies not full-access
+          }
+          return updated
+        }
         return e
       })
       if (!found) return json({ error: 'Name not found' }, 404)
       const { error: uErr } = await sb.from('kitchens').update({ staff_names: next }).eq('id', kId)
       if (uErr) throw uErr
-      return json({ ok: true, name: decodeURIComponent(segs[1]), role })
+      return json({ ok: true, name: decodeURIComponent(segs[1]), role: updated.role || 'staff', perms: updated.perms || [] })
     }
 
     // ------- Recipes: edit a saved recipe -------

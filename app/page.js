@@ -183,9 +183,15 @@ function App() {
     return () => { cancelled = true }
   }, [router])
 
-  // STAFF RESTRICTIONS — code logins are 'staff' unless the owner promotes the
-  // person to Manager (Settings → Staff & Activity). Owner + managers = full access.
+  // STAFF RESTRICTIONS — code logins are 'staff' unless the owner grants access:
+  // "Full access" or granular perms (orders/waste/logbook/settings) chosen in
+  // Settings → Staff. Owner always has everything.
   const isStaff = me?.role === 'chef' && me?.personRole !== 'manager'
+  const can = (perm) => {
+    if (me?.role !== 'chef') return true                       // owner / admin
+    if (me?.personRole === 'manager') return true              // full access
+    return (me?.personPerms || []).includes(perm)              // granular
+  }
 
   // Register the person's name after login (popup for users who logged in
   // before the names feature existed).
@@ -1494,7 +1500,7 @@ function App() {
                 <BookOpen className="h-4 w-4 mr-2" /> {T('nav_recipes')}
               </Button>
             )}
-            {hasStock && !isStaff && (
+            {hasStock && can('orders') && (
               <Button variant={view === 'orders' ? 'default' : 'ghost'} size="sm" onClick={() => setView('orders')}>
                 <Truck className="h-4 w-4 mr-2" /> Orders
               </Button>
@@ -1504,7 +1510,7 @@ function App() {
                 <ChefHat className="h-4 w-4 mr-2" /> {T('nav_rota')}
               </Button>
             )}
-            {hasAnalytics && !isStaff && (
+            {hasAnalytics && can('waste') && (
               <Button variant={view === 'analytics' ? 'default' : 'ghost'} size="sm" onClick={() => setView('analytics')}>
                 <BarChart3 className="h-4 w-4 mr-2" /> {T('nav_waste')}
               </Button>
@@ -1555,7 +1561,7 @@ function App() {
                 <BookOpen className="h-4 w-4 mr-2" /> {T('nav_recipes')}
               </Button>
             )}
-            {hasStock && !isStaff && (
+            {hasStock && can('orders') && (
               <Button variant={view === 'orders' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('orders'); setMobileNav(false) }}>
                 <Truck className="h-4 w-4 mr-2" /> Orders
               </Button>
@@ -1565,7 +1571,7 @@ function App() {
                 <ChefHat className="h-4 w-4 mr-2" /> {T('nav_rota')}
               </Button>
             )}
-            {hasAnalytics && !isStaff && (
+            {hasAnalytics && can('waste') && (
               <Button variant={view === 'analytics' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('analytics'); setMobileNav(false) }}>
                 <BarChart3 className="h-4 w-4 mr-2" /> {T('nav_waste')}
               </Button>
@@ -1600,7 +1606,7 @@ function App() {
 
       <main className="container mx-auto px-4 py-8">
         {view === 'dashboard' && (
-          <DashboardView stats={stats} statsLoading={statsLoading} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} isStaff={isStaff} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} openEdit={openEdit} refreshAll={() => { fetchProducts(); fetchStats() }} />
+          <DashboardView stats={stats} statsLoading={statsLoading} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} isStaff={!can('logbook')} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} openEdit={openEdit} refreshAll={() => { fetchProducts(); fetchStats() }} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -1618,7 +1624,7 @@ function App() {
             openSnap={openSnap}
             openBarcode={openBarcode}
             openVoice={openVoice}
-            printLogbook={isStaff ? null : printLogbook}
+            printLogbook={can('logbook') ? printLogbook : null}
             openEdit={openEdit}
             deleteProduct={deleteProduct}
             disposeProduct={disposeProduct}
@@ -1643,14 +1649,14 @@ function App() {
         {view === 'rota' && (
           <RotaView />
         )}
-        {view === 'orders' && !isStaff && (
+        {view === 'orders' && can('orders') && (
           <OrdersView />
         )}
-        {view === 'analytics' && !isStaff && (
+        {view === 'analytics' && can('waste') && (
           <AnalyticsView products={products} />
         )}
         {view === 'haccp' && (
-          <HaccpView currentUser={getPersonName() || me?.userEmail || ''} haccpLocations={settings.haccpLocations || []} isStaff={isStaff} />
+          <HaccpView currentUser={getPersonName() || me?.userEmail || ''} haccpLocations={settings.haccpLocations || []} isStaff={!can('logbook')} />
         )}
       </main>
 
@@ -2579,7 +2585,8 @@ function App() {
         settings={settings}
         saveSettings={saveSettings}
         openWizard={() => { setSettingsOpen(false); setWizardOpen(true) }}
-        isStaff={isStaff}
+        isStaff={!can('settings')}
+        isOwner={me?.role === 'owner' || !!me?.isAdmin}
       />
 
       {/* "Add your name" popup — for people already logged in via code before the names feature */}
