@@ -151,6 +151,9 @@ function App() {
   const [authed, setAuthed] = useState(null) // null = checking, true/false
   const [me, setMe] = useState(null)         // { role, isAdmin, userEmail, kitchen }
   const [mobileNav, setMobileNav] = useState(false)
+  const [namePromptOpen, setNamePromptOpen] = useState(false)   // "add your name" popup for existing users
+  const [namePromptValue, setNamePromptValue] = useState('')
+  const [namePromptBusy, setNamePromptBusy] = useState(false)
   const router = useRouter()
 
   // Check auth on mount by calling /api/auth/me
@@ -168,6 +171,10 @@ function App() {
         if (cancelled) return
         setMe(data)
         setAuthed(true)
+        // Existing code-login users from before the names feature: ask for their name once.
+        if (data?.role === 'chef') {
+          try { if (!localStorage.getItem('sw_person_name')) setNamePromptOpen(true) } catch {}
+        }
         // If owner kitchen not approved, show waiting screen (handled below in render)
       } catch {
         if (!cancelled) { setAuthed(false); router.replace('/login') }
@@ -175,6 +182,47 @@ function App() {
     })()
     return () => { cancelled = true }
   }, [router])
+
+  // STAFF RESTRICTIONS — code logins are 'staff' unless the owner promotes the
+  // person to Manager (Settings → Staff & Activity). Owner + managers = full access.
+  const isStaff = me?.role === 'chef' && me?.personRole !== 'manager'
+
+  // Register the person's name after login (popup for users who logged in
+  // before the names feature existed).
+  const submitNamePrompt = async (claim = false) => {
+    const n = namePromptValue.trim()
+    if (!n) { toast.error('Please enter your name'); return }
+    setNamePromptBusy(true)
+    try {
+      let deviceId = ''
+      try {
+        deviceId = localStorage.getItem('sw_device_id') || ''
+        if (!deviceId) {
+          deviceId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+          localStorage.setItem('sw_device_id', deviceId)
+        }
+      } catch {}
+      const res = await fetch('/api/staff/register-name', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: n, deviceId, ...(claim ? { claimName: true } : {}) })
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.status === 409 && data.nameConflict) {
+        const itsMe = window.confirm(`The name "${n}" is already used on another device in this kitchen.\n\nIs this YOU on a new phone/browser?\n\nOK = yes, move my name to this device\nCancel = no, I'll pick a different name`)
+        if (itsMe) { setNamePromptBusy(false); return submitNamePrompt(true) }
+        return
+      }
+      if (!res.ok) throw new Error(data.error || '')
+      try { localStorage.setItem('sw_person_name', n) } catch {}
+      setNamePromptOpen(false)
+      toast.success(`Thanks, ${n}! Your name will show on everything you add.`)
+    } catch (e) {
+      toast.error(e.message || 'Could not save your name')
+    } finally {
+      setNamePromptBusy(false)
+    }
+  }
 
   const fetchProducts = async (opts = {}) => {
     if (!opts.silent) setLoading(true)
@@ -1446,7 +1494,7 @@ function App() {
                 <BookOpen className="h-4 w-4 mr-2" /> {T('nav_recipes')}
               </Button>
             )}
-            {hasStock && (
+            {hasStock && !isStaff && (
               <Button variant={view === 'orders' ? 'default' : 'ghost'} size="sm" onClick={() => setView('orders')}>
                 <Truck className="h-4 w-4 mr-2" /> Orders
               </Button>
@@ -1456,7 +1504,7 @@ function App() {
                 <ChefHat className="h-4 w-4 mr-2" /> {T('nav_rota')}
               </Button>
             )}
-            {hasAnalytics && (
+            {hasAnalytics && !isStaff && (
               <Button variant={view === 'analytics' ? 'default' : 'ghost'} size="sm" onClick={() => setView('analytics')}>
                 <BarChart3 className="h-4 w-4 mr-2" /> {T('nav_waste')}
               </Button>
@@ -1507,7 +1555,7 @@ function App() {
                 <BookOpen className="h-4 w-4 mr-2" /> {T('nav_recipes')}
               </Button>
             )}
-            {hasStock && (
+            {hasStock && !isStaff && (
               <Button variant={view === 'orders' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('orders'); setMobileNav(false) }}>
                 <Truck className="h-4 w-4 mr-2" /> Orders
               </Button>
@@ -1517,7 +1565,7 @@ function App() {
                 <ChefHat className="h-4 w-4 mr-2" /> {T('nav_rota')}
               </Button>
             )}
-            {hasAnalytics && (
+            {hasAnalytics && !isStaff && (
               <Button variant={view === 'analytics' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('analytics'); setMobileNav(false) }}>
                 <BarChart3 className="h-4 w-4 mr-2" /> {T('nav_waste')}
               </Button>
@@ -1552,7 +1600,7 @@ function App() {
 
       <main className="container mx-auto px-4 py-8">
         {view === 'dashboard' && (
-          <DashboardView stats={stats} statsLoading={statsLoading} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} openEdit={openEdit} refreshAll={() => { fetchProducts(); fetchStats() }} />
+          <DashboardView stats={stats} statsLoading={statsLoading} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} isStaff={isStaff} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} openEdit={openEdit} refreshAll={() => { fetchProducts(); fetchStats() }} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -1570,7 +1618,7 @@ function App() {
             openSnap={openSnap}
             openBarcode={openBarcode}
             openVoice={openVoice}
-            printLogbook={printLogbook}
+            printLogbook={isStaff ? null : printLogbook}
             openEdit={openEdit}
             deleteProduct={deleteProduct}
             disposeProduct={disposeProduct}
@@ -1595,14 +1643,14 @@ function App() {
         {view === 'rota' && (
           <RotaView />
         )}
-        {view === 'orders' && (
+        {view === 'orders' && !isStaff && (
           <OrdersView />
         )}
-        {view === 'analytics' && (
+        {view === 'analytics' && !isStaff && (
           <AnalyticsView products={products} />
         )}
         {view === 'haccp' && (
-          <HaccpView currentUser={me?.user?.email || me?.chef?.name || ''} haccpLocations={settings.haccpLocations || []} />
+          <HaccpView currentUser={getPersonName() || me?.userEmail || ''} haccpLocations={settings.haccpLocations || []} isStaff={isStaff} />
         )}
       </main>
 
@@ -2531,7 +2579,31 @@ function App() {
         settings={settings}
         saveSettings={saveSettings}
         openWizard={() => { setSettingsOpen(false); setWizardOpen(true) }}
+        isStaff={isStaff}
       />
+
+      {/* "Add your name" popup — for people already logged in via code before the names feature */}
+      <Dialog open={namePromptOpen} onOpenChange={(v) => { if (!v && namePromptValue.trim()) setNamePromptOpen(false) }}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>👋 What's your name?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Your name shows on everything you add — so the team knows who added what. Each person needs their own name.
+          </p>
+          <Input
+            value={namePromptValue}
+            onChange={e => setNamePromptValue(e.target.value)}
+            placeholder="e.g. Maria"
+            maxLength={40}
+            autoFocus
+            onKeyDown={e => { if (e.key === 'Enter') submitNamePrompt() }}
+          />
+          <Button onClick={() => submitNamePrompt()} disabled={namePromptBusy} className="w-full bg-emerald-600 hover:bg-emerald-700">
+            {namePromptBusy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null} Save my name
+          </Button>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

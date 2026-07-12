@@ -429,9 +429,11 @@ ${printLocs.length > 0 ? `<table>
         <Button size="sm" variant="outline" onClick={onLog}>
           <Plus className="h-4 w-4 mr-1" /> Log one
         </Button>
+        {onScan && (
         <Button size="sm" variant="outline" onClick={onScan} className="border-emerald-300 text-emerald-700 bg-emerald-50 hover:bg-emerald-100">
           📸 Scan sheet <span className="ml-1 text-[9px] font-bold bg-emerald-600 text-white rounded px-1">AI</span>
         </Button>
+        )}
         <div className="ml-auto flex items-center gap-1 rounded-lg border bg-white p-0.5">
           <button
             onClick={() => setMode('logbook')}
@@ -732,7 +734,7 @@ ${printLocs.length > 0 ? `<table>
   )
 }
 
-export function HaccpView({ currentUser, haccpLocations = [] }) {
+export function HaccpView({ currentUser, haccpLocations = [], isStaff }) {
   const [tab, setTab] = useState('temperatures')
   const [temps, setTemps] = useState([])
   const [tasks, setTasks] = useState([])
@@ -1172,7 +1174,7 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
           temps={temps}
           haccpLocations={haccpLocations}
           onLog={() => setTempModal({ location: haccpLocations.find(l => l.active !== false)?.name || '', temperatureC: '' })}
-          onScan={() => setScanTempOpen(true)}
+          onScan={isStaff ? null : () => setScanTempOpen(true)}
           onEdit={(t) => setTempModal({
             id: t.id,
             location: t.location,

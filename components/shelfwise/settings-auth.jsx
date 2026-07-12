@@ -550,7 +550,7 @@ export function ChefCodeCard() {
   )
 }
 
-export function SettingsDialog({ open, onClose, settings, saveSettings, openWizard }) {
+export function SettingsDialog({ open, onClose, settings, saveSettings, openWizard, isStaff }) {
   const [tab, setTab] = useState('profile') // 'profile' | 'login' | 'dashboard' | 'fields'
   const [name, setName] = useState('')
   const [type, setType] = useState('Restaurant')
@@ -1852,6 +1852,26 @@ export function StaffActivityCard() {
     } catch { toast.error('Could not remove name') } finally { setRemoving('') }
   }
 
+  // Promote/demote a person. Managers get FULL access (orders, waste, logbook,
+  // all settings) — handy when the owner is on holiday.
+  const toggleManager = async (s) => {
+    const promote = s.role !== 'manager'
+    if (!window.confirm(promote
+      ? `Make "${s.name}" a MANAGER?\n\nManagers get full access to everything (orders, waste, logbook, all settings) — like you.`
+      : `Remove manager access from "${s.name}"?\n\nThey go back to staff access (add items, view/add recipes, log temps).`)) return
+    setRemoving(s.name)
+    try {
+      const res = await fetch(`/api/staff/${encodeURIComponent(s.name)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: promote ? 'manager' : 'staff' }),
+      })
+      if (!res.ok) throw new Error()
+      toast.success(promote ? `${s.name} is now a Manager 👑` : `${s.name} is now Staff`)
+      setStaff(prev => prev.map(x => x.name === s.name ? { ...x, role: promote ? 'manager' : 'staff' } : x))
+    } catch { toast.error('Could not change role') } finally { setRemoving('') }
+  }
+
   const fmtTime = (t) => {
     try {
       const d = new Date(t)
@@ -1884,12 +1904,20 @@ export function StaffActivityCard() {
             {staff.map(s => (
               <div key={s.name} className="flex items-center justify-between gap-2 bg-white rounded-md border px-3 py-2">
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold capitalize truncate">{s.name}</p>
+                  <p className="text-sm font-semibold capitalize truncate">
+                    {s.name}
+                    {s.role === 'manager' && <span className="ml-1.5 text-[10px] font-bold bg-indigo-600 text-white rounded px-1.5 py-0.5 align-middle">👑 MANAGER</span>}
+                  </p>
                   <p className="text-[11px] text-muted-foreground">Last active: {s.lastSeen ? fmtTime(s.lastSeen) : 'unknown'}</p>
                 </div>
-                <Button variant="ghost" size="sm" type="button" onClick={() => removeStaff(s.name)} disabled={removing === s.name} className="text-red-600 hover:bg-red-50 shrink-0 h-8 px-2">
-                  {removing === s.name ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                </Button>
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button variant="outline" size="sm" type="button" onClick={() => toggleManager(s)} disabled={removing === s.name} className="h-8 px-2 text-[11px] bg-white">
+                    {s.role === 'manager' ? 'Remove manager' : 'Make manager'}
+                  </Button>
+                  <Button variant="ghost" size="sm" type="button" onClick={() => removeStaff(s.name)} disabled={removing === s.name} className="text-red-600 hover:bg-red-50 shrink-0 h-8 px-2">
+                    {removing === s.name ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                  </Button>
+                </div>
               </div>
             ))}
           </div>

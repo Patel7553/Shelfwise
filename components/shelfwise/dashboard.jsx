@@ -256,7 +256,7 @@ export function UseItOrLoseItPanel({ products, currency, openRecipeGenFromExpiri
   )
 }
 
-export function DashboardView({ stats, statsLoading, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, openReceipt, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes, currency, openRecipeGen, openRecipeGenFromExpiring, openEdit, refreshAll }) {
+export function DashboardView({ stats, statsLoading, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, openReceipt, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes, currency, openRecipeGen, openRecipeGenFromExpiring, openEdit, refreshAll, isStaff }) {
   const [quickSearch, setQuickSearch] = useState('')
   const [globalResults, setGlobalResults] = useState(null)
   const [globalLoading, setGlobalLoading] = useState(false)
@@ -361,14 +361,18 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
           <span className="text-xs font-semibold">Invoice</span>
           <span className="absolute top-1 right-1 text-[8px] font-bold bg-fuchsia-600 text-white rounded px-1">NEW</span>
         </button>
+        {!isStaff && (
         <button onClick={openScan} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-teal-200 bg-teal-50 hover:bg-teal-100 hover:border-teal-300 transition text-teal-800">
           <span className="text-2xl">📋</span>
           <span className="text-xs font-semibold">Scan Logbook</span>
         </button>
+        )}
+        {!isStaff && (
         <button onClick={printLogbook} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-amber-200 bg-amber-50 hover:bg-amber-100 hover:border-amber-300 transition text-amber-800">
           <span className="text-2xl">📒</span>
           <span className="text-xs font-semibold">Print Logbook</span>
         </button>
+        )}
       </div>
 
       <UseTodayPanel products={products} goToInventory={goToInventory} formatDate={(d) => new Date(d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} />
