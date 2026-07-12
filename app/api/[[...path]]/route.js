@@ -2884,7 +2884,10 @@ Output strictly valid JSON with no other text.`
             ? body.steps
             : (Array.isArray(body.instructions) ? body.instructions : []),
           matched: Array.isArray(body.matched) ? body.matched : [],
-          summary: body.summary && typeof body.summary === 'object' ? body.summary : {},
+          summary: {
+            ...(body.summary && typeof body.summary === 'object' ? body.summary : {}),
+            ...(typeof body.notes === 'string' && body.notes.trim() ? { notes: body.notes.trim().slice(0, 2000) } : {}),
+          },
         }
 
         // REPLACE mode — overwrite an existing recipe instead of inserting a new one

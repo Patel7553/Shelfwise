@@ -280,6 +280,19 @@ export function RecipeResult({ result, setResult, onBack, onClose, goToInventory
       </div>
       )}
 
+      {/* Notes — optional chef notes saved with the recipe */}
+      <div>
+        <p className="font-semibold text-sm mb-1.5">📝 Notes <span className="text-[10px] font-normal text-muted-foreground">optional — chef tips, plating, portioning...</span></p>
+        <textarea
+          value={result.notes || ''}
+          onChange={e => setResult({ ...result, notes: e.target.value })}
+          rows={2}
+          maxLength={2000}
+          placeholder="Add a note for your team (saved with the recipe)..."
+          className="w-full rounded-md border border-input bg-background p-2 text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+        />
+      </div>
+
       <div className="flex justify-between pt-2 border-t">
         <Button variant="ghost" onClick={onBack}><X className="h-4 w-4 mr-2" /> Scan another</Button>
         <div className="flex gap-2">
@@ -676,16 +689,19 @@ export function ViewRecipeDialog({ recipe, onClose, onDelete, onUpdated }) {
       ingredients: JSON.parse(JSON.stringify(recipe.ingredients || [])),
       steps: [...(recipe.steps || [])],
       allergens: [...(recipe.allergens || [])],
+      notes: recipe.summary?.notes || '',
     })
     setEditMode(true)
   }
   const saveEdit = async () => {
     setSaving(true)
     try {
+      const { notes, ...rest } = draft
+      const payload = { ...rest, summary: { ...(recipe.summary || {}), notes: (notes || '').trim().slice(0, 2000) } }
       const res = await fetch(`/api/recipes/${recipe.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(draft),
+        body: JSON.stringify(payload),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Update failed')
@@ -863,6 +879,28 @@ export function ViewRecipeDialog({ recipe, onClose, onDelete, onUpdated }) {
               {recipe.instructions.map((s, i) => <li key={i} className="leading-relaxed">{s}</li>)}
             </ol>
           </div>
+        )}
+
+        {/* Notes — chef notes stored with the recipe */}
+        {editMode ? (
+          <div>
+            <p className="font-semibold text-sm mb-1.5">📝 Notes</p>
+            <textarea
+              value={draft.notes}
+              onChange={e => setDraft({ ...draft, notes: e.target.value })}
+              rows={2}
+              maxLength={2000}
+              placeholder="Chef tips, plating, portioning..."
+              className="w-full rounded-md border border-input bg-white p-2 text-sm"
+            />
+          </div>
+        ) : (
+          recipe.summary?.notes ? (
+            <div className="border rounded-lg bg-slate-50 p-3">
+              <p className="font-semibold text-sm mb-1">📝 Notes</p>
+              <p className="text-sm text-slate-700 whitespace-pre-wrap">{recipe.summary.notes}</p>
+            </div>
+          ) : null
         )}
 
         <DialogFooter>
