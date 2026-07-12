@@ -1375,10 +1375,12 @@ async function scanRecipe({ image, images, text }) {
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
   // Support multi-page recipes: merge every photo into ONE recipe.
   const imgs = (Array.isArray(images) && images.length > 0) ? images : (image ? [image] : [])
-  const systemPrompt = `You are a recipe parser. Extract structured recipe data and return it as JSON.
+  const systemPrompt = `You are a recipe parser for a professional kitchen. Extract structured recipe data and return it as JSON.
 The recipe may span MULTIPLE photos/pages — treat them as ONE single recipe: combine ALL ingredients (deduplicate) and keep steps in page order.
 Return ONLY a JSON object of shape: {"title","servings","ingredients":[{"name","quantity","unit","notes"}],"steps":["step 1","step 2",...],"allergens":[]}.
 "steps" = the cooking method / instructions EXACTLY as written in the recipe (one array item per step, strip any leading numbering). Do NOT invent steps — if the recipe truly shows no method, return "steps": [].
+"allergens" = analyse EVERY ingredient and list ALL of the 14 UK/EU declarable allergens present, even when not explicitly labelled. The 14: celery, gluten, crustaceans, eggs, fish, lupin, milk, molluscs, mustard, nuts, peanuts, sesame, soya, sulphites.
+Infer from ingredients — examples: flour/bread/pasta/beer → "gluten"; butter/cream/cheese/yoghurt → "milk"; mayonnaise/batter with egg → "eggs"; soy sauce → "soya" and "gluten"; prawns/crab → "crustaceans"; almonds/hazelnuts/walnuts → "nuts"; wine vinegar/dried fruit → "sulphites"; worcestershire sauce → "fish". Use lowercase names from the list above. If genuinely none, return [].
 Output strictly valid JSON with no other text.`
 
   const body = {
