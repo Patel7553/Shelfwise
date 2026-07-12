@@ -872,6 +872,8 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
             <div className="space-y-5">
               <ChefCodeCard />
 
+              <StaffActivityCard />
+
               <div className="rounded-lg border-2 border-amber-200 bg-amber-50 p-4">
                 <Label className="text-amber-900 text-sm font-bold">📧 Alert Email</Label>
                 <p className="text-xs text-amber-700 mt-1 mb-3">Daily expiry alerts will be sent here.</p>
@@ -1784,6 +1786,152 @@ export function SensorSettingsCard({ locations = [] }) {
           </p>
         </>
       )}
+    </div>
+  )
+}
+
+// ============================================================================
+// Staff & Activity (owner only) — see who logged in via code, remove names,
+// and browse the full activity history (who added/edited/deleted what, when).
+// Hides itself automatically for non-owners (API returns 403).
+// ============================================================================
+const ACTIVITY_LABELS = {
+  item_added: { label: 'Added item', emoji: '➕', cls: 'bg-emerald-100 text-emerald-800' },
+  item_updated: { label: 'Edited item', emoji: '✏️', cls: 'bg-blue-100 text-blue-800' },
+  item_deleted: { label: 'Deleted item', emoji: '🗑️', cls: 'bg-red-100 text-red-700' },
+  recipe_saved: { label: 'Saved recipe', emoji: '📖', cls: 'bg-purple-100 text-purple-800' },
+  recipe_updated: { label: 'Edited recipe', emoji: '📖', cls: 'bg-purple-100 text-purple-800' },
+  recipe_deleted: { label: 'Deleted recipe', emoji: '🗑️', cls: 'bg-red-100 text-red-700' },
+  waste_logged: { label: 'Logged waste', emoji: '♻️', cls: 'bg-amber-100 text-amber-800' },
+  temp_logged: { label: 'Logged temp', emoji: '🌡️', cls: 'bg-sky-100 text-sky-800' },
+}
+
+export function StaffActivityCard() {
+  const [allowed, setAllowed] = useState(true)   // false when API says "Owner only"
+  const [staff, setStaff] = useState([])
+  const [items, setItems] = useState([])
+  const [note, setNote] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [removing, setRemoving] = useState('')
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const [sRes, aRes] = await Promise.all([fetch('/api/staff'), fetch('/api/activity?limit=25')])
+      if (sRes.status === 403 || aRes.status === 403) { setAllowed(false); return }
+      const s = await sRes.json().catch(() => ({}))
+      const a = await aRes.json().catch(() => ({}))
+      setStaff(Array.isArray(s.staff) ? s.staff : [])
+      setItems(Array.isArray(a.items) ? a.items : [])
+      setHasMore(!!a.hasMore)
+      setNote(a.note || '')
+    } catch {} finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+
+  const loadMore = async () => {
+    setLoadingMore(true)
+    try {
+      const res = await fetch(`/api/activity?limit=25&offset=${items.length}`)
+      const a = await res.json().catch(() => ({}))
+      setItems(prev => [...prev, ...(Array.isArray(a.items) ? a.items : [])])
+      setHasMore(!!a.hasMore)
+    } catch {} finally { setLoadingMore(false) }
+  }
+
+  const removeStaff = async (name) => {
+    if (!window.confirm(`Remove "${name}" from the staff list?\n\nTheir past activity stays in the log — this just frees the name so it can be used again.`)) return
+    setRemoving(name)
+    try {
+      const res = await fetch(`/api/staff/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error()
+      toast.success(`${name} removed`)
+      setStaff(prev => prev.filter(s => s.name !== name))
+    } catch { toast.error('Could not remove name') } finally { setRemoving('') }
+  }
+
+  const fmtTime = (t) => {
+    try {
+      const d = new Date(t)
+      const today = new Date().toDateString() === d.toDateString()
+      return today ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+    } catch { return '' }
+  }
+
+  if (!allowed) return null
+
+  return (
+    <div className="rounded-lg border-2 border-indigo-200 bg-indigo-50/40 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <Label className="text-indigo-900 text-sm font-bold">👥 Staff & Activity</Label>
+          <p className="text-xs text-indigo-700 mt-0.5">People who logged in with the kitchen code, and everything they did.</p>
+        </div>
+        <Button variant="outline" size="sm" type="button" onClick={load} disabled={loading} className="bg-white shrink-0">
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+        </Button>
+      </div>
+
+      {/* Staff names */}
+      <div className="mt-3">
+        <p className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider mb-1.5">Staff names ({staff.length})</p>
+        {staff.length === 0 ? (
+          <p className="text-xs text-muted-foreground">Nobody has logged in with the code yet. Names appear here after staff log in with today's code + their name.</p>
+        ) : (
+          <div className="space-y-1.5">
+            {staff.map(s => (
+              <div key={s.name} className="flex items-center justify-between gap-2 bg-white rounded-md border px-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold capitalize truncate">{s.name}</p>
+                  <p className="text-[11px] text-muted-foreground">Last active: {s.lastSeen ? fmtTime(s.lastSeen) : 'unknown'}</p>
+                </div>
+                <Button variant="ghost" size="sm" type="button" onClick={() => removeStaff(s.name)} disabled={removing === s.name} className="text-red-600 hover:bg-red-50 shrink-0 h-8 px-2">
+                  {removing === s.name ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Activity history */}
+      <div className="mt-4">
+        <p className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider mb-1.5">Activity history</p>
+        {note && (
+          <div className="text-xs bg-amber-50 border border-amber-300 text-amber-800 rounded-md p-2 mb-2">
+            ⚠️ {note}
+          </div>
+        )}
+        {items.length === 0 && !note ? (
+          <p className="text-xs text-muted-foreground">{loading ? 'Loading…' : 'No activity recorded yet. Actions appear here as your team uses the app.'}</p>
+        ) : (
+          <div className="space-y-1 max-h-80 overflow-y-auto pr-1">
+            {items.map(it => {
+              const meta = ACTIVITY_LABELS[it.action] || { label: it.action, emoji: '•', cls: 'bg-slate-100 text-slate-700' }
+              return (
+                <div key={it.id} className="flex items-start gap-2 bg-white rounded-md border px-3 py-2">
+                  <span className="text-base leading-none mt-0.5">{meta.emoji}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs">
+                      <span className="font-semibold capitalize">{it.person || 'Unknown'}</span>{' '}
+                      <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${meta.cls}`}>{meta.label}</span>{' '}
+                      <span className="text-slate-700 break-words">{it.detail}</span>
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">{fmtTime(it.created_at)}</p>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+        {hasMore && (
+          <Button variant="outline" size="sm" type="button" onClick={loadMore} disabled={loadingMore} className="mt-2 w-full bg-white">
+            {loadingMore ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null} Load older activity
+          </Button>
+        )}
+      </div>
     </div>
   )
 }

@@ -30,11 +30,12 @@ export default function LoginPage() {
   const [kitchenName, setKitchenName] = useState('')
   const [code, setCode] = useState('')
   const [personName, setPersonName] = useState('')
+  const [ownerName, setOwnerName] = useState('')
   const [chefBusy, setChefBusy] = useState(false)
 
   // Prefill the person's name if they've logged in on this phone before
   useEffect(() => {
-    try { const n = localStorage.getItem('sw_person_name'); if (n) setPersonName(n) } catch {}
+    try { const n = localStorage.getItem('sw_person_name'); if (n) { setPersonName(n); setOwnerName(n) } } catch {}
   }, [])
 
   // Stable per-device id — lets the same person log in again with their name,
@@ -87,6 +88,8 @@ export default function LoginPage() {
         toast.warning(`Account status: ${me.kitchen.status}. Awaiting admin approval.`)
         // Still route them to a page — the home page will show a friendly waiting screen.
       }
+      // Remember the owner's display name — stamped on items they add + activity log
+      if (ownerName.trim()) { try { localStorage.setItem('sw_person_name', ownerName.trim()) } catch {} }
       toast.success('Welcome back!')
       router.replace(me.isAdmin ? '/admin' : '/')
     } catch (err) {
@@ -191,6 +194,11 @@ export default function LoginPage() {
                     <div className="flex justify-end mt-1">
                       <button type="button" onClick={forgotPassword} className="text-xs text-emerald-700 font-medium hover:underline">Forgot password?</button>
                     </div>
+                  </div>
+                  <div>
+                    <Label htmlFor="oname">Your name</Label>
+                    <Input id="oname" value={ownerName} onChange={e => setOwnerName(e.target.value)} placeholder="e.g. John" maxLength={40} />
+                    <p className="text-[11px] text-slate-500 mt-1">Shows on everything you add (optional).</p>
                   </div>
                   <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700" disabled={ownerBusy}>
                     {ownerBusy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <LogIn className="h-4 w-4 mr-2" />}

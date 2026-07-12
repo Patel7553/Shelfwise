@@ -1467,6 +1467,33 @@ async function requireAdmin(request) {
   return { ctx, error: null }
 }
 
+// ---- Activity log helpers ----
+// WHO did the action: the x-person-name header is attached automatically by the
+// client (set at login), falling back to the auth identity.
+function personFromRequest(request, ctx) {
+  try {
+    const h = request.headers.get('x-person-name')
+    if (h) {
+      const n = decodeURIComponent(h).trim().slice(0, 40)
+      if (n) return n
+    }
+  } catch {}
+  return ctx?.userEmail || (ctx?.role === 'chef' ? 'Chef (code login)' : ctx?.role || 'Unknown')
+}
+
+// Best-effort insert into activity_logs — never fails the main request.
+// Requires migration-18 (activity_logs table); silently skipped on legacy DBs.
+async function logActivity(sb, kitchenId, person, action, detail) {
+  try {
+    await sb.from('activity_logs').insert({
+      kitchen_id: kitchenId,
+      person: String(person || 'Unknown').slice(0, 40),
+      action: String(action || '').slice(0, 40),
+      detail: String(detail || '').slice(0, 300),
+    })
+  } catch { /* ignore */ }
+}
+
 // ============================================================================
 // GET
 // ============================================================================
@@ -2006,6 +2033,43 @@ export async function GET(request, { params }) {
           deliveries: missing(deliveries) ? [] : (deliveries.data || []).map(haccpDeliveryFromDb),
         })
       }
+    }
+
+    // ------- Staff list (owner only) — names that have logged in via code -------
+    if (path === 'staff') {
+      const { ctx, error } = await requireAuth(request)
+      if (error) return error
+      if (ctx.role !== 'owner' && ctx.role !== 'admin') return json({ error: 'Owner only' }, 403)
+      const kId = ctx.kitchenId || ctx.kitchen?.id
+      const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', kId).maybeSingle()
+      const staff = Array.isArray(k?.staff_names) ? k.staff_names : []
+      return json({
+        staff: staff
+          .map(s => ({ name: s?.name || '', lastSeen: s?.lastSeen || null }))
+          .filter(s => s.name)
+          .sort((a, b) => new Date(b.lastSeen || 0) - new Date(a.lastSeen || 0)),
+      })
+    }
+
+    // ------- Activity log (owner only) -------
+    if (path === 'activity') {
+      const { ctx, error } = await requireAuth(request)
+      if (error) return error
+      if (ctx.role !== 'owner' && ctx.role !== 'admin') return json({ error: 'Owner only' }, 403)
+      const kId = ctx.kitchenId || ctx.kitchen?.id
+      const url = new URL(request.url)
+      const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 100)
+      const offset = Math.max(Number(url.searchParams.get('offset')) || 0, 0)
+      const { data, error: aErr } = await sb.from('activity_logs').select('*')
+        .eq('kitchen_id', kId).order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1)
+      if (aErr) {
+        if (/does not exist|schema cache/i.test(aErr.message || '')) {
+          return json({ items: [], note: 'Run migration-18-activity-log.sql in Supabase to enable the activity log.' })
+        }
+        throw aErr
+      }
+      return json({ items: data || [], hasMore: (data || []).length === limit })
     }
 
     // Chef code viewing (owner only)
@@ -2715,6 +2779,7 @@ Output strictly valid JSON with no other text.`
         if (!row.product_name) return json({ error: 'productName required' }, 400)
         const { data, error: e2 } = await sb.from('waste_log').insert(row).select().single()
         if (e2) throw e2
+        await logActivity(sb, kid, personFromRequest(request, ctx), 'waste_logged', `${row.product_name} (${row.quantity} ${row.unit}) — ${row.reason}`)
         return json(wasteFromDb(data), 201)
       }
 
@@ -2744,6 +2809,7 @@ Output strictly valid JSON with no other text.`
           ;({ data, error: e2 } = await sb.from('haccp_temperature_logs').insert(row).select().single())
         }
         if (e2) throw e2
+        await logActivity(sb, kid, personFromRequest(request, ctx), 'temp_logged', `${location}: ${temp}°C ${row.is_pass ? 'PASS' : 'FAIL'}`)
         return json(haccpTempFromDb(data), 201)
       }
 
@@ -2831,6 +2897,7 @@ Output strictly valid JSON with no other text.`
             : ''
           return json({ error: (error.message || 'Insert failed') + hint }, 500)
         }
+        await logActivity(sb, kid, personFromRequest(request, ctx), 'item_added', data.name)
         return json(enrich(fromDb(data)), 201)
       }
 
@@ -2860,6 +2927,7 @@ Output strictly valid JSON with no other text.`
             : ''
           return json({ error: (error.message || 'Insert failed') + hint }, 500)
         }
+        await logActivity(sb, kid, personFromRequest(request, ctx), 'item_added', `${data.length} items: ${data.slice(0, 5).map(d => d.name).join(', ')}${data.length > 5 ? '…' : ''}`)
         return json({ inserted: data.length, items: data.map(fromDb).map(enrich) }, 201)
       }
 
@@ -2927,6 +2995,7 @@ Output strictly valid JSON with no other text.`
             error = retry.error
           }
           if (error) throw error
+          await logActivity(sb, kid, personFromRequest(request, ctx), 'recipe_updated', data?.title || row.title)
           return json(data, 200)
         }
 
@@ -2957,6 +3026,7 @@ Output strictly valid JSON with no other text.`
           error = retry.error
         }
         if (error) throw error
+        await logActivity(sb, kid, personFromRequest(request, ctx), 'recipe_saved', data?.title || row.title)
         return json(data, 201)
       }
 
@@ -3063,6 +3133,7 @@ export async function PUT(request, { params }) {
       }
       if (e2) return json({ error: e2.message }, 500)
       if (!data) return json({ error: 'Not found' }, 404)
+      await logActivity(sb, ctx.kitchenId, personFromRequest(request, ctx), 'recipe_updated', data?.title || segs[1])
       return json(data)
     }
 
@@ -3173,6 +3244,7 @@ export async function PUT(request, { params }) {
           : ''
         return json({ error: (e2.message || 'Update failed') + hint }, 500)
       }
+      await logActivity(sb, ctx.kitchenId, personFromRequest(request, ctx), 'item_updated', data?.name || segs[1])
       return json(enrich(fromDb(data)))
     }
 
@@ -3210,14 +3282,29 @@ export async function DELETE(request, { params }) {
     if (error) return error
 
     if (segs[0] === 'products' && segs[1]) {
+      const { data: prod } = await sb.from('products').select('name').eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
       const { error } = await sb.from('products').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
+      await logActivity(sb, ctx.kitchenId, personFromRequest(request, ctx), 'item_deleted', prod?.name || segs[1])
       return json({ ok: true })
     }
     if (segs[0] === 'recipes' && segs[1]) {
+      const { data: rec } = await sb.from('recipes').select('title').eq('id', segs[1]).maybeSingle()
       const { error } = await sb.from('recipes').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
+      await logActivity(sb, ctx.kitchenId, personFromRequest(request, ctx), 'recipe_deleted', rec?.title || segs[1])
       return json({ ok: true })
+    }
+    // ------- Staff: owner removes a person's name (frees it for reuse) -------
+    if (segs[0] === 'staff' && segs[1]) {
+      if (ctx.role !== 'owner' && ctx.role !== 'admin') return json({ error: 'Owner only' }, 403)
+      const target = decodeURIComponent(segs[1]).trim().toLowerCase()
+      const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', ctx.kitchenId).maybeSingle()
+      const list = Array.isArray(k?.staff_names) ? k.staff_names : []
+      const next = list.filter(e => String(e?.name || '').toLowerCase() !== target)
+      const { error: uErr } = await sb.from('kitchens').update({ staff_names: next }).eq('id', ctx.kitchenId)
+      if (uErr) throw uErr
+      return json({ ok: true, removed: list.length - next.length })
     }
     if (segs[0] === 'suppliers' && segs[1]) {
       const { error } = await sb.from('suppliers').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
