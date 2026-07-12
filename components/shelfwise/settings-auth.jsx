@@ -1061,6 +1061,9 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
                   💡 <span className="font-medium">Tip:</span> The AI scanner uses these names to match handwritten labels on your temperature log sheets — no matter how they're written (e.g. "walk-in", "WIF", "Walkin fridge" all map to your "Walk-in Fridge").
                 </div>
               )}
+
+              {/* ---- Automatic sensor integration ---- */}
+              <SensorSettingsCard locations={locations} />
             </div>
           )}
 
@@ -1538,3 +1541,249 @@ export function NotificationSettingsCard() {
 // Dispose (waste-log) dialog — asks the user WHY a product is being removed.
 // "Used up" is NOT logged as waste. Anything else creates a waste_log row.
 // ============================================================================
+
+// ============================================================================
+// CONNECT SENSORS — automatic fridge/freezer sensor integration (June 2025).
+// Vendor-agnostic: the backend exposes a plug-in catalog; this card renders
+// whatever vendors exist. Readings flow into the same HACCP logbook as manual
+// entries, labelled "Auto (Sensor)".
+// ============================================================================
+export function SensorSettingsCard({ locations = [] }) {
+  const [catalog, setCatalog] = useState([])
+  const [connection, setConnection] = useState(null)
+  const [migrationNeeded, setMigrationNeeded] = useState(false)
+  const [vendor, setVendor] = useState('')
+  const [creds, setCreds] = useState({})
+  const [interval, setIntervalMin] = useState(30)
+  const [sensors, setSensors] = useState([])       // discovered sensors after connect
+  const [mappings, setMappings] = useState([])     // [{sensorId, sensorName, location, enabled}]
+  const [busy, setBusy] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+
+  const activeLocations = (locations || []).filter(l => l.active !== false && l.name)
+
+  const loadState = async () => {
+    try {
+      const [vRes, cRes] = await Promise.all([
+        fetch('/api/sensors/vendors'),
+        fetch('/api/sensors/connection'),
+      ])
+      if (vRes.ok) setCatalog(await vRes.json())
+      if (cRes.ok) {
+        const data = await cRes.json()
+        setMigrationNeeded(!!data.migrationNeeded)
+        if (data.connection) {
+          setConnection(data.connection)
+          setVendor(data.connection.vendor)
+          setIntervalMin(data.connection.intervalMinutes || 30)
+          setMappings(data.connection.mappings || [])
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  useEffect(() => { loadState() }, [])
+
+  const vendorMeta = catalog.find(v => v.id === vendor)
+
+  const connect = async () => {
+    if (!vendor) { toast.error('Pick a vendor first'); return }
+    setBusy(true)
+    try {
+      const res = await fetch('/api/sensors/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vendor, credentials: creds, intervalMinutes: interval }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Connect failed')
+      setConnection(data.connection)
+      setSensors(data.sensors || [])
+      // pre-seed mappings: every discovered sensor, enabled, best-guess location
+      setMappings((data.sensors || []).map(s => {
+        const guess = activeLocations.find(l => s.name.toLowerCase().includes(String(l.name).toLowerCase().split(' ')[0]))
+        return { sensorId: s.id, sensorName: s.name, location: guess?.name || '', enabled: true }
+      }))
+      toast.success(`Connected — found ${data.sensors?.length || 0} sensors. Map them to your fridges below.`)
+    } catch (e) {
+      toast.error(e.message || 'Connect failed')
+    } finally { setBusy(false) }
+  }
+
+  const saveMappings = async () => {
+    const valid = mappings.filter(m => m.enabled && m.location)
+    if (valid.length === 0) { toast.error('Map at least one sensor to a fridge/freezer'); return }
+    setBusy(true)
+    try {
+      const res = await fetch('/api/sensors/mappings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mappings, intervalMinutes: interval }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Save failed')
+      setConnection(data.connection)
+      toast.success('Sensor mappings saved — syncing first readings...')
+      await syncNow()
+    } catch (e) {
+      toast.error(e.message || 'Save failed')
+    } finally { setBusy(false) }
+  }
+
+  const syncNow = async () => {
+    setSyncing(true)
+    try {
+      const res = await fetch('/api/sensors/sync', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Sync failed')
+      if (Number(data.fails) > 0) {
+        const list = (data.failedReadings || []).slice(0, 3).map(f => `${f.location}: ${f.temperatureC}°C`).join(', ')
+        toast.error(`🚨 SENSOR ALERT — out of range: ${list}`, { duration: 10000 })
+      }
+      toast.success(`🤖 Synced ${data.inserted || 0} reading${data.inserted !== 1 ? 's' : ''} into the Logbook`)
+      loadState()
+    } catch (e) {
+      toast.error(e.message || 'Sync failed')
+    } finally { setSyncing(false) }
+  }
+
+  const disconnect = async () => {
+    if (!window.confirm('Disconnect sensors? Existing readings stay in the Logbook.')) return
+    setBusy(true)
+    try {
+      await fetch('/api/sensors/disconnect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      setConnection(null); setSensors([]); setMappings([]); setVendor(''); setCreds({})
+      toast.success('Sensors disconnected')
+    } finally { setBusy(false) }
+  }
+
+  const setMapping = (sensorId, patch) => setMappings(list => list.map(m => m.sensorId === sensorId ? { ...m, ...patch } : m))
+
+  // Rows to render for mapping: freshly discovered sensors OR the saved mappings
+  const mappingRows = sensors.length > 0 ? mappings : (connection?.mappings || [])
+
+  return (
+    <div className="rounded-lg border-2 border-sky-200 bg-sky-50/40 p-4 space-y-3">
+      <div className="flex items-start justify-between gap-2 flex-wrap">
+        <div>
+          <Label className="text-base font-bold flex items-center gap-1.5">📡 Connect Sensors <span className="text-[9px] font-bold bg-sky-600 text-white rounded px-1.5 py-0.5">NEW</span></Label>
+          <p className="text-xs text-muted-foreground">Automatic fridge/freezer sensors log temperatures for you — readings appear in the Logbook as 🤖 Auto (Sensor), alongside your manual checks.</p>
+        </div>
+        {connection && (
+          <Button size="sm" variant="outline" onClick={disconnect} disabled={busy} className="text-red-600">Disconnect</Button>
+        )}
+      </div>
+
+      {migrationNeeded && (
+        <div className="text-xs bg-amber-50 border border-amber-300 text-amber-900 rounded-lg p-2.5">
+          ⚠️ Run <b>supabase/migration-15-sensor-integration.sql</b> in your Supabase SQL editor first, then reopen Settings.
+        </div>
+      )}
+
+      {!connection ? (
+        <>
+          {/* Vendor picker */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
+              <Label className="text-xs">Sensor vendor</Label>
+              <select value={vendor} onChange={e => { setVendor(e.target.value); setCreds({}) }}
+                className="w-full h-9 rounded-md border border-input bg-white px-2 text-sm">
+                <option value="">Choose your vendor...</option>
+                {catalog.map(v => (
+                  <option key={v.id} value={v.id} disabled={v.comingSoon}>{v.name}{v.comingSoon ? ' — coming soon' : ''}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <Label className="text-xs">Sync every</Label>
+              <select value={interval} onChange={e => setIntervalMin(Number(e.target.value))}
+                className="w-full h-9 rounded-md border border-input bg-white px-2 text-sm">
+                <option value={15}>15 minutes</option>
+                <option value={30}>30 minutes</option>
+                <option value={60}>1 hour</option>
+                <option value={240}>4 hours</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Vendor credential fields */}
+          {vendorMeta && vendorMeta.credentialFields.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {vendorMeta.credentialFields.map(f => (
+                <div key={f.key}>
+                  <Label className="text-xs">{f.label}</Label>
+                  <Input type={f.type === 'password' ? 'password' : 'text'} placeholder={f.placeholder}
+                    value={creds[f.key] || ''} onChange={e => setCreds(c => ({ ...c, [f.key]: e.target.value }))} />
+                </div>
+              ))}
+            </div>
+          )}
+          {vendor === 'generic_rest' && (
+            <p className="text-[11px] text-muted-foreground bg-white border rounded-lg p-2">
+              Your vendor/middleware must expose: <code>GET /sensors</code> → <code>[{'{'}"id","name"{'}'}]</code> and <code>GET /readings?ids=…</code> → <code>[{'{'}"sensorId","temperatureC","recordedAt"{'}'}]</code>, authorised with <code>Bearer</code> key. Share this with your sensor provider.
+            </p>
+          )}
+          {vendor === 'demo' && (
+            <p className="text-[11px] text-sky-800 bg-sky-100 border border-sky-200 rounded-lg p-2">
+              🧪 Demo mode creates 3 virtual sensors with realistic temperatures — perfect for trying the full flow before buying hardware. Readings are real Logbook entries (you can bulk-delete them later).
+            </p>
+          )}
+
+          <Button onClick={connect} disabled={busy || !vendor} className="bg-sky-600 hover:bg-sky-700 text-white">
+            {busy ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : null} Connect & Discover Sensors
+          </Button>
+        </>
+      ) : (
+        <>
+          {/* Connected state */}
+          <div className="flex items-center gap-2 flex-wrap text-xs">
+            <Badge className="bg-sky-600 text-white hover:bg-sky-600">{catalog.find(v => v.id === connection.vendor)?.name || connection.vendor}</Badge>
+            <span className="text-muted-foreground">every {connection.intervalMinutes} min</span>
+            {connection.lastSyncAt && <span className="text-muted-foreground">· last sync {new Date(connection.lastSyncAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</span>}
+            {connection.lastSyncStatus && <span className={`font-medium ${connection.lastSyncStatus.startsWith('Error') ? 'text-red-600' : 'text-emerald-700'}`}>· {connection.lastSyncStatus}</span>}
+          </div>
+
+          {/* Sensor → fridge mapping */}
+          {mappingRows.length > 0 && (
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Sensor → Fridge mapping</Label>
+              {mappingRows.map(m => (
+                <div key={m.sensorId} className="flex items-center gap-2 bg-white border rounded-lg px-2.5 py-2">
+                  <input type="checkbox" className="h-4 w-4 accent-sky-600 shrink-0" checked={!!m.enabled}
+                    onChange={e => setMapping(m.sensorId, { enabled: e.target.checked })} disabled={sensors.length === 0} />
+                  <span className="text-sm font-medium flex-1 min-w-0 truncate">{m.sensorName || m.sensorId}</span>
+                  <span className="text-xs text-muted-foreground shrink-0">→</span>
+                  <select value={m.location || ''} onChange={e => setMapping(m.sensorId, { location: e.target.value })}
+                    disabled={sensors.length === 0}
+                    className="h-8 rounded-md border border-input bg-white px-2 text-xs max-w-[45%]">
+                    <option value="">— pick fridge —</option>
+                    {activeLocations.map(l => <option key={l.id || l.name} value={l.name}>{l.name}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+          )}
+          {activeLocations.length === 0 && (
+            <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2">Add your fridges/freezers above first, then map sensors to them.</p>
+          )}
+
+          <div className="flex gap-2 flex-wrap">
+            {sensors.length > 0 && (
+              <Button size="sm" onClick={saveMappings} disabled={busy} className="bg-sky-600 hover:bg-sky-700 text-white">
+                {busy ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Check className="h-4 w-4 mr-1.5" />} Save mapping & start
+              </Button>
+            )}
+            <Button size="sm" variant="outline" onClick={syncNow} disabled={syncing}>
+              {syncing ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1.5" />} Sync now
+            </Button>
+          </div>
+
+          <p className="text-[11px] text-muted-foreground">
+            ⏱️ Readings sync automatically whenever anyone uses the app (respecting your interval). For true 24/7 background polling even when nobody opens the app, point a free pinger like <b>cron-job.org</b> at <code>/api/cron/sensor-sync</code> every 15 minutes — ask me for setup steps.
+          </p>
+        </>
+      )}
+    </div>
+  )
+}

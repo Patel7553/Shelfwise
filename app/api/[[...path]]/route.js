@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import webpush from 'web-push'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { getAuthContext, generateChefCode, signChefToken, newCodeSeed } from '@/lib/auth'
+import { SENSOR_VENDORS, vendorCatalog } from '@/lib/sensorVendors'
 
 // Vercel serverless function config — MUST be at the top of a route file.
 // GPT-4o vision calls on dense HACCP sheets take 30-60s. Setting to 300 (max
@@ -59,6 +60,123 @@ async function sendPushToKitchen(sb, kitchenId, payload) {
     }
   }))
   return { sent, failed }
+}
+
+// ============================================================================
+// SENSOR SYNC ENGINE — vendor-agnostic. Pulls readings from whichever vendor
+// module the kitchen connected, writes them into haccp_temperature_logs with
+// source='sensor' (so they appear in Temps (7D), Logbook, List and the 30-day
+// report exactly like manual entries), auto-flags out-of-range as FAIL, and
+// fires a push alert on failures.
+// ============================================================================
+function sensorPassFor(loc, val) {
+  // Custom range wins if configured; otherwise same defaults as the manual UI.
+  const minC = Number.isFinite(Number(loc?.minC)) && loc?.minC !== null ? Number(loc.minC) : null
+  const maxC = Number.isFinite(Number(loc?.maxC)) && loc?.maxC !== null ? Number(loc.maxC) : null
+  if (minC !== null || maxC !== null) {
+    if (minC !== null && val < minC) return false
+    if (maxC !== null && val > maxC) return false
+    return true
+  }
+  const t = loc?.type || 'fridge'
+  if (t === 'fridge') return val >= 0 && val <= 5
+  if (t === 'chiller') return val >= 0 && val <= 8
+  if (t === 'freezer') return val <= -15
+  if (t === 'hot_hold') return val >= 63
+  return true
+}
+
+async function syncSensorConnection(sb, conn, { force = false } = {}) {
+  const vendor = SENSOR_VENDORS[conn.vendor]
+  if (!vendor) return { ok: false, error: `Unknown vendor "${conn.vendor}"` }
+  if (vendor.comingSoon) return { ok: false, error: `${vendor.name} is not live yet` }
+  if (!conn.enabled && !force) return { ok: false, skipped: true, reason: 'disabled' }
+
+  // Respect the configured interval unless forced (manual "Sync now")
+  const intervalMs = Math.max(5, Number(conn.interval_minutes) || 30) * 60000
+  if (!force && conn.last_sync_at && (Date.now() - new Date(conn.last_sync_at).getTime()) < intervalMs) {
+    return { ok: true, skipped: true, reason: 'interval not elapsed' }
+  }
+
+  const mappings = (Array.isArray(conn.mappings) ? conn.mappings : []).filter(m => m && m.enabled && m.sensorId && m.location)
+  if (mappings.length === 0) {
+    await sb.from('sensor_connections').update({ last_sync_at: new Date().toISOString(), last_sync_status: 'No sensors mapped' }).eq('id', conn.id)
+    return { ok: true, inserted: 0, fails: 0, note: 'no mappings' }
+  }
+
+  let status = ''
+  let inserted = 0
+  const failedReadings = []
+  try {
+    const readings = await vendor.fetchReadings(conn.credentials || {}, mappings.map(m => m.sensorId))
+    // Safe ranges from the kitchen's configured fridges
+    const { data: krow } = await sb.from('kitchens').select('haccp_locations').eq('id', conn.kitchen_id).maybeSingle()
+    const locations = Array.isArray(krow?.haccp_locations) ? krow.haccp_locations : []
+    const locByName = new Map(locations.map(l => [String(l.name || '').toLowerCase(), l]))
+
+    const rows = []
+    for (const r of readings) {
+      const mapping = mappings.find(m => m.sensorId === r.sensorId)
+      if (!mapping || !Number.isFinite(r.temperatureC)) continue
+      const loc = locByName.get(String(mapping.location).toLowerCase()) || { type: 'fridge' }
+      const isPass = sensorPassFor(loc, r.temperatureC)
+      if (!isPass) failedReadings.push({ location: mapping.location, temperatureC: r.temperatureC })
+      rows.push({
+        id: uuidv4(),
+        kitchen_id: conn.kitchen_id,
+        location: mapping.location,
+        temperature_c: r.temperatureC,
+        is_pass: isPass,
+        recorded_at: r.recordedAt || new Date().toISOString(),
+        recorded_by: `sensor:${vendor.id}`,
+        notes: '',
+        source: 'sensor',
+      })
+    }
+    if (rows.length > 0) {
+      const { error: insErr } = await sb.from('haccp_temperature_logs').insert(rows)
+      if (insErr) throw insErr
+      inserted = rows.length
+    }
+    status = `OK — ${inserted} reading${inserted !== 1 ? 's' : ''}${failedReadings.length ? `, ${failedReadings.length} FAIL` : ''}`
+
+    // Out-of-range → push alert to the kitchen's subscribed devices
+    if (failedReadings.length > 0) {
+      const list = failedReadings.slice(0, 3).map(f => `${f.location}: ${f.temperatureC}°C`).join(', ')
+      try {
+        await sendPushToKitchen(sb, conn.kitchen_id, {
+          title: '🚨 Sensor temperature ALERT',
+          body: `Out of safe range — ${list}${failedReadings.length > 3 ? '…' : ''}. Check immediately!`,
+          tag: 'shelfwise-sensor-alert',
+          renotify: true,
+          url: '/?view=haccp',
+        })
+      } catch { /* push not configured — alert still visible in-app */ }
+    }
+  } catch (e) {
+    status = `Error: ${String(e.message || e).slice(0, 180)}`
+    await sb.from('sensor_connections').update({ last_sync_at: new Date().toISOString(), last_sync_status: status }).eq('id', conn.id)
+    return { ok: false, error: status }
+  }
+
+  await sb.from('sensor_connections').update({ last_sync_at: new Date().toISOString(), last_sync_status: status }).eq('id', conn.id)
+  return { ok: true, inserted, fails: failedReadings.length, failedReadings }
+}
+
+function sensorConnFromDb(row) {
+  if (!row) return null
+  const credentialKeys = Object.keys(row.credentials || {})
+  return {
+    id: row.id,
+    vendor: row.vendor,
+    // NEVER return credential values to the client — only which fields are set
+    credentialsSet: credentialKeys,
+    mappings: Array.isArray(row.mappings) ? row.mappings : [],
+    intervalMinutes: Number(row.interval_minutes) || 30,
+    enabled: !!row.enabled,
+    lastSyncAt: row.last_sync_at || null,
+    lastSyncStatus: row.last_sync_status || '',
+  }
 }
 
 // ----- Row transforms (products) --------------------------------------------
@@ -183,6 +301,7 @@ function haccpTempFromDb(r) {
     recordedAt: r.recorded_at,
     recordedBy: r.recorded_by || '',
     notes: r.notes || '',
+    source: r.source || 'manual',
   }
 }
 function haccpTaskFromDb(r) {
@@ -1416,6 +1535,29 @@ export async function GET(request, { params }) {
       return json({ key })
     }
 
+    // ---- CRON: sensor sync — call this URL every 15-30 min for 24/7 polling ----
+    // Works with Vercel Pro crons OR any free external pinger (cron-job.org).
+    // Also runs opportunistically when kitchens open the HACCP view.
+    if (path === 'cron/sensor-sync') {
+      const authz = request.headers.get('authorization') || ''
+      const cronSecret = process.env.CRON_SECRET
+      if (cronSecret && authz !== `Bearer ${cronSecret}`) {
+        return json({ error: 'unauthorized' }, 401)
+      }
+      const { data: conns, error: cErr } = await sb.from('sensor_connections').select('*').eq('enabled', true)
+      if (cErr) {
+        if (/does not exist/i.test(cErr.message || '')) return json({ ok: true, note: 'sensor_connections table missing — run migration-15', results: [] })
+        throw cErr
+      }
+      const results = []
+      for (const conn of (conns || [])) {
+        const r = await syncSensorConnection(sb, conn)   // respects each kitchen's interval
+        results.push({ kitchen: conn.kitchen_id, vendor: conn.vendor, ...r })
+      }
+      return json({ ok: true, connections: (conns || []).length, results })
+    }
+
+
     // ---- CRON: daily push alerts (expiry + HACCP reminders) ----
     // Vercel calls this daily. Sends a push to every subscribed device per kitchen:
     //  • items expiring today/tomorrow (or already expired)
@@ -1569,11 +1711,24 @@ export async function GET(request, { params }) {
     }
 
     // ----- OWNER / CHEF endpoints (kitchen-scoped) -----
-    const ownerOrChef = ['products','settings','facets','stats','recipes','rota','waste','haccp','suppliers'].some(p => path === p || path.startsWith(p + '/'))
+    const ownerOrChef = ['products','settings','facets','stats','recipes','rota','waste','haccp','suppliers','sensors'].some(p => path === p || path.startsWith(p + '/'))
     if (ownerOrChef) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
       const kid = ctx.kitchenId
+
+      // ------- Sensor integration: vendor catalog + connection status -------
+      if (path === 'sensors/vendors') {
+        return json(vendorCatalog())
+      }
+      if (path === 'sensors/connection') {
+        const { data, error } = await sb.from('sensor_connections').select('*').eq('kitchen_id', kid).maybeSingle()
+        if (error) {
+          if (/does not exist/i.test(error.message || '')) return json({ connection: null, migrationNeeded: true })
+          throw error
+        }
+        return json({ connection: sensorConnFromDb(data) })
+      }
 
       // ------- Suppliers directory -------
       if (path === 'suppliers') {
@@ -2236,11 +2391,87 @@ Output strictly valid JSON with no other text.`
     }
 
     // -------- Kitchen-scoped mutations --------
-    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','usage/apply'].some(p => path === p)
+    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect'].some(p => path === p)
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
       const kid = ctx.kitchenId
+
+      // ------- Sensor integration: connect a vendor -------
+      if (path === 'sensors/connect') {
+        const body = await request.json()
+        const vendor = SENSOR_VENDORS[String(body.vendor || '')]
+        if (!vendor) return json({ error: 'Unknown vendor' }, 400)
+        if (vendor.comingSoon) return json({ error: `${vendor.name} is not live yet — use Demo or Generic REST for now.` }, 400)
+        const credentials = (body.credentials && typeof body.credentials === 'object') ? body.credentials : {}
+        // Validate credentials by discovering the vendor's sensors
+        let sensors
+        try {
+          sensors = await vendor.listSensors(credentials)
+        } catch (e) {
+          return json({ error: `Could not connect: ${String(e.message || e).slice(0, 200)}` }, 400)
+        }
+        if (!Array.isArray(sensors) || sensors.length === 0) {
+          return json({ error: 'Connected, but the vendor returned no sensors for this account.' }, 400)
+        }
+        const row = {
+          kitchen_id: kid,
+          vendor: vendor.id,
+          credentials,
+          interval_minutes: Math.max(5, Math.min(1440, Number(body.intervalMinutes) || 30)),
+          enabled: true,
+          last_sync_status: 'Connected — map your sensors to fridges below',
+        }
+        const { data: existing } = await sb.from('sensor_connections').select('id').eq('kitchen_id', kid).maybeSingle()
+        let saved, sErr
+        if (existing) {
+          ;({ data: saved, error: sErr } = await sb.from('sensor_connections').update({ ...row, mappings: [] }).eq('id', existing.id).select().single())
+        } else {
+          ;({ data: saved, error: sErr } = await sb.from('sensor_connections').insert({ id: uuidv4(), ...row, mappings: [] }).select().single())
+        }
+        if (sErr) {
+          if (/does not exist/i.test(sErr.message || '')) return json({ error: 'Run supabase/migration-15-sensor-integration.sql in Supabase first.' }, 500)
+          throw sErr
+        }
+        return json({ connection: sensorConnFromDb(saved), sensors })
+      }
+
+      // ------- Sensor integration: save sensor → fridge mappings -------
+      if (path === 'sensors/mappings') {
+        const body = await request.json()
+        const mappings = (Array.isArray(body.mappings) ? body.mappings : []).slice(0, 100).map(m => ({
+          sensorId: String(m?.sensorId || '').slice(0, 120),
+          sensorName: String(m?.sensorName || '').slice(0, 120),
+          location: String(m?.location || '').slice(0, 120),
+          enabled: !!m?.enabled,
+        })).filter(m => m.sensorId)
+        const patch = { mappings }
+        if (body.intervalMinutes !== undefined) patch.interval_minutes = Math.max(5, Math.min(1440, Number(body.intervalMinutes) || 30))
+        const { data, error: mErr } = await sb.from('sensor_connections').update(patch).eq('kitchen_id', kid).select().single()
+        if (mErr) throw mErr
+        return json({ connection: sensorConnFromDb(data) })
+      }
+
+      // ------- Sensor integration: sync now (manual force or auto-on-open) -------
+      if (path === 'sensors/sync') {
+        const body = await request.json().catch(() => ({}))
+        const { data: conn, error: gErr } = await sb.from('sensor_connections').select('*').eq('kitchen_id', kid).maybeSingle()
+        if (gErr) {
+          if (/does not exist/i.test(gErr.message || '')) return json({ error: 'Run migration-15 first.' }, 500)
+          throw gErr
+        }
+        if (!conn) return json({ error: 'No sensor connection configured' }, 400)
+        // auto:true = opportunistic (respects interval); default manual = force
+        const result = await syncSensorConnection(sb, conn, { force: body.auto !== true })
+        if (!result.ok && result.error) return json({ error: result.error }, 502)
+        return json(result)
+      }
+
+      // ------- Sensor integration: disconnect -------
+      if (path === 'sensors/disconnect') {
+        await sb.from('sensor_connections').delete().eq('kitchen_id', kid)
+        return json({ ok: true })
+      }
 
       // ------- Stock deduction used by the Dashboard "Cooked it" action -------
       // Deducts confirmed quantities from stock (never below 0).
@@ -2448,6 +2679,7 @@ Output strictly valid JSON with no other text.`
         if (!location) return json({ error: 'location required' }, 400)
         const temp = Number(body.temperatureC)
         if (!Number.isFinite(temp)) return json({ error: 'temperatureC must be a number' }, 400)
+        const allowedSources = ['manual', 'quick_check', 'scan_sheet', 'sensor']
         const row = {
           id: uuidv4(),
           kitchen_id: kid,
@@ -2457,8 +2689,14 @@ Output strictly valid JSON with no other text.`
           recorded_at: body.recordedAt || new Date().toISOString(),
           recorded_by: String(body.recordedBy || ctx.userEmail || '').trim(),
           notes: String(body.notes || '').trim(),
+          source: allowedSources.includes(body.source) ? body.source : 'manual',
         }
-        const { data, error: e2 } = await sb.from('haccp_temperature_logs').insert(row).select().single()
+        let { data, error: e2 } = await sb.from('haccp_temperature_logs').insert(row).select().single()
+        if (e2 && /source.*(does not exist|column)/i.test(e2.message || '')) {
+          // migration-15 not run yet — insert without the source label
+          delete row.source
+          ;({ data, error: e2 } = await sb.from('haccp_temperature_logs').insert(row).select().single())
+        }
         if (e2) throw e2
         return json(haccpTempFromDb(data), 201)
       }

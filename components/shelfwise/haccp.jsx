@@ -25,6 +25,19 @@ import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
 const fetch = apiFetch
 
+// How was a temperature reading captured? Shown in Logbook + List so
+// inspectors can distinguish sensor data from human entries.
+const SOURCE_META = {
+  sensor:      { label: 'Auto (Sensor)', cls: 'bg-sky-100 text-sky-800 border border-sky-200' },
+  quick_check: { label: 'Quick check',   cls: 'bg-purple-100 text-purple-700 border border-purple-200' },
+  scan_sheet:  { label: 'Scanned sheet', cls: 'bg-amber-100 text-amber-800 border border-amber-200' },
+  manual:      { label: 'Manual',        cls: 'bg-slate-100 text-slate-600 border border-slate-200' },
+}
+function SourceBadge({ source }) {
+  const meta = SOURCE_META[source] || SOURCE_META.manual
+  return <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded shrink-0 ${meta.cls}`}>{source === 'sensor' ? '🤖 ' : ''}{meta.label}</span>
+}
+
 export function QuickCheckDialog({ open, onClose, locations, currentUser, onDone }) {
   // Log AM+PM temps for ALL fridges in ONE form. No modal-hopping.
   const [when, setWhen] = useState('now')  // 'am' | 'pm' | 'now'
@@ -65,6 +78,7 @@ export function QuickCheckDialog({ open, onClose, locations, currentUser, onDone
           body: JSON.stringify({
             location: loc.name,
             temperatureC: val,
+            source: 'quick_check',
             isPass: passFor(loc, val),
             recordedAt,
             recordedBy: currentUser,
@@ -595,9 +609,9 @@ ${printLocs.length > 0 ? `<table>
                                     key={slot}
                                     onClick={() => onEdit && onEdit(list[0])}
                                     className={`px-1 py-1.5 text-center border-l border-slate-100 font-semibold cursor-pointer hover:ring-2 hover:ring-emerald-400 transition-shadow ${allPass ? 'text-emerald-800 bg-emerald-50/70' : 'text-red-800 bg-red-50'}`}
-                                    title={list.map(r => `${r.temperatureC}°C by ${r.recordedBy || 'unknown'} — tap to edit`).join('\n')}
+                                    title={list.map(r => `${r.temperatureC}°C by ${r.source === 'sensor' ? 'Auto (Sensor)' : (r.recordedBy || 'unknown')} — tap to edit`).join('\n')}
                                   >
-                                    {list.map(r => r.temperatureC).join(', ')}
+                                    {list.map(r => `${r.source === 'sensor' ? '🤖' : ''}${r.temperatureC}`).join(', ')}
                                   </td>
                                 )
                               })}
@@ -690,7 +704,10 @@ ${printLocs.length > 0 ? `<table>
                       <div className="text-[10px] text-muted-foreground">{timeStr}</div>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-semibold text-slate-800 truncate">{t.location}</div>
+                      <div className="text-sm font-semibold text-slate-800 truncate flex items-center gap-1.5">
+                        {t.location}
+                        <SourceBadge source={t.source} />
+                      </div>
                       {t.notes && <div className="text-[10px] text-muted-foreground truncate">{t.notes}</div>}
                     </div>
                     <div className={`text-lg font-bold ${pass ? 'text-emerald-700' : 'text-red-700'} shrink-0`}>{t.temperatureC}°</div>
@@ -756,6 +773,34 @@ export function HaccpView({ currentUser, haccpLocations = [] }) {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // ---- Opportunistic sensor auto-sync: whenever the HACCP view opens, ask the
+  // server to pull fresh sensor readings (server respects the configured
+  // interval — this is a cheap no-op when nothing is due or no sensors exist).
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/sensors/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ auto: true }),
+        })
+        if (!res.ok || cancelled) return // no connection configured / migration missing — silent
+        const data = await res.json().catch(() => ({}))
+        if (cancelled || !data || data.skipped) return
+        if (Number(data.fails) > 0) {
+          const list = (data.failedReadings || []).slice(0, 3).map(f => `${f.location}: ${f.temperatureC}°C`).join(', ')
+          toast.error(`🚨 SENSOR ALERT — out of safe range: ${list}`, { duration: 10000 })
+        }
+        if (Number(data.inserted) > 0) {
+          toast.success(`🤖 ${data.inserted} sensor reading${data.inserted !== 1 ? 's' : ''} synced`, { duration: 2500 })
+          load()
+        }
+      } catch { /* sensors not configured — ignore */ }
+    })()
+    return () => { cancelled = true }
+  }, [])
 
   // ---- Save handlers ------------------------------------------------------
   // ---- AI-scan a physical HACCP temperature log sheet ----
@@ -897,6 +942,7 @@ export function HaccpView({ currentUser, haccpLocations = [] }) {
           body: JSON.stringify({
             location: r.location,
             temperatureC: Number(r.temperatureC),
+            source: 'scan_sheet',
             isPass: r.isPass !== false,
             recordedAt: r.recordedAt,
             recordedBy: r.initials || currentUser,
@@ -1154,7 +1200,7 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
               const res = await fetch('/api/haccp/temperatures', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ location, temperatureC, isPass, recordedAt, recordedBy: currentUser, notes: '' }),
+                body: JSON.stringify({ location, temperatureC, isPass, recordedAt, recordedBy: currentUser, notes: '', source: 'manual' }),
               })
               if (!res.ok) throw new Error('Save failed')
               toast.success(`${temperatureC}° saved for ${location}`, { duration: 1600 })
