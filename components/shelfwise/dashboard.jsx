@@ -256,7 +256,7 @@ export function UseItOrLoseItPanel({ products, currency, openRecipeGenFromExpiri
   )
 }
 
-export function DashboardView({ stats, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, openReceipt, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes, currency, openRecipeGen, openRecipeGenFromExpiring, openEdit, refreshAll }) {
+export function DashboardView({ stats, statsLoading, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, openReceipt, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes, currency, openRecipeGen, openRecipeGenFromExpiring, openEdit, refreshAll }) {
   const [quickSearch, setQuickSearch] = useState('')
   const [globalResults, setGlobalResults] = useState(null)
   const [globalLoading, setGlobalLoading] = useState(false)
@@ -285,18 +285,20 @@ export function DashboardView({ stats, products, goToInventory, seedData, openAd
 
   const clearSearch = () => { setQuickSearch(''); setGlobalResults(null) }
 
+  // While the first stats fetch is in flight, show "…" instead of misleading 0s
+  const L = (v) => (statsLoading ? '…' : v)
   const cardsAll = [
-    { key: 'all_items', label: 'All Items', value: stats.total, icon: Boxes, color: 'from-slate-500 to-slate-700', accent: 'text-slate-600', bg: 'bg-slate-50', filterKey: 'All' },
-    { key: 'expiring', label: 'Expiring Soon', value: stats.expiring, icon: Clock, color: 'from-amber-500 to-orange-500', accent: 'text-amber-600', bg: 'bg-amber-50', filterKey: 'Expiring' },
-    { key: 'expired', label: 'Expired', value: stats.expired, icon: PackageX, color: 'from-red-500 to-rose-600', accent: 'text-red-600', bg: 'bg-red-50', filterKey: 'Expired' },
-    { key: 'critical', label: 'Critical Stock', value: stats.critical, icon: AlertTriangle, color: 'from-orange-500 to-red-500', accent: 'text-orange-600', bg: 'bg-orange-50', filterKey: 'Critical' },
-    { key: 'in_date', label: 'In Date', value: stats.inDate || 0, icon: Check, color: 'from-emerald-500 to-teal-600', accent: 'text-emerald-600', bg: 'bg-emerald-50', filterKey: 'Ok' },
+    { key: 'all_items', label: 'All Items', value: L(stats.total), icon: Boxes, color: 'from-slate-500 to-slate-700', accent: 'text-slate-600', bg: 'bg-slate-50', filterKey: 'All' },
+    { key: 'expiring', label: 'Expiring Soon', value: L(stats.expiring), icon: Clock, color: 'from-amber-500 to-orange-500', accent: 'text-amber-600', bg: 'bg-amber-50', filterKey: 'Expiring' },
+    { key: 'expired', label: 'Expired', value: L(stats.expired), icon: PackageX, color: 'from-red-500 to-rose-600', accent: 'text-red-600', bg: 'bg-red-50', filterKey: 'Expired' },
+    { key: 'critical', label: 'Critical Stock', value: L(stats.critical), icon: AlertTriangle, color: 'from-orange-500 to-red-500', accent: 'text-orange-600', bg: 'bg-orange-50', filterKey: 'Critical' },
+    { key: 'in_date', label: 'In Date', value: L(stats.inDate || 0), icon: Check, color: 'from-emerald-500 to-teal-600', accent: 'text-emerald-600', bg: 'bg-emerald-50', filterKey: 'Ok' },
     { key: 'recipes', label: 'Recipes', value: recipesCount ?? '—', icon: BookOpen, color: 'from-purple-500 to-fuchsia-600', accent: 'text-purple-600', bg: 'bg-purple-50', onClick: gotoRecipes },
-    { key: 'inv_value', label: 'Inventory Value', value: stats.totalValue > 0 ? `${CURRENCY_SYMBOL[currency] || ''}${stats.totalValue.toFixed(0)}` : '—', icon: Sparkles, color: 'from-emerald-500 to-emerald-700', accent: 'text-emerald-600', bg: 'bg-emerald-50' },
-    { key: 'reorder', label: 'Below Reorder', value: stats.belowReorder || 0, icon: PackageX, color: 'from-orange-500 to-orange-700', accent: 'text-orange-600', bg: 'bg-orange-50', filterKey: 'All' },
+    { key: 'inv_value', label: 'Inventory Value', value: statsLoading ? '…' : (stats.totalValue > 0 ? `${CURRENCY_SYMBOL[currency] || ''}${stats.totalValue.toFixed(0)}` : '—'), icon: Sparkles, color: 'from-emerald-500 to-emerald-700', accent: 'text-emerald-600', bg: 'bg-emerald-50' },
+    { key: 'reorder', label: 'Below Reorder', value: L(stats.belowReorder || 0), icon: PackageX, color: 'from-orange-500 to-orange-700', accent: 'text-orange-600', bg: 'bg-orange-50', filterKey: 'All' },
   ]
   const cards = cardsAll.filter(c => show(c.key))
-  const isEmpty = stats.total === 0
+  const isEmpty = !statsLoading && stats.total === 0
 
   // Time-based greeting for the hero
   const hour = new Date().getHours()

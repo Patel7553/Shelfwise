@@ -2129,10 +2129,12 @@ export async function POST(request, { params }) {
     }
 
     if (path === 'auth/chef-login') {
-      // Body: { kitchenName, code }
+      // Body: { kitchenName, code, personName?, deviceId? }
       const body = await request.json()
       const name = String(body.kitchenName || '').trim()
       const code = String(body.code || '').trim().toUpperCase()
+      const personName = String(body.personName || '').trim().slice(0, 40)
+      const deviceId = String(body.deviceId || '').trim().slice(0, 64)
       if (!name || !code) return json({ error: 'kitchenName and code required' }, 400)
 
       const { data: kitchens } = await sb.from('kitchens').select('*').ilike('kitchen_name', name).eq('status', 'approved').limit(5)
@@ -2145,8 +2147,29 @@ export async function POST(request, { params }) {
         const today = generateChefCode(k.code_seed, k.timezone, now).toUpperCase()
         const yest = generateChefCode(k.code_seed, k.timezone, yesterday).toUpperCase()
         if (code === today || code === yest) {
+          // ---- Person name registry (unique per kitchen, best-effort) ----
+          // Each device claims a name; someone on a DIFFERENT device can't reuse
+          // an active name (seen in last 30 days). Requires migration-17
+          // (kitchens.staff_names jsonb) — silently skipped on legacy DBs.
+          if (personName) {
+            const list = Array.isArray(k.staff_names) ? k.staff_names : []
+            const lower = personName.toLowerCase()
+            const existing = list.find(e => String(e?.name || '').toLowerCase() === lower)
+            if (existing && existing.deviceId && deviceId && existing.deviceId !== deviceId) {
+              const days = (Date.now() - new Date(existing.lastSeen || 0).getTime()) / 86400000
+              if (days < 30) {
+                return json({ error: `The name "${personName}" is already used by someone else in this kitchen. Please pick a different name (e.g. add a surname initial).` }, 409)
+              }
+            }
+            const next = [
+              ...list.filter(e => String(e?.name || '').toLowerCase() !== lower),
+              { name: personName, deviceId, lastSeen: new Date().toISOString() },
+            ].slice(-100)
+            await sb.from('kitchens').update({ staff_names: next }).eq('id', k.id)
+            // (update error = staff_names column missing → uniqueness not enforced; ignore)
+          }
           const token = signChefToken(k.id)
-          return json({ ok: true, token, kitchen: kitchenToApi(k) })
+          return json({ ok: true, token, kitchen: kitchenToApi(k), personName })
         }
       }
       return json({ error: 'Invalid code' }, 401)
@@ -2905,15 +2928,20 @@ Output strictly valid JSON with no other text.`
 
         // DUPLICATE guard — same title (case-insensitive) already saved in this kitchen?
         // Client shows a "Replace old / open old / cancel" prompt on 409.
+        // Works even on legacy DBs without the kitchen_id column (falls back to a
+        // title-only check) so duplicates are ALWAYS blocked.
         try {
           const t = String(row.title).trim()
-          const { data: dupe, error: dErr } = await sb.from('recipes')
+          let q = await sb.from('recipes')
             .select('id,title,created_at').eq('kitchen_id', kid)
             .ilike('title', escapeLike(t)).limit(1).maybeSingle()
-          if (!dErr && dupe) {
-            return json({ error: `"${dupe.title}" is already in your recipes`, duplicate: true, existing: dupe }, 409)
+          if (q.error && /column .* does not exist|could not find .*column/i.test(q.error.message || '')) {
+            q = await sb.from('recipes').select('id,title,created_at').ilike('title', escapeLike(t)).limit(1).maybeSingle()
           }
-        } catch { /* legacy DB without kitchen_id — skip the duplicate check */ }
+          if (!q.error && q.data) {
+            return json({ error: `"${q.data.title}" is already in your recipes`, duplicate: true, existing: q.data }, 409)
+          }
+        } catch { /* never block saving because the duplicate check failed */ }
 
         let { data, error } = await sb.from('recipes').insert(row).select().single()
         // Legacy DBs may lack the kitchen_id column (migration-16 not run yet).

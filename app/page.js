@@ -132,6 +132,8 @@ function App() {
   const [recipeLoading, setRecipeLoading] = useState(false)
   const [recipeResult, setRecipeResult] = useState(null)
   const [dupExisting, setDupExisting] = useState(null)   // duplicate-recipe prompt
+  const [dupProduct, setDupProduct] = useState(null)      // duplicate-product prompt { item, existing, source }
+  const [statsLoading, setStatsLoading] = useState(true)  // show dots instead of 0s on first load
   // AI Recipe Generator (from ingredients) — new feature
   const [recipeGenOpen, setRecipeGenOpen] = useState(false)
   const [recipeGenSeed, setRecipeGenSeed] = useState([])   // pre-fill list of ingredient names
@@ -174,8 +176,8 @@ function App() {
     return () => { cancelled = true }
   }, [router])
 
-  const fetchProducts = async () => {
-    setLoading(true)
+  const fetchProducts = async (opts = {}) => {
+    if (!opts.silent) setLoading(true)
     try {
       const params = new URLSearchParams()
       if (statusFilter && statusFilter !== 'All') params.set('status', statusFilter)
@@ -263,7 +265,9 @@ function App() {
       const res = await fetch('/api/stats')
       const data = await res.json()
       setStats(data)
-    } catch {}
+    } catch {} finally {
+      setStatsLoading(false)
+    }
   }
 
   useEffect(() => { fetchProducts() }, [statusFilter, search, sort, categoryFilter, storageFilter])
@@ -276,6 +280,21 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter, search, sort, categoryFilter, storageFilter])
   useEffect(() => { fetchSettings() }, [])
+  // LIVE SYNC — items added on other phones show up fast:
+  // refresh whenever the app regains focus/visibility + silent poll every 30s.
+  useEffect(() => {
+    const refresh = () => { fetchProducts({ silent: true }); fetchStats() }
+    const onVis = () => { if (document.visibilityState === 'visible') refresh() }
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', onVis)
+    const iv = setInterval(() => { if (document.visibilityState === 'visible') refresh() }, 30000)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', onVis)
+      clearInterval(iv)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter, search, sort, categoryFilter, storageFilter])
   useEffect(() => { if (view === 'recipes') fetchRecipes() }, [view, recipesSearch])
 
   // Browser expiry notifications — fires once per day when app is opened.
@@ -394,10 +413,59 @@ function App() {
     }
   }
 
+  // Name of the person using this phone (set at code login) — stamped on items they add
+  const getPersonName = () => { try { return localStorage.getItem('sw_person_name') || '' } catch { return '' } }
+
+  // Find an inventory product with the same name (case-insensitive)
+  const findByName = (name) => {
+    const n = String(name || '').trim().toLowerCase()
+    if (!n) return null
+    return products.find(p => String(p.name || '').trim().toLowerCase() === n) || null
+  }
+
   const openAdd = () => {
     setEditing(null)
-    setForm({ ...EMPTY_FORM, dateReceived: new Date().toISOString().slice(0, 10) })
+    setForm({ ...EMPTY_FORM, dateReceived: new Date().toISOString().slice(0, 10), preparedBy: getPersonName() })
     setDialogOpen(true)
+  }
+
+  // Duplicate product → user chose "add to old quantity": update the existing
+  // item (full body — partial PUTs would wipe other fields via toDb defaults).
+  const mergeDupIntoExisting = async () => {
+    if (!dupProduct) return
+    const { item, existing, source } = dupProduct
+    const newQty = (Number(existing.quantity) || 0) + (Number(item.quantity) || 0)
+    try {
+      const res = await fetch(`/api/products/${existing.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: existing.name,
+          quantity: newQty,
+          unit: existing.unit || 'ea',
+          expiryDate: item.expiryDate || existing.expiryDate || '',
+          category: existing.category || '',
+          storageType: existing.storageType || 'Fridge',
+          location: existing.location || '',
+          preparedBy: existing.preparedBy || '',
+          imageUrl: existing.imageUrl || '',
+          dateReceived: existing.dateReceived || '',
+          customFields: existing.customFields || {},
+        })
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || `Update failed (${res.status})`)
+      }
+      toast.success(`${existing.name} — quantity updated to ${newQty} ${existing.unit || ''}`)
+      setDupProduct(null)
+      if (source === 'snap') { setSnapOpen(false); setSnapImage(null); setSnapItem(null) }
+      else { setDialogOpen(false) }
+      fetchProducts()
+      fetchStats()
+    } catch (e) {
+      toast.error(e.message || 'Could not update the old item')
+    }
   }
 
   const openEdit = (p) => {
@@ -417,22 +485,18 @@ function App() {
     setDialogOpen(true)
   }
 
-  const saveProduct = async () => {
+  const saveProduct = async (force) => {
+    const forced = force === true   // guard: onClick passes an event object
     if (!form.name.trim()) {
       toast.error('Name is required')
       return
     }
-    // Duplicate check — only for NEW products (not when editing existing ones)
-    if (!editing) {
-      const dupes = findDuplicatesAgainstInventory([form], products)
-      if (dupes.length > 0) {
-        const d = dupes[0].newItem
-        const ok = window.confirm(
-          `⚠️ This looks like a duplicate already in your inventory:\n\n` +
-          `• ${d.name} (${d.quantity} ${d.unit}, exp ${d.expiryDate || '—'})\n\n` +
-          `It matches by name + quantity + expiry.\n\nAdd it anyway?`
-        )
-        if (!ok) return
+    // Duplicate check — block same-NAME products (only for NEW products, not edits)
+    if (!editing && !forced) {
+      const existing = findByName(form.name)
+      if (existing) {
+        setDupProduct({ item: { ...form }, existing, source: 'form' })
+        return
       }
     }
     try {
@@ -947,12 +1011,13 @@ function App() {
       const first = (data.items || [])[0]
       if (!first) {
         toast.warning('No product detected. Try a clearer photo or fill manually.')
-        setSnapItem({ name: '', quantity: 1, unit: 'ea', expiryDate: '', category: '', storageType: 'Fridge', location: '' })
+        setSnapItem({ name: '', quantity: 1, unit: 'ea', expiryDate: '', category: '', storageType: 'Fridge', location: '', preparedBy: getPersonName() })
       } else {
         // Set sensible defaults if AI didn't return expiry
         if (!first.expiryDate) {
           first.expiryDate = suggestExpiryDate(first.category, first.storageType)
         }
+        if (!first.preparedBy) first.preparedBy = getPersonName()
         setSnapItem(first)
         toast.success(`Detected: ${first.name}`)
       }
@@ -963,25 +1028,23 @@ function App() {
     }
   }
 
-  const saveSnapItem = async () => {
+  const saveSnapItem = async (force) => {
+    const forced = force === true   // guard: onClick passes an event object
     if (!snapItem?.name?.trim()) { toast.error('Product name is required'); return }
-    // Duplicate check — single item
-    const dupes = findDuplicatesAgainstInventory([snapItem], products)
-    if (dupes.length > 0) {
-      const d = dupes[0].newItem
-      const ok = window.confirm(
-        `⚠️ This item looks like a duplicate already in your inventory:\n\n` +
-        `• ${d.name} (${d.quantity} ${d.unit}, exp ${d.expiryDate || '—'})\n\n` +
-        `It matches by name + quantity + expiry.\n\nAdd it anyway?`
-      )
-      if (!ok) return
+    // Duplicate check — block same-NAME products
+    if (!forced) {
+      const existing = findByName(snapItem.name)
+      if (existing) {
+        setDupProduct({ item: { ...snapItem }, existing, source: 'snap' })
+        return
+      }
     }
     setSnapSaving(true)
     try {
       const res = await fetch('/api/products', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(snapItem)
+        body: JSON.stringify({ ...snapItem, preparedBy: snapItem.preparedBy || getPersonName() })
       })
       if (!res.ok) {
         let msg = `Save failed (${res.status})`
@@ -1086,7 +1149,7 @@ function App() {
   }
 
   const saveScannedItems = async () => {
-    const toAdd = scanItems.filter(it => it._keep).map(({ _keep, ...rest }) => rest)
+    const toAdd = scanItems.filter(it => it._keep).map(({ _keep, ...rest }) => ({ ...rest, preparedBy: rest.preparedBy || getPersonName() }))
     if (!toAdd.length) {
       toast.error('No items selected')
       return
@@ -1482,7 +1545,7 @@ function App() {
 
       <main className="container mx-auto px-4 py-8">
         {view === 'dashboard' && (
-          <DashboardView stats={stats} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} openEdit={openEdit} refreshAll={() => { fetchProducts(); fetchStats() }} />
+          <DashboardView stats={stats} statsLoading={statsLoading} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} openEdit={openEdit} refreshAll={() => { fetchProducts(); fetchStats() }} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -2081,6 +2144,10 @@ function App() {
                 <Label className="text-xs">Product name *</Label>
                 <Input value={snapItem.name || ''} onChange={e => setSnapItem({ ...snapItem, name: e.target.value })} placeholder="e.g. Whole Milk" autoFocus />
               </div>
+              <div>
+                <Label className="text-xs">Added by</Label>
+                <Input value={snapItem.preparedBy || ''} onChange={e => setSnapItem({ ...snapItem, preparedBy: e.target.value })} placeholder="Your name" />
+              </div>
               <div className="grid grid-cols-1 gap-2">
                 <div>
                   <Label className="text-xs">Qty</Label>
@@ -2393,6 +2460,30 @@ function App() {
           )}
 
           {recipeResult && <RecipeResult result={recipeResult} setResult={setRecipeResult} onBack={() => setRecipeResult(null)} onClose={() => setRecipeOpen(false)} goToInventory={goToInventory} onSave={saveCurrentRecipe} saving={recipeSaving} />}
+        </DialogContent>
+      </Dialog>
+
+      {/* Duplicate PRODUCT prompt — never add the same item name twice by accident */}
+      <Dialog open={!!dupProduct} onOpenChange={(v) => { if (!v) setDupProduct(null) }}>
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">⚠️ Item already in inventory</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            <span className="font-semibold text-foreground capitalize">"{dupProduct?.existing?.name}"</span> is already in your inventory
+            ({dupProduct?.existing?.quantity} {dupProduct?.existing?.unit}{dupProduct?.existing?.expiryDate ? `, exp ${dupProduct.existing.expiryDate}` : ''}). What would you like to do?
+          </p>
+          <div className="flex flex-col gap-2 pt-1">
+            <Button onClick={mergeDupIntoExisting} className="bg-emerald-600 hover:bg-emerald-700 w-full justify-center">
+              Add to old item → total {((Number(dupProduct?.existing?.quantity) || 0) + (Number(dupProduct?.item?.quantity) || 0))} {dupProduct?.existing?.unit || ''}
+            </Button>
+            <Button variant="outline" onClick={() => { const src = dupProduct?.source; setDupProduct(null); if (src === 'snap') saveSnapItem(true); else saveProduct(true) }} className="w-full justify-center">
+              Add as a separate item anyway
+            </Button>
+            <Button variant="ghost" onClick={() => setDupProduct(null)} className="w-full justify-center">
+              Cancel
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
 

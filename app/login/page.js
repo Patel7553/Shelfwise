@@ -29,7 +29,26 @@ export default function LoginPage() {
   // Chef form
   const [kitchenName, setKitchenName] = useState('')
   const [code, setCode] = useState('')
+  const [personName, setPersonName] = useState('')
   const [chefBusy, setChefBusy] = useState(false)
+
+  // Prefill the person's name if they've logged in on this phone before
+  useEffect(() => {
+    try { const n = localStorage.getItem('sw_person_name'); if (n) setPersonName(n) } catch {}
+  }, [])
+
+  // Stable per-device id — lets the same person log in again with their name,
+  // while blocking OTHER devices from taking it.
+  const getDeviceId = () => {
+    try {
+      let id = localStorage.getItem('sw_device_id')
+      if (!id) {
+        id = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+        localStorage.setItem('sw_device_id', id)
+      }
+      return id
+    } catch { return '' }
+  }
 
   // If already signed-in, bounce to home (or admin panel if user is admin).
   useEffect(() => {
@@ -77,19 +96,43 @@ export default function LoginPage() {
     }
   }
 
+  async function forgotPassword() {
+    if (!email.trim()) {
+      toast.error('Type your email in the Email box above first, then tap "Forgot password?"')
+      return
+    }
+    try {
+      const sb = getBrowserSupabase()
+      const { error } = await sb.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+        redirectTo: `${window.location.origin}/reset-password`,
+      })
+      if (error) throw error
+      toast.success('Password reset link sent — check your email inbox (and spam folder).')
+    } catch (err) {
+      toast.error(err.message || 'Could not send reset email')
+    }
+  }
+
   async function submitChef(e) {
     e.preventDefault()
     if (!kitchenName.trim() || !code.trim()) return
+    if (!personName.trim()) { toast.error('Please enter your name — it shows on everything you add'); return }
     setChefBusy(true)
     try {
       // Make sure any owner session is cleared so we don't send both tokens.
       try { const sb = getBrowserSupabase(); await sb.auth.signOut() } catch {}
       const res = await apiJson('/api/auth/chef-login', {
         method: 'POST',
-        body: JSON.stringify({ kitchenName: kitchenName.trim(), code: code.trim().toUpperCase() }),
+        body: JSON.stringify({
+          kitchenName: kitchenName.trim(),
+          code: code.trim().toUpperCase(),
+          personName: personName.trim(),
+          deviceId: getDeviceId(),
+        }),
       })
       setChefToken(res.token)
-      toast.success(`Welcome, Chef!`)
+      try { localStorage.setItem('sw_person_name', personName.trim()) } catch {}
+      toast.success(`Welcome, ${personName.trim()}!`)
       router.replace('/')
     } catch (err) {
       toast.error(err.message || 'Chef login failed')
@@ -125,6 +168,9 @@ export default function LoginPage() {
                   <div>
                     <Label htmlFor="password">{T('login_password')}</Label>
                     <Input id="password" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" required />
+                    <div className="flex justify-end mt-1">
+                      <button type="button" onClick={forgotPassword} className="text-xs text-emerald-700 font-medium hover:underline">Forgot password?</button>
+                    </div>
                   </div>
                   <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700" disabled={ownerBusy}>
                     {ownerBusy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <LogIn className="h-4 w-4 mr-2" />}
@@ -146,6 +192,11 @@ export default function LoginPage() {
                     <Label htmlFor="code">Today's chef code</Label>
                     <Input id="code" value={code} onChange={e => setCode(e.target.value.toUpperCase())} placeholder="e.g. TIGER-42" required style={{ letterSpacing: '2px', fontFamily: 'monospace' }} />
                     <p className="text-[11px] text-slate-500 mt-1">Ask your kitchen manager for today's code. It changes daily at midnight.</p>
+                  </div>
+                  <div>
+                    <Label htmlFor="pname">Your name</Label>
+                    <Input id="pname" value={personName} onChange={e => setPersonName(e.target.value)} placeholder="e.g. Maria" maxLength={40} required />
+                    <p className="text-[11px] text-slate-500 mt-1">Shows on everything you add. Each person needs their own name.</p>
                   </div>
                   <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700" disabled={chefBusy}>
                     {chefBusy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ChefHat className="h-4 w-4 mr-2" />}
