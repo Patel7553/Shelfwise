@@ -2154,11 +2154,15 @@ export async function POST(request, { params }) {
           if (personName) {
             const list = Array.isArray(k.staff_names) ? k.staff_names : []
             const lower = personName.toLowerCase()
+            const claimName = body.claimName === true   // "yes it's me on a new device"
             const existing = list.find(e => String(e?.name || '').toLowerCase() === lower)
-            if (existing && existing.deviceId && deviceId && existing.deviceId !== deviceId) {
+            if (existing && existing.deviceId && deviceId && existing.deviceId !== deviceId && !claimName) {
               const days = (Date.now() - new Date(existing.lastSeen || 0).getTime()) / 86400000
               if (days < 30) {
-                return json({ error: `The name "${personName}" is already used by someone else in this kitchen. Please pick a different name (e.g. add a surname initial).` }, 409)
+                return json({
+                  error: `The name "${personName}" is already used in this kitchen. If this is you on a new device, confirm to move it — otherwise pick a different name.`,
+                  nameConflict: true,
+                }, 409)
               }
             }
             const next = [

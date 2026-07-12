@@ -270,8 +270,11 @@ function App() {
     }
   }
 
-  useEffect(() => { fetchProducts() }, [statusFilter, search, sort, categoryFilter, storageFilter])
-  useEffect(() => { fetchStats(); fetchFacets() }, [products.length, view])
+  // DATA LOADING — gated on `authed` so requests never fire before login is
+  // verified (they used to 401 silently and the dashboard stayed at 0 until
+  // the user navigated somewhere).
+  useEffect(() => { if (authed) fetchProducts() }, [authed, statusFilter, search, sort, categoryFilter, storageFilter])
+  useEffect(() => { if (authed) { fetchStats(); fetchFacets() } }, [authed, products.length, view])
   // Global refresh trigger — any child component can dispatch this event to force a full reload
   useEffect(() => {
     const onRefresh = () => { fetchProducts(); fetchStats(); fetchFacets() }
@@ -279,10 +282,11 @@ function App() {
     return () => window.removeEventListener('shelfwise-inventory-refresh', onRefresh)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter, search, sort, categoryFilter, storageFilter])
-  useEffect(() => { fetchSettings() }, [])
+  useEffect(() => { if (authed) fetchSettings() }, [authed])
   // LIVE SYNC — items added on other phones show up fast:
   // refresh whenever the app regains focus/visibility + silent poll every 30s.
   useEffect(() => {
+    if (!authed) return
     const refresh = () => { fetchProducts({ silent: true }); fetchStats() }
     const onVis = () => { if (document.visibilityState === 'visible') refresh() }
     window.addEventListener('focus', refresh)
@@ -294,8 +298,11 @@ function App() {
       clearInterval(iv)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, search, sort, categoryFilter, storageFilter])
-  useEffect(() => { if (view === 'recipes') fetchRecipes() }, [view, recipesSearch])
+  }, [authed, statusFilter, search, sort, categoryFilter, storageFilter])
+  // Recipes: fetch once at login (so the dashboard Recipes count is correct),
+  // then again whenever the Recipes tab is opened/searched.
+  useEffect(() => { if (authed) fetchRecipes() }, [authed])
+  useEffect(() => { if (authed && view === 'recipes') fetchRecipes() }, [authed, view, recipesSearch])
 
   // Browser expiry notifications — fires once per day when app is opened.
   // Requires user to opt-in via Settings → Login & Alerts → Enable notifications.

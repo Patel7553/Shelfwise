@@ -118,18 +118,38 @@ export default function LoginPage() {
     if (!kitchenName.trim() || !code.trim()) return
     if (!personName.trim()) { toast.error('Please enter your name — it shows on everything you add'); return }
     setChefBusy(true)
+    const attempt = async (claimName) => apiJson('/api/auth/chef-login', {
+      method: 'POST',
+      body: JSON.stringify({
+        kitchenName: kitchenName.trim(),
+        code: code.trim().toUpperCase(),
+        personName: personName.trim(),
+        deviceId: getDeviceId(),
+        ...(claimName ? { claimName: true } : {}),
+      }),
+    })
     try {
       // Make sure any owner session is cleared so we don't send both tokens.
       try { const sb = getBrowserSupabase(); await sb.auth.signOut() } catch {}
-      const res = await apiJson('/api/auth/chef-login', {
-        method: 'POST',
-        body: JSON.stringify({
-          kitchenName: kitchenName.trim(),
-          code: code.trim().toUpperCase(),
-          personName: personName.trim(),
-          deviceId: getDeviceId(),
-        }),
-      })
+      let res
+      try {
+        res = await attempt(false)
+      } catch (err) {
+        // Name in use on another device — could be the SAME person on a new
+        // phone/PC/browser. Ask, then move the name to this device.
+        if (err.status === 409 && err.data?.nameConflict) {
+          const itsMe = window.confirm(
+            `The name "${personName.trim()}" is already used on another device in this kitchen.\n\n` +
+            `Is this YOU logging in from a new phone/PC/browser?\n\n` +
+            `OK = yes, it's me (move my name to this device)\n` +
+            `Cancel = no, I'll pick a different name`
+          )
+          if (!itsMe) { toast.info('Please choose a different name'); return }
+          res = await attempt(true)
+        } else {
+          throw err
+        }
+      }
       setChefToken(res.token)
       try { localStorage.setItem('sw_person_name', personName.trim()) } catch {}
       toast.success(`Welcome, ${personName.trim()}!`)
