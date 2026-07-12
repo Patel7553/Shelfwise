@@ -166,24 +166,27 @@ export function RecipeResult({ result, setResult, onBack, onClose, goToInventory
         </div>
       </div>
 
+      {/* Cooking method extracted from the scanned recipe itself */}
       {result.steps?.length > 0 && (
-        <details className="border rounded-lg p-3">
-          <summary className="font-semibold text-sm cursor-pointer">Cooking Steps ({result.steps.length})</summary>
-          <ol className="list-decimal list-inside mt-2 space-y-1 text-sm text-muted-foreground">
-            {result.steps.map((s, i) => <li key={i}>{s}</li>)}
+        <div className="border-2 border-emerald-200 bg-emerald-50/40 rounded-xl p-4">
+          <p className="font-semibold text-sm flex items-center gap-1.5">👨‍🍳 Cooking Method <span className="text-[10px] font-normal text-muted-foreground">· from your recipe</span></p>
+          <ol className="list-decimal list-outside ml-5 space-y-2 text-sm text-slate-700 mt-3">
+            {result.steps.map((s, i) => <li key={i} className="leading-relaxed">{s}</li>)}
           </ol>
-        </details>
+        </div>
       )}
 
-      {/* AI-generated cooking method (shown when original recipe has no instructions) */}
+      {/* AI-generated cooking method (offered when the recipe had no instructions,
+          or kept visible once the user generated one) */}
+      {(!(result.steps?.length > 0) || (Array.isArray(result.instructions) && result.instructions.length > 0)) && (
       <div className="border-2 border-purple-200 bg-purple-50/40 rounded-xl p-4">
         <div className="flex items-start justify-between gap-2 mb-2">
           <div>
-            <p className="font-semibold text-sm flex items-center gap-1.5">👨‍🍳 Cooking Method</p>
+            <p className="font-semibold text-sm flex items-center gap-1.5">{result.steps?.length > 0 ? '✨ AI Cooking Method' : '👨‍🍳 Cooking Method'}</p>
             <p className="text-xs text-muted-foreground">
               {Array.isArray(result.instructions) && result.instructions.length > 0
                 ? `AI-generated method · ${result.source || 'based on best recipe sources'}`
-                : 'No cooking instructions in this recipe — let AI write them based on the ingredients.'}
+                : 'No cooking instructions found in this recipe — let AI write them based on the ingredients.'}
             </p>
           </div>
           <Button size="sm" onClick={generateInstructions} disabled={genLoading} className="bg-purple-600 hover:bg-purple-700 shrink-0">
@@ -198,6 +201,7 @@ export function RecipeResult({ result, setResult, onBack, onClose, goToInventory
           </ol>
         )}
       </div>
+      )}
 
       <div className="flex justify-between pt-2 border-t">
         <Button variant="ghost" onClick={onBack}><X className="h-4 w-4 mr-2" /> Scan another</Button>

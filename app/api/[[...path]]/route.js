@@ -1377,7 +1377,8 @@ async function scanRecipe({ image, images, text }) {
   const imgs = (Array.isArray(images) && images.length > 0) ? images : (image ? [image] : [])
   const systemPrompt = `You are a recipe parser. Extract structured recipe data and return it as JSON.
 The recipe may span MULTIPLE photos/pages — treat them as ONE single recipe: combine ALL ingredients (deduplicate) and keep steps in page order.
-Return ONLY a JSON object of shape: {"title","servings","ingredients":[{"name","quantity","unit","notes"}],"allergens":[]}.
+Return ONLY a JSON object of shape: {"title","servings","ingredients":[{"name","quantity","unit","notes"}],"steps":["step 1","step 2",...],"allergens":[]}.
+"steps" = the cooking method / instructions EXACTLY as written in the recipe (one array item per step, strip any leading numbering). Do NOT invent steps — if the recipe truly shows no method, return "steps": [].
 Output strictly valid JSON with no other text.`
 
   const body = {
@@ -1408,6 +1409,7 @@ Output strictly valid JSON with no other text.`
     title: parsed.title || 'Untitled',
     servings: parsed.servings || null,
     ingredients: Array.isArray(parsed.ingredients) ? parsed.ingredients : [],
+    steps: Array.isArray(parsed.steps) ? parsed.steps.map(s => String(s)).filter(Boolean) : [],
     allergens: Array.isArray(parsed.allergens) ? parsed.allergens : [],
   }
 }
@@ -2865,7 +2867,11 @@ Output strictly valid JSON with no other text.`
           servings: body.servings || null,
           ingredients: Array.isArray(body.ingredients) ? body.ingredients : [],
           allergens: Array.isArray(body.allergens) ? body.allergens : [],
-          steps: Array.isArray(body.steps) ? body.steps : [],
+          // Prefer real scanned steps; fall back to AI-generated instructions so a
+          // generated cooking method isn't lost when the recipe is saved.
+          steps: Array.isArray(body.steps) && body.steps.length > 0
+            ? body.steps
+            : (Array.isArray(body.instructions) ? body.instructions : []),
           matched: Array.isArray(body.matched) ? body.matched : [],
           summary: body.summary && typeof body.summary === 'object' ? body.summary : {},
         }
