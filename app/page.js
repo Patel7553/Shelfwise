@@ -128,7 +128,7 @@ function App() {
   const [recipeOpen, setRecipeOpen] = useState(false)
   const [recipeMode, setRecipeMode] = useState('text')
   const [recipeText, setRecipeText] = useState('')
-  const [recipeImage, setRecipeImage] = useState(null)
+  const [recipeImages, setRecipeImages] = useState([])
   const [recipeLoading, setRecipeLoading] = useState(false)
   const [recipeResult, setRecipeResult] = useState(null)
   // AI Recipe Generator (from ingredients) — new feature
@@ -346,10 +346,11 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(recipeResult)
       })
-      if (!res.ok) throw new Error()
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '')
       toast.success('Recipe saved! Find it in the Recipes tab.')
-    } catch {
-      toast.error('Failed to save recipe')
+    } catch (e) {
+      toast.error(e?.message ? `Failed to save recipe — ${e.message}` : 'Failed to save recipe')
     } finally {
       setRecipeSaving(false)
     }
@@ -1132,44 +1133,58 @@ function App() {
   const openRecipe = () => {
     setRecipeOpen(true)
     setRecipeResult(null)
-    setRecipeImage(null)
+    setRecipeImages([])
     setRecipeText('')
     setRecipeMode('text')
   }
 
-  const onRecipeImage = async (file) => {
-    if (!file) return
-    const dataUrl = await new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => {
-        const img = new Image()
-        img.onload = () => {
-          const maxDim = 1400
-          let { width, height } = img
-          if (width > maxDim || height > maxDim) {
-            const scale = Math.min(maxDim / width, maxDim / height)
-            width = Math.round(width * scale); height = Math.round(height * scale)
+  // Multi-page recipes: add one or more photos (max 5 pages per scan)
+  const onRecipeImages = async (files) => {
+    const list = Array.from(files || []).filter(Boolean)
+    if (!list.length) return
+    const urls = []
+    for (const file of list) {
+      try {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => {
+            const img = new Image()
+            img.onload = () => {
+              const maxDim = 1400
+              let { width, height } = img
+              if (width > maxDim || height > maxDim) {
+                const scale = Math.min(maxDim / width, maxDim / height)
+                width = Math.round(width * scale); height = Math.round(height * scale)
+              }
+              const canvas = document.createElement('canvas')
+              canvas.width = width; canvas.height = height
+              canvas.getContext('2d').drawImage(img, 0, 0, width, height)
+              resolve(canvas.toDataURL('image/jpeg', 0.85))
+            }
+            img.onerror = reject
+            img.src = reader.result
           }
-          const canvas = document.createElement('canvas')
-          canvas.width = width; canvas.height = height
-          canvas.getContext('2d').drawImage(img, 0, 0, width, height)
-          resolve(canvas.toDataURL('image/jpeg', 0.85))
-        }
-        img.onerror = reject
-        img.src = reader.result
-      }
-      reader.onerror = reject
-      reader.readAsDataURL(file)
+          reader.onerror = reject
+          reader.readAsDataURL(file)
+        })
+        urls.push(dataUrl)
+      } catch { /* skip unreadable file */ }
+    }
+    setRecipeImages(prev => {
+      const next = [...prev, ...urls].slice(0, 5)
+      if (prev.length + urls.length > 5) toast.info('Maximum 5 pages per recipe scan')
+      return next
     })
-    setRecipeImage(dataUrl)
   }
+
+  const removeRecipePage = (idx) => setRecipeImages(prev => prev.filter((_, i) => i !== idx))
 
   const runRecipeScan = async () => {
     if (recipeMode === 'text' && !recipeText.trim()) { toast.error('Paste a recipe first'); return }
-    if (recipeMode === 'image' && !recipeImage) { toast.error('Upload a recipe image first'); return }
+    if (recipeMode === 'image' && recipeImages.length === 0) { toast.error('Add at least one recipe photo first'); return }
     setRecipeLoading(true)
     try {
-      const payload = recipeMode === 'image' ? { image: recipeImage } : { text: recipeText }
+      const payload = recipeMode === 'image' ? { images: recipeImages } : { text: recipeText }
       const res = await fetch('/api/recipe', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2295,25 +2310,50 @@ function App() {
                   onChange={e => setRecipeText(e.target.value)}
                 />
               ) : (
-                <label className="block">
-                  <input type="file" accept="image/*" className="hidden" onChange={e => onRecipeImage(e.target.files?.[0])} />
-                  <div className="border-2 border-dashed border-purple-200 rounded-xl p-8 hover:border-purple-400 hover:bg-purple-50/40 transition cursor-pointer text-center">
-                    {recipeImage ? (
-                      <div className="space-y-3">
-                        <img src={recipeImage} alt="preview" className="max-h-72 mx-auto rounded-lg shadow-sm" />
-                        <p className="text-sm text-muted-foreground">Click to choose a different image</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        <div className="h-14 w-14 mx-auto rounded-full bg-purple-100 flex items-center justify-center">
-                          <Upload className="h-6 w-6 text-purple-600" />
+                <div className="space-y-3">
+                  {recipeImages.length > 0 && (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                      {recipeImages.map((img, i) => (
+                        <div key={i} className="relative rounded-lg overflow-hidden border border-purple-200 bg-white">
+                          <img src={img} alt={`Page ${i + 1}`} className="w-full h-36 object-cover" />
+                          <span className="absolute bottom-1.5 left-1.5 text-[10px] font-bold bg-purple-600 text-white px-2 py-0.5 rounded-full shadow">Page {i + 1}</span>
+                          <button
+                            type="button"
+                            onClick={() => removeRecipePage(i)}
+                            aria-label={`Remove page ${i + 1}`}
+                            className="absolute top-1.5 right-1.5 h-6 w-6 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center text-xs leading-none"
+                          >✕</button>
                         </div>
-                        <p className="font-medium">Upload a recipe photo</p>
-                        <p className="text-xs text-muted-foreground">A cookbook page, recipe card, or recipe screenshot.</p>
+                      ))}
+                    </div>
+                  )}
+                  {recipeImages.length < 5 && (
+                    <label className="block">
+                      <input type="file" accept="image/*" multiple className="hidden" onChange={e => { onRecipeImages(e.target.files); e.target.value = '' }} />
+                      <div className="border-2 border-dashed border-purple-200 rounded-xl p-6 hover:border-purple-400 hover:bg-purple-50/40 transition cursor-pointer text-center">
+                        {recipeImages.length > 0 ? (
+                          <div className="flex items-center justify-center gap-2 text-purple-700">
+                            <div className="h-9 w-9 rounded-full bg-purple-100 flex items-center justify-center">
+                              <Upload className="h-4 w-4 text-purple-600" />
+                            </div>
+                            <div className="text-left">
+                              <p className="font-medium text-sm">Add another page</p>
+                              <p className="text-xs text-muted-foreground">{recipeImages.length}/5 pages added — for 2-page recipes just snap both pages</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <div className="h-14 w-14 mx-auto rounded-full bg-purple-100 flex items-center justify-center">
+                              <Upload className="h-6 w-6 text-purple-600" />
+                            </div>
+                            <p className="font-medium">Upload recipe photo(s)</p>
+                            <p className="text-xs text-muted-foreground">A cookbook page, recipe card, or screenshot. Got a 2-page recipe? Add up to 5 pages — AI merges them into one recipe.</p>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                </label>
+                    </label>
+                  )}
+                </div>
               )}
 
               <div className="flex justify-end gap-2">

@@ -455,7 +455,10 @@ export function WebRecipeCard({ recipe: r, onSaved }) {
           }
         })
       })
-      if (!res.ok) throw new Error('Save failed')
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Save failed')
+      }
       setSaved(true)
       toast.success(`"${r.title}" saved to your collection`)
       onSaved && onSaved()

@@ -1370,10 +1370,13 @@ async function searchWebRecipes({ query, servings = 1, dietary = [] }) {
 }
 
 
-async function scanRecipe({ image, text }) {
+async function scanRecipe({ image, images, text }) {
   const key = process.env.EMERGENT_LLM_KEY
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+  // Support multi-page recipes: merge every photo into ONE recipe.
+  const imgs = (Array.isArray(images) && images.length > 0) ? images : (image ? [image] : [])
   const systemPrompt = `You are a recipe parser. Extract structured recipe data and return it as JSON.
+The recipe may span MULTIPLE photos/pages — treat them as ONE single recipe: combine ALL ingredients (deduplicate) and keep steps in page order.
 Return ONLY a JSON object of shape: {"title","servings","ingredients":[{"name","quantity","unit","notes"}],"allergens":[]}.
 Output strictly valid JSON with no other text.`
 
@@ -1381,10 +1384,10 @@ Output strictly valid JSON with no other text.`
     model: 'gpt-4o',
     messages: [
       { role: 'system', content: systemPrompt },
-      image
+      imgs.length > 0
         ? { role: 'user', content: [
-            { type: 'text', text: 'Extract recipe.' },
-            { type: 'image_url', image_url: { url: image } }
+            { type: 'text', text: imgs.length > 1 ? `Extract ONE recipe from these ${imgs.length} pages (in order).` : 'Extract recipe.' },
+            ...imgs.map(u => ({ type: 'image_url', image_url: { url: u } }))
           ] }
         : { role: 'user', content: `Extract recipe from: ${text}` }
     ],
@@ -2822,10 +2825,16 @@ Output strictly valid JSON with no other text.`
 
       if (path === 'recipe') {
         const body = await request.json()
-        const image = body.image, text = body.text
-        if (!image && !text) return json({ error: 'image or text required' }, 400)
-        if (image && !image.startsWith('data:image/')) return json({ error: 'invalid image data URL' }, 400)
-        const recipe = await scanRecipe({ image, text })
+        const text = body.text
+        // Accept a single image (legacy) OR an array of images (multi-page recipes)
+        let images = Array.isArray(body.images) ? body.images.filter(Boolean) : []
+        if (images.length === 0 && body.image) images = [body.image]
+        if (images.length === 0 && !text) return json({ error: 'image or text required' }, 400)
+        if (images.length > 5) return json({ error: 'Maximum 5 recipe pages per scan' }, 400)
+        for (const img of images) {
+          if (!String(img).startsWith('data:image/')) return json({ error: 'invalid image data URL' }, 400)
+        }
+        const recipe = await scanRecipe({ images, text })
         const { data: rows, error } = await sb.from('products').select('*').eq('kitchen_id', kid).limit(5000)
         if (error) throw error
         const products = (rows || []).map(fromDb).map(enrich)
@@ -2861,7 +2870,9 @@ Output strictly valid JSON with no other text.`
           summary: body.summary && typeof body.summary === 'object' ? body.summary : {},
         }
         let { data, error } = await sb.from('recipes').insert(row).select().single()
-        if (error && /column .* does not exist/i.test(error.message || '')) {
+        // Legacy DBs may lack the kitchen_id column (migration-16 not run yet).
+        // PostgREST reports it as "Could not find the 'kitchen_id' column ... in the schema cache".
+        if (error && /column .* does not exist|could not find .*column/i.test(error.message || '')) {
           const { kitchen_id, ...core } = row
           const retry = await sb.from('recipes').insert(core).select().single()
           data = retry.data
