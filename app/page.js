@@ -56,6 +56,68 @@ function useTheme() {
 
 function ThemeToggle() { return null }
 
+// ============================================================================
+// LocationSelect — dropdown for "Shelf / Location" fields (user request).
+// Options come from the kitchen's predefined storage units in Settings
+// (settings.haccpLocations: fridges, chillers, freezers, hot-holds) PLUS any
+// distinct location names already used on existing products. A final
+// "Other (type your own)" entry falls back to a free-text input, so nothing
+// is ever blocked. This standardises data entry and prevents shelf-name typos.
+// ============================================================================
+function LocationSelect({ value, onChange, locations, products, triggerClassName }) {
+  const [customMode, setCustomMode] = useState(false)
+  const opts = useMemo(() => {
+    const set = new Set()
+    ;(locations || []).forEach(l => { const n = (l?.name || '').trim(); if (n && l.active !== false) set.add(n) })
+    ;(products || []).forEach(p => { const n = (p?.location || '').trim(); if (n) set.add(n) })
+    return [...set].sort((a, b) => a.localeCompare(b))
+  }, [locations, products])
+
+  // No predefined locations at all → plain input (backwards compatible)
+  if (opts.length === 0) {
+    return (
+      <Input
+        value={value || ''}
+        onChange={e => onChange(e.target.value)}
+        placeholder="e.g. Shelf A1"
+        className={triggerClassName}
+      />
+    )
+  }
+
+  const isCustom = customMode || (!!value && !opts.includes(value))
+  const selectValue = isCustom ? '__custom__' : (value || '__none__')
+
+  return (
+    <div className="space-y-1.5">
+      <Select
+        value={selectValue}
+        onValueChange={v => {
+          if (v === '__custom__') { setCustomMode(true); onChange('') }
+          else if (v === '__none__') { setCustomMode(false); onChange('') }
+          else { setCustomMode(false); onChange(v) }
+        }}
+      >
+        <SelectTrigger className={triggerClassName}><SelectValue placeholder="Select location…" /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="__none__">— None —</SelectItem>
+          {opts.map(o => <SelectItem key={o} value={o}>📍 {o}</SelectItem>)}
+          <SelectItem value="__custom__">✏️ Other (type your own)</SelectItem>
+        </SelectContent>
+      </Select>
+      {isCustom && (
+        <Input
+          value={value || ''}
+          onChange={e => onChange(e.target.value)}
+          placeholder="Type location name…"
+          autoFocus
+          className={triggerClassName}
+        />
+      )}
+    </div>
+  )
+}
+
 function App() {
   const T = useT()  // language-aware translator — re-renders whole app when user changes language
   // Deploy version marker — helps us verify a deploy actually shipped. Change this string each release.
@@ -1666,8 +1728,8 @@ function App() {
           <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
             <DialogTitle>{editing ? 'Edit Product' : 'Add Product'}</DialogTitle>
           </DialogHeader>
-          <div className="grid grid-cols-1 gap-3 py-2 px-6 overflow-y-auto flex-1">
-            <div className="col-span-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 py-2 px-6 overflow-y-auto flex-1">
+            <div className="sm:col-span-2">
               <Label htmlFor="name">Name *</Label>
               <Input id="name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="e.g. Whole Milk" />
             </div>
@@ -1735,22 +1797,27 @@ function App() {
             </div>
             <div>
               <Label htmlFor="loc">Shelf / Location</Label>
-              <Input id="loc" value={form.location} onChange={e => setForm({ ...form, location: e.target.value })} placeholder="Shelf A1" />
+              <LocationSelect
+                value={form.location}
+                onChange={v => setForm({ ...form, location: v })}
+                locations={settings.haccpLocations}
+                products={products}
+              />
             </div>
             <div>
               <Label htmlFor="dr">📅 Date Received</Label>
               <Input id="dr" type="date" value={form.dateReceived || ''} onChange={e => setForm({ ...form, dateReceived: e.target.value })} />
               <p className="text-[10px] text-muted-foreground mt-0.5">Auto-set to today — change if it arrived earlier</p>
             </div>
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <Label htmlFor="prep">Prepared By</Label>
               <Input id="prep" value={form.preparedBy} onChange={e => setForm({ ...form, preparedBy: e.target.value })} placeholder="Chef name" />
             </div>
 
             {/* Cost + Reorder + Supplier — collapsed into a subtle group */}
-            <div className="col-span-2 pt-2 border-t">
+            <div className="sm:col-span-2 pt-2 border-t">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">💰 Cost &amp; supply (optional)</p>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <Label htmlFor="unitCost">Cost per {form.unit || 'unit'} ({CURRENCY_SYMBOL[settings.currency] || settings.currency || ''})</Label>
                   <Input id="unitCost" type="number" step="0.01" min="0" value={form.unitCost} onChange={e => setForm({ ...form, unitCost: e.target.value })} placeholder="e.g. 2.50" />
@@ -1759,7 +1826,7 @@ function App() {
                   <Label htmlFor="reorder">Reorder when qty ≤</Label>
                   <Input id="reorder" type="number" step="0.01" min="0" value={form.reorderPoint} onChange={e => setForm({ ...form, reorderPoint: e.target.value })} placeholder="e.g. 2" />
                 </div>
-                <div className="col-span-2">
+                <div className="sm:col-span-2">
                   <Label htmlFor="supplier">Supplier</Label>
                   <Input id="supplier" value={form.supplier} onChange={e => setForm({ ...form, supplier: e.target.value })} placeholder="e.g. Bidfood, Booker, Costco" />
                 </div>
@@ -1767,7 +1834,7 @@ function App() {
             </div>
 
             {/* Allergens — legal requirement in UK/EU */}
-            <div className="col-span-2 pt-2 border-t">
+            <div className="sm:col-span-2 pt-2 border-t">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
                 ⚠️ Allergens present in this product
                 {form.allergens?.length > 0 && <span className="ml-2 text-red-600 font-bold">({form.allergens.length} selected)</span>}
@@ -1799,7 +1866,7 @@ function App() {
               </div>
             </div>
 
-            <div className="col-span-2">
+            <div className="sm:col-span-2">
               <Label>Photo (optional)</Label>
               <div className="flex items-center gap-3 mt-1">
                 {form.imageUrl ? (
@@ -1819,9 +1886,9 @@ function App() {
               </div>
             </div>
             {settings.customFields?.length > 0 && (
-              <div className="col-span-2 pt-2 border-t">
+              <div className="sm:col-span-2 pt-2 border-t">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Custom Fields</p>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {settings.customFields.map(f => (
                     <div key={f.key}>
                       <Label htmlFor={`cf-${f.key}`}>{f.label}</Label>
@@ -1991,11 +2058,12 @@ function App() {
                           </div>
                           <div>
                             <Label className="text-xs">Location</Label>
-                            <Input
+                            <LocationSelect
                               value={it.location || ''}
-                              onChange={e => updateVoiceItem(idx, { location: e.target.value })}
-                              placeholder="Shelf 2"
-                              className="h-9"
+                              onChange={v => updateVoiceItem(idx, { location: v })}
+                              locations={settings.haccpLocations}
+                              products={products}
+                              triggerClassName="h-9"
                             />
                           </div>
                         </div>
@@ -2286,7 +2354,12 @@ function App() {
                 </div>
                 <div>
                   <Label className="text-xs">Location/Shelf</Label>
-                  <Input value={snapItem.location || ''} onChange={e => setSnapItem({ ...snapItem, location: e.target.value })} placeholder="Shelf 2" />
+                  <LocationSelect
+                    value={snapItem.location || ''}
+                    onChange={v => setSnapItem({ ...snapItem, location: v })}
+                    locations={settings.haccpLocations}
+                    products={products}
+                  />
                 </div>
               </div>
               <div>

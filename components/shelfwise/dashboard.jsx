@@ -288,12 +288,12 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
   // While the first stats fetch is in flight, show "…" instead of misleading 0s
   const L = (v) => (statsLoading ? '…' : v)
   const cardsAll = [
-    { key: 'all_items', label: 'All Items', value: L(stats.total), icon: Boxes, color: 'from-slate-500 to-slate-700', accent: 'text-slate-600', bg: 'bg-slate-50', filterKey: 'All' },
+    // 'all_items' and 'recipes' stat cards removed — replaced by the big
+    // Inventory / Recipes action cards at the top (user request).
     { key: 'expiring', label: 'Expiring Soon', value: L(stats.expiring), icon: Clock, color: 'from-amber-500 to-orange-500', accent: 'text-amber-600', bg: 'bg-amber-50', filterKey: 'Expiring' },
     { key: 'expired', label: 'Expired', value: L(stats.expired), icon: PackageX, color: 'from-red-500 to-rose-600', accent: 'text-red-600', bg: 'bg-red-50', filterKey: 'Expired' },
     { key: 'critical', label: 'Critical Stock', value: L(stats.critical), icon: AlertTriangle, color: 'from-orange-500 to-red-500', accent: 'text-orange-600', bg: 'bg-orange-50', filterKey: 'Critical' },
     { key: 'in_date', label: 'In Date', value: L(stats.inDate || 0), icon: Check, color: 'from-emerald-500 to-teal-600', accent: 'text-emerald-600', bg: 'bg-emerald-50', filterKey: 'Ok' },
-    { key: 'recipes', label: 'Recipes', value: recipesCount ?? '—', icon: BookOpen, color: 'from-purple-500 to-fuchsia-600', accent: 'text-purple-600', bg: 'bg-purple-50', onClick: gotoRecipes },
     { key: 'inv_value', label: 'Inventory Value', value: statsLoading ? '…' : (stats.totalValue > 0 ? `${CURRENCY_SYMBOL[currency] || ''}${stats.totalValue.toFixed(0)}` : '—'), icon: Sparkles, color: 'from-emerald-500 to-emerald-700', accent: 'text-emerald-600', bg: 'bg-emerald-50' },
     { key: 'reorder', label: 'Below Reorder', value: L(stats.belowReorder || 0), icon: PackageX, color: 'from-orange-500 to-orange-700', accent: 'text-orange-600', bg: 'bg-orange-50', filterKey: 'All' },
   ]
@@ -340,39 +340,81 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
         </div>
       </div>
 
-      {/* Quick-scan action grid — 4 buttons in a row on desktop, 2×2 on mobile */}
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
-        <button onClick={openVoice} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-300 transition text-purple-800">
-          <span className="text-2xl">🎤</span>
-          <span className="text-xs font-semibold">Voice</span>
+      {/* ====================================================================
+          3 MAIN ACTION CARDS (user request — replaces the old scattered
+          quick-action buttons): Inventory · Add Products · Recipes.
+          "Add Products" contains all the ways to add items (manual, snap,
+          voice, invoice) inside one card. Mobile-first: stacks on phones.
+          ==================================================================== */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* 1) INVENTORY */}
+        <button onClick={() => goToInventory('All')} className="text-left group">
+          <Card className="h-full border-2 border-emerald-200 bg-gradient-to-br from-emerald-50 to-white hover:border-emerald-400 hover:shadow-lg transition-all cursor-pointer">
+            <CardContent className="p-5 flex flex-col gap-3 h-full">
+              <div className="flex items-center justify-between">
+                <div className="h-12 w-12 rounded-xl bg-emerald-100 flex items-center justify-center">
+                  <Boxes className="h-6 w-6 text-emerald-700" />
+                </div>
+                <span className="text-3xl font-bold text-emerald-700">{L(stats.total)}</span>
+              </div>
+              <div>
+                <p className="font-bold text-lg text-emerald-950">Inventory</p>
+                <p className="text-sm text-muted-foreground">View, search &amp; manage all your stock</p>
+              </div>
+              <span className="mt-auto text-sm font-semibold text-emerald-700 flex items-center gap-1">
+                Open inventory <ArrowRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform" />
+              </span>
+            </CardContent>
+          </Card>
         </button>
-        {/* Barcode scanner — hidden temporarily. Will be re-enabled with premium DB coverage.
-        <button onClick={openBarcode} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 hover:border-blue-300 transition text-blue-800">
-          <span className="text-2xl">🔢</span>
-          <span className="text-xs font-semibold">Barcode</span>
+
+        {/* 2) ADD PRODUCTS — snap / voice / manual / invoice inside */}
+        <Card className="h-full border-2 border-blue-200 bg-gradient-to-br from-blue-50 to-white">
+          <CardContent className="p-5 flex flex-col gap-3 h-full">
+            <div className="h-12 w-12 rounded-xl bg-blue-100 flex items-center justify-center">
+              <Plus className="h-6 w-6 text-blue-700" />
+            </div>
+            <div>
+              <p className="font-bold text-lg text-blue-950">Add Products</p>
+              <p className="text-sm text-muted-foreground">Pick how you want to add items</p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 mt-auto">
+              <button onClick={openSnap} className="flex items-center justify-center gap-1.5 px-2 py-2.5 rounded-lg border-2 border-blue-200 bg-white hover:bg-blue-100 hover:border-blue-300 transition text-blue-900 text-xs font-semibold">
+                <span className="text-base">📸</span> Snap Label
+              </button>
+              <button onClick={openVoice} className="flex items-center justify-center gap-1.5 px-2 py-2.5 rounded-lg border-2 border-blue-200 bg-white hover:bg-blue-100 hover:border-blue-300 transition text-blue-900 text-xs font-semibold">
+                <span className="text-base">🎤</span> Voice
+              </button>
+              <button onClick={openAdd} className="flex items-center justify-center gap-1.5 px-2 py-2.5 rounded-lg border-2 border-blue-200 bg-white hover:bg-blue-100 hover:border-blue-300 transition text-blue-900 text-xs font-semibold">
+                <span className="text-base">✏️</span> Manual
+              </button>
+              <button onClick={openReceipt} className="flex items-center justify-center gap-1.5 px-2 py-2.5 rounded-lg border-2 border-blue-200 bg-white hover:bg-blue-100 hover:border-blue-300 transition text-blue-900 text-xs font-semibold">
+                <span className="text-base">🧾</span> Invoice
+              </button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* 3) RECIPES */}
+        <button onClick={gotoRecipes} className="text-left group">
+          <Card className="h-full border-2 border-purple-200 bg-gradient-to-br from-purple-50 to-white hover:border-purple-400 hover:shadow-lg transition-all cursor-pointer">
+            <CardContent className="p-5 flex flex-col gap-3 h-full">
+              <div className="flex items-center justify-between">
+                <div className="h-12 w-12 rounded-xl bg-purple-100 flex items-center justify-center">
+                  <BookOpen className="h-6 w-6 text-purple-700" />
+                </div>
+                <span className="text-3xl font-bold text-purple-700">{recipesCount ?? '—'}</span>
+              </div>
+              <div>
+                <p className="font-bold text-lg text-purple-950">Recipes</p>
+                <p className="text-sm text-muted-foreground">Your saved recipes &amp; AI recipe ideas</p>
+              </div>
+              <span className="mt-auto text-sm font-semibold text-purple-700 flex items-center gap-1">
+                Open recipes <ArrowRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform" />
+              </span>
+            </CardContent>
+          </Card>
         </button>
-        */}
-        <button onClick={openSnap} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-emerald-200 bg-emerald-50 hover:bg-emerald-100 hover:border-emerald-300 transition text-emerald-800">
-          <span className="text-2xl">📸</span>
-          <span className="text-xs font-semibold">Snap Label</span>
-        </button>
-        <button onClick={openReceipt} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-fuchsia-200 bg-fuchsia-50 hover:bg-fuchsia-100 hover:border-fuchsia-300 transition text-fuchsia-800 relative">
-          <span className="text-2xl">🧾</span>
-          <span className="text-xs font-semibold">Invoice</span>
-          <span className="absolute top-1 right-1 text-[8px] font-bold bg-fuchsia-600 text-white rounded px-1">NEW</span>
-        </button>
-        {!isStaff && (
-        <button onClick={openScan} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-teal-200 bg-teal-50 hover:bg-teal-100 hover:border-teal-300 transition text-teal-800">
-          <span className="text-2xl">📋</span>
-          <span className="text-xs font-semibold">Scan Logbook</span>
-        </button>
-        )}
-        {!isStaff && (
-        <button onClick={printLogbook} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-amber-200 bg-amber-50 hover:bg-amber-100 hover:border-amber-300 transition text-amber-800">
-          <span className="text-2xl">📒</span>
-          <span className="text-xs font-semibold">Print Logbook</span>
-        </button>
-        )}
       </div>
 
       <UseTodayPanel products={products} goToInventory={goToInventory} formatDate={(d) => new Date(d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} />

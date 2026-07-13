@@ -1387,6 +1387,24 @@ test_plan:
 agent_communication:
     - agent: "main"
       message: |
+        NEW SESSION (June 2025): Android UI fix + Dashboard overhaul + Location dropdowns (frontend-only changes).
+        1. /app/app/page.js — Add/Edit Product dialog grid fixed for mobile: parent is now
+           `grid-cols-1 sm:grid-cols-2` and all full-width children use `sm:col-span-2`
+           (was broken: grid-cols-1 parent with col-span-2 children created implicit columns on Android).
+        2. /app/app/page.js — New LocationSelect component: all Shelf/Location fields (Add/Edit form,
+           Voice items, Snap Label item) are now dropdowns populated from settings.haccpLocations
+           (Settings storage units) + distinct locations already on products, with an
+           "Other (type your own)" free-text fallback. Falls back to plain Input when no options exist.
+        3. /app/components/shelfwise/dashboard.jsx — Removed the old quick-action button grid
+           (Voice/Snap/Invoice/Scan Logbook/Print Logbook) and replaced with 3 main cards:
+           Inventory (opens inventory, shows total), Add Products (contains Snap Label / Voice /
+           Manual / Invoice buttons inside), Recipes (opens recipes, shows count).
+           Also removed the 'all_items' and 'recipes' stat cards (duplicated by new big cards).
+        Verified via temporary mock-prop preview page at desktop (1920px) and mobile (390px iframe):
+        single-column stacking works, no horizontal overflow. Preview pages deleted after verification.
+        No backend changes were made in this session.
+    - agent: "main"
+      message: |
         NEW SESSION (June 2025): Added AI Recipe Web Search feature.
         Backend: POST /api/recipe/web-search { query, servings? } → { recipes: [3 best web recipes] }.
         Frontend: New "Search Web Recipes" tab in RecipesView with allergen badges, 1x-5x scaling, save-to-collection.
