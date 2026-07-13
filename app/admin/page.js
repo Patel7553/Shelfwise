@@ -55,6 +55,28 @@ export default function AdminPage() {
     }
   }
 
+  async function changeEmail(k) {
+    const newEmail = window.prompt(
+      `Fix login email for "${k.kitchenName || 'kitchen'}"\n\nCurrent (wrong) email:\n${k.ownerEmail}\n\nType the CORRECT email:`,
+      ''
+    )
+    if (!newEmail) return
+    if (!window.confirm(`Change login email?\n\nFROM: ${k.ownerEmail}\nTO: ${newEmail.trim()}\n\nThe user will log in with the new email (same password).`)) return
+    setBusyId(k.id)
+    try {
+      const data = await apiJson('/api/admin/change-email', {
+        method: 'POST',
+        body: JSON.stringify({ kitchenId: k.id, newEmail: newEmail.trim() }),
+      })
+      toast.success(data.note || 'Email updated', { duration: 10000 })
+      load()
+    } catch (err) {
+      toast.error(err.message || 'Email change failed', { duration: 10000 })
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   async function testEmail() {
     const to = window.prompt('Send test email to:', me?.userEmail || '')
     if (!to) return
@@ -150,6 +172,9 @@ export default function AdminPage() {
                     </div>
                   </div>
                   <div className="flex gap-2 flex-wrap">
+                    <Button size="sm" variant="outline" onClick={() => changeEmail(k)} disabled={busyId === k.id} title="Fix a wrong login email">
+                      ✉️ Change email
+                    </Button>
                     {k.status !== 'approved' && (
                       <Button size="sm" onClick={() => act('approve', k.id)} disabled={busyId === k.id} className="bg-emerald-600 hover:bg-emerald-700">
                         {busyId === k.id ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Approve'}

@@ -2312,6 +2312,61 @@ export async function POST(request, { params }) {
     }
 
     // -------- ADMIN endpoints --------
+    // ------- Admin: fix a user's login email (typo at signup) -------
+    // Body: { kitchenId, newEmail }. Updates the Supabase Auth user AND
+    // kitchens.owner_email so approval emails / digests go to the right place.
+    if (path === 'admin/change-email') {
+      const { ctx, error } = await requireAdmin(request)
+      if (error) return error
+      const body = await request.json()
+      const kitchenId = String(body.kitchenId || '')
+      const newEmail = String(body.newEmail || '').trim().toLowerCase()
+      if (!kitchenId) return json({ error: 'kitchenId required' }, 400)
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) return json({ error: 'Invalid new email address' }, 400)
+
+      const { data: k, error: e1 } = await sb.from('kitchens').select('id, owner_email').eq('id', kitchenId).maybeSingle()
+      if (e1) return json({ error: e1.message }, 500)
+      if (!k) return json({ error: 'Kitchen not found' }, 404)
+      const oldEmail = String(k.owner_email || '').toLowerCase()
+      if (!oldEmail) return json({ error: 'Kitchen has no owner email on record' }, 400)
+      if (oldEmail === newEmail) return json({ error: 'New email is the same as the current one' }, 400)
+
+      // Find the Supabase Auth user that has the old (wrong) email
+      let authUser = null
+      try {
+        for (let page = 1; page <= 10 && !authUser; page++) {
+          const { data: pageData, error: le } = await sb.auth.admin.listUsers({ page, perPage: 200 })
+          if (le) throw le
+          const users = pageData?.users || []
+          authUser = users.find(u => String(u.email || '').toLowerCase() === oldEmail) || null
+          if (users.length < 200) break
+        }
+      } catch (le) {
+        return json({ error: `Could not search auth users: ${le.message || le}` }, 500)
+      }
+
+      if (authUser) {
+        const { error: ue } = await sb.auth.admin.updateUserById(authUser.id, {
+          email: newEmail,
+          email_confirm: true,  // skip re-confirmation — admin has verified it
+        })
+        if (ue) return json({ error: `Auth update failed: ${ue.message}` }, 500)
+      }
+
+      const { error: e2 } = await sb.from('kitchens').update({ owner_email: newEmail }).eq('id', kitchenId)
+      if (e2) return json({ error: `Auth email updated but kitchen record failed: ${e2.message}` }, 500)
+
+      return json({
+        ok: true,
+        oldEmail,
+        newEmail,
+        authUserUpdated: !!authUser,
+        note: authUser
+          ? 'Login email + kitchen record updated. The user logs in with the new email (same password).'
+          : 'No auth account found with the old email — kitchen record updated. If they never completed signup, ask them to sign up with the correct email.',
+      })
+    }
+
     if (path === 'admin/approve') {
       const { ctx, error } = await requireAdmin(request)
       if (error) return error
