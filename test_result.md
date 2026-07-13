@@ -1597,6 +1597,21 @@ test_plan:
 agent_communication:
     - agent: "main"
       message: |
+        ROUND 5 (June 2025, same session) — Cleanups + Manual waste logging (frontend-only):
+        1. settings-auth.jsx: removed 'all_items'+'recipes' from ALL_WIDGETS and 'stock'+'recipes'
+           from ALL_MODULES (always-on now); page.js hasStock/hasRecipes forced true.
+        2. settings-auth.jsx: Activity history section REMOVED from StaffActivityCard (staff list +
+           permissions kept); tab renamed "Staff & Activity" → "Staff". Backend /api/activity kept.
+        3. settings-auth.jsx: 'waste' removed from PERM_OPTIONS; page.js can('waste') gating removed
+           (3 places) — Waste Analytics now visible to ALL staff.
+        4. dashboard.jsx: "Keep up the great work, Chef." → "Keep up the great work."
+        5. analytics.jsx: NEW LogWasteDialog + "Log waste" button in Waste Analytics header —
+           manually log waste for non-inventory items (prepped food, spoiled produce). Reuses the
+           EXISTING POST /api/waste endpoint (productId null, category 'Manual entry'). Fields:
+           name*, qty, unit, reason (spoiled/expired/overstock/damaged/other), cost/unit, notes.
+
+    - agent: "main"
+      message: |
         ROUND 4 (June 2025, same session) — Admin "Change user email" tool:
         Backend: NEW POST /api/admin/change-email { kitchenId, newEmail } (requireAdmin) —
         validates email, loads kitchen owner_email (old), finds Supabase Auth user by old email via

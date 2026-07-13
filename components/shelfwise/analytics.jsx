@@ -25,10 +25,133 @@ import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
 const fetch = apiFetch
 
+// ============================================================================
+// LogWasteDialog — manually log waste for things NOT in inventory
+// (spoiled produce, leftover prepped food like chicken curry, sandwich
+// fillings, etc). Posts to the same waste_log as the inventory dispose flow,
+// so it all shows up together in Waste Analytics. (User request, June 2025.)
+// ============================================================================
+const WASTE_REASONS = [
+  { id: 'spoiled',   label: 'Spoiled / gone bad', emoji: '🤢' },
+  { id: 'expired',   label: 'Expired',            emoji: '📅' },
+  { id: 'overstock', label: 'Made / bought too much', emoji: '📦' },
+  { id: 'damaged',   label: 'Damaged / dropped',  emoji: '💥' },
+  { id: 'other',     label: 'Other',              emoji: '❓' },
+]
+const WASTE_UNITS = ['ea', 'kg', 'g', 'L', 'mL', 'portion', 'tray', 'pack', 'box']
+
+export function LogWasteDialog({ open, onClose, onSaved, currency }) {
+  const [name, setName] = useState('')
+  const [quantity, setQuantity] = useState('1')
+  const [unit, setUnit] = useState('ea')
+  const [reason, setReason] = useState('spoiled')
+  const [unitCost, setUnitCost] = useState('')
+  const [notes, setNotes] = useState('')
+  const [saving, setSaving] = useState(false)
+  const sym = CURRENCY_SYMBOL[currency] || ''
+
+  useEffect(() => {
+    if (open) { setName(''); setQuantity('1'); setUnit('ea'); setReason('spoiled'); setUnitCost(''); setNotes(''); setSaving(false) }
+  }, [open])
+
+  const save = async () => {
+    if (!name.trim()) { toast.error('What was wasted? Please enter a name.'); return }
+    setSaving(true)
+    try {
+      const res = await fetch('/api/waste', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productName: name.trim(),
+          quantity: Number(quantity) || 1,
+          unit,
+          reason,
+          unitCost: unitCost === '' ? null : Number(unitCost),
+          notes: notes.trim(),
+          category: 'Manual entry',
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not log waste')
+      toast.success(`Waste logged: ${name.trim()}`)
+      onSaved && onSaved()
+      onClose()
+    } catch (e) {
+      toast.error(e.message || 'Could not log waste')
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v && !saving) onClose() }}>
+      <DialogContent className="sm:max-w-[440px] max-h-[92vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">♻️ Log Waste</DialogTitle>
+          <p className="text-sm text-muted-foreground">For anything not in your inventory — spoiled veg, leftover prepped food, curry, fillings…</p>
+        </DialogHeader>
+        <div className="space-y-3 py-2">
+          <div>
+            <Label className="text-xs">What was wasted? *</Label>
+            <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Chicken curry, Lettuce, Sandwich filling" autoFocus />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs">Quantity</Label>
+              <Input type="number" min="0" step="0.1" value={quantity} onChange={e => setQuantity(e.target.value)} />
+            </div>
+            <div>
+              <Label className="text-xs">Unit</Label>
+              <Select value={unit} onValueChange={setUnit}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {WASTE_UNITS.map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div>
+            <Label className="text-xs">Why is it wasted?</Label>
+            <div className="grid grid-cols-1 gap-1.5 mt-1">
+              {WASTE_REASONS.map(r => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => setReason(r.id)}
+                  className={`text-left rounded-lg border-2 px-3 py-2 transition flex items-center gap-2 ${reason === r.id ? 'border-amber-400 bg-amber-50 shadow-sm' : 'border-slate-200 hover:border-slate-300 bg-white'}`}
+                >
+                  <span className="text-lg">{r.emoji}</span>
+                  <span className="font-medium text-sm">{r.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs">Cost per {unit} {sym ? `(${sym})` : ''} <span className="text-muted-foreground">(optional)</span></Label>
+              <Input type="number" min="0" step="0.01" value={unitCost} onChange={e => setUnitCost(e.target.value)} placeholder="e.g. 2.50" />
+            </div>
+            <div>
+              <Label className="text-xs">Notes <span className="text-muted-foreground">(optional)</span></Label>
+              <Input value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. left out overnight" />
+            </div>
+          </div>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={save} disabled={saving || !name.trim()} className="bg-amber-600 hover:bg-amber-700 text-white">
+            {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />} Log Waste
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+
 export function AnalyticsView({ products }) {
   const [range, setRange] = useState('week') // week | month | all
   const [data, setData] = useState({ entries: [], summary: null })
   const [loading, setLoading] = useState(false)
+  const [logOpen, setLogOpen] = useState(false)  // manual "Log waste" dialog
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -83,18 +206,25 @@ export function AnalyticsView({ products }) {
           <h2 className="text-3xl font-bold tracking-tight">Waste Analytics</h2>
           <p className="text-muted-foreground mt-1">Track what's being disposed and why</p>
         </div>
-        <div className="flex gap-1 border rounded-lg overflow-hidden bg-white">
-          {['week', 'month', 'all'].map(r => (
-            <button
-              key={r}
-              onClick={() => setRange(r)}
-              className={`px-3 py-1.5 text-xs font-medium ${range === r ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
-            >
-              {r === 'week' ? 'Last 7 days' : r === 'month' ? 'Last 30 days' : 'All time'}
-            </button>
-          ))}
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button size="sm" onClick={() => setLogOpen(true)} className="bg-amber-600 hover:bg-amber-700 text-white">
+            <Plus className="h-4 w-4 mr-1.5" /> Log waste
+          </Button>
+          <div className="flex gap-1 border rounded-lg overflow-hidden bg-white">
+            {['week', 'month', 'all'].map(r => (
+              <button
+                key={r}
+                onClick={() => setRange(r)}
+                className={`px-3 py-1.5 text-xs font-medium ${range === r ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}
+              >
+                {r === 'week' ? 'Last 7 days' : r === 'month' ? 'Last 30 days' : 'All time'}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
+
+      <LogWasteDialog open={logOpen} onClose={() => setLogOpen(false)} onSaved={load} />
 
       {loading ? (
         <div className="flex items-center justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-emerald-600" /></div>
@@ -130,7 +260,8 @@ export function AnalyticsView({ products }) {
                 <div className="text-4xl mb-2">🎉</div>
                 <p className="font-semibold">No waste logged in this range.</p>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Waste is tracked when you dispose products (Inventory → 🗑️ button → reason).
+                  Waste is tracked when you dispose products (Inventory → 🗑️ button → reason),
+                  or tap <b>+ Log waste</b> above to add anything else — spoiled veg, leftover prepped food…
                 </p>
               </CardContent>
             </Card>
