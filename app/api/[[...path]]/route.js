@@ -2118,6 +2118,24 @@ export async function POST(request, { params }) {
     const path = (params?.path || []).join('/')
     const sb = supabaseAdmin
 
+    // ------- Shelves: append a shelf/location name to the kitchen's list -------
+    // Allowed for owner AND staff (chef logins) — staff add products daily and
+    // need to grow the shelf dropdown without full Settings access.
+    if (path === 'shelves') {
+      const { ctx, error } = await requireOwnerOrChef(request)
+      if (error) return error
+      const body = await request.json()
+      const name = String(body.name || '').trim().slice(0, 60)
+      if (!name) return json({ error: 'Shelf name required' }, 400)
+      const { data: krow, error: e1 } = await sb.from('kitchens').select('locations').eq('id', ctx.kitchenId).maybeSingle()
+      if (e1) return json({ error: e1.message }, 500)
+      const list = Array.isArray(krow?.locations) ? krow.locations.map(x => String(x)) : []
+      if (!list.some(x => x.toLowerCase() === name.toLowerCase())) list.push(name)
+      const { error: e2 } = await sb.from('kitchens').update({ locations: list }).eq('id', ctx.kitchenId)
+      if (e2) return json({ error: e2.message }, 500)
+      return json({ ok: true, locations: list })
+    }
+
     // ------- Staff: register/claim a name AFTER login (popup for existing users) -------
     if (path === 'staff/register-name') {
       const { ctx, error } = await requireOwnerOrChef(request)

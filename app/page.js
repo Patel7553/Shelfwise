@@ -56,6 +56,80 @@ function useTheme() {
 
 function ThemeToggle() { return null }
 
+// ============================================================================
+// ShelfSelect — Location/Shelf dropdown (user request, round 3).
+// • Options = the kitchen's saved shelf list (settings.locations) + any
+//   distinct location names already on products.
+// • "➕ Add new shelf…" lets the user add AS MANY shelves as they want —
+//   each is saved to the kitchen via POST /api/shelves so the whole team
+//   sees it in every dropdown from then on.
+// ============================================================================
+function ShelfSelect({ value, onChange, shelves, products, onAddShelf, triggerClassName }) {
+  const [adding, setAdding] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const opts = useMemo(() => {
+    const set = new Set()
+    ;(shelves || []).forEach(s => { const n = String(s || '').trim(); if (n) set.add(n) })
+    ;(products || []).forEach(p => { const n = (p?.location || '').trim(); if (n) set.add(n) })
+    const v = String(value || '').trim()
+    if (v) set.add(v)  // keep current value selectable even if not in the list
+    return [...set].sort((a, b) => a.localeCompare(b))
+  }, [shelves, products, value])
+
+  const confirmAdd = async () => {
+    const n = newName.trim().slice(0, 60)
+    if (!n) return
+    setSaving(true)
+    try {
+      await onAddShelf(n)         // persist to kitchen list (best-effort)
+    } catch { /* still use the name locally */ }
+    onChange(n)                   // select it right away
+    setNewName('')
+    setAdding(false)
+    setSaving(false)
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <Select
+        value={value && opts.includes(value) ? value : '__none__'}
+        onValueChange={v => {
+          if (v === '__add__') setAdding(true)
+          else if (v === '__none__') onChange('')
+          else { setAdding(false); onChange(v) }
+        }}
+      >
+        <SelectTrigger className={triggerClassName}><SelectValue placeholder="Select shelf…" /></SelectTrigger>
+        <SelectContent>
+          <SelectItem value="__none__">— None —</SelectItem>
+          {opts.map(o => <SelectItem key={o} value={o}>📍 {o}</SelectItem>)}
+          <SelectItem value="__add__">➕ Add new shelf…</SelectItem>
+        </SelectContent>
+      </Select>
+      {adding && (
+        <div className="flex gap-1.5">
+          <Input
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            placeholder="New shelf name… e.g. Shelf A1"
+            autoFocus
+            className={triggerClassName}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); confirmAdd() } }}
+          />
+          <Button type="button" size="sm" onClick={confirmAdd} disabled={saving || !newName.trim()} className="bg-emerald-600 hover:bg-emerald-700 shrink-0 h-9">
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Plus className="h-3.5 w-3.5 mr-1" /> Add</>}
+          </Button>
+          <Button type="button" size="sm" variant="ghost" onClick={() => { setAdding(false); setNewName('') }} className="shrink-0 h-9 px-2">
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function App() {
   const T = useT()  // language-aware translator — re-renders whole app when user changes language
   // Deploy version marker — helps us verify a deploy actually shipped. Change this string each release.
@@ -644,6 +718,22 @@ function App() {
     setSnapImage(null)
     setSnapItem(null)
     setSnapOpen(true)
+  }
+
+  // Add a shelf name to the kitchen's saved list (shared by all shelf dropdowns).
+  const addShelf = async (name) => {
+    const res = await fetch('/api/shelves', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      toast.warning('Shelf used, but could not be saved to the kitchen list.')
+      throw new Error(data.error || 'save failed')
+    }
+    setSettings(prev => ({ ...prev, locations: data.locations || [...(prev.locations || []), name] }))
+    toast.success(`Shelf "${name}" added ✅`)
   }
 
   // Open Barcode scanner
@@ -1742,7 +1832,13 @@ function App() {
             </div>
             <div>
               <Label htmlFor="loc">Shelf / Location</Label>
-              <Input id="loc" value={form.location} onChange={e => setForm({ ...form, location: e.target.value })} placeholder="Type your own — e.g. Shelf A1" />
+              <ShelfSelect
+                value={form.location}
+                onChange={v => setForm(prev => ({ ...prev, location: v }))}
+                shelves={settings.locations}
+                products={products}
+                onAddShelf={addShelf}
+              />
             </div>
             <div>
               <Label htmlFor="dr">📅 Date Received</Label>
@@ -1998,11 +2094,13 @@ function App() {
                           </div>
                           <div>
                             <Label className="text-xs">Location</Label>
-                            <Input
+                            <ShelfSelect
                               value={it.location || ''}
-                              onChange={e => updateVoiceItem(idx, { location: e.target.value })}
-                              placeholder="Type your own"
-                              className="h-9"
+                              onChange={v => updateVoiceItem(idx, { location: v })}
+                              shelves={settings.locations}
+                              products={products}
+                              onAddShelf={addShelf}
+                              triggerClassName="h-9"
                             />
                           </div>
                         </div>
@@ -2278,7 +2376,13 @@ function App() {
                 </div>
                 <div>
                   <Label className="text-xs">Location/Shelf</Label>
-                  <Input value={snapItem.location || ''} onChange={e => setSnapItem({ ...snapItem, location: e.target.value })} placeholder="Type your own" />
+                  <ShelfSelect
+                    value={snapItem.location || ''}
+                    onChange={v => setSnapItem(prev => ({ ...prev, location: v }))}
+                    shelves={settings.locations}
+                    products={products}
+                    onAddShelf={addShelf}
+                  />
                 </div>
               </div>
               <div>
