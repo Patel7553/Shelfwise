@@ -61,7 +61,7 @@ export function UseTodayPanel({ products, goToInventory, formatDate }) {
           </div>
           <div>
             <p className="font-bold text-emerald-900">All clear — nothing expiring today or tomorrow! 🎉</p>
-            <p className="text-sm text-emerald-700">Keep up the great work, Chef.</p>
+            <p className="text-sm text-emerald-700">Keep up the great work.</p>
           </div>
         </div>
       </div>

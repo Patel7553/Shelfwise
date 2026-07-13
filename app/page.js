@@ -1529,8 +1529,8 @@ function App() {
   }
 
   const modulesEnabled = Array.isArray(settings.modulesEnabled) ? settings.modulesEnabled : []
-  const hasStock = modulesEnabled.length === 0 || modulesEnabled.includes('stock')
-  const hasRecipes = modulesEnabled.length === 0 || modulesEnabled.includes('recipes')
+  const hasStock = true      // always on — Inventory tile lives on the dashboard (user request)
+  const hasRecipes = true    // always on — Recipes tile lives on the dashboard (user request)
   const hasRota = modulesEnabled.includes('rota')
   const hasHaccp = modulesEnabled.includes('haccp')
   const hasAnalytics = modulesEnabled.length === 0 || modulesEnabled.includes('analytics')
@@ -1607,7 +1607,7 @@ function App() {
                 <ChefHat className="h-4 w-4 mr-2" /> {T('nav_rota')}
               </Button>
             )}
-            {hasAnalytics && can('waste') && (
+            {hasAnalytics && (
               <Button variant={view === 'analytics' ? 'default' : 'ghost'} size="sm" onClick={() => setView('analytics')}>
                 <BarChart3 className="h-4 w-4 mr-2" /> {T('nav_waste')}
               </Button>
@@ -1668,7 +1668,7 @@ function App() {
                 <ChefHat className="h-4 w-4 mr-2" /> {T('nav_rota')}
               </Button>
             )}
-            {hasAnalytics && can('waste') && (
+            {hasAnalytics && (
               <Button variant={view === 'analytics' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('analytics'); setMobileNav(false) }}>
                 <BarChart3 className="h-4 w-4 mr-2" /> {T('nav_waste')}
               </Button>
@@ -1749,7 +1749,7 @@ function App() {
         {view === 'orders' && can('orders') && (
           <OrdersView />
         )}
-        {view === 'analytics' && can('waste') && (
+        {view === 'analytics' && (
           <AnalyticsView products={products} />
         )}
         {view === 'haccp' && (

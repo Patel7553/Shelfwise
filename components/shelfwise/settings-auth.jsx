@@ -570,13 +570,13 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
   const [touched, setTouched] = useState({ profile: false, login: false, dashboard: false, fields: false, haccp: false })
   const markTouched = (section) => setTouched(prev => prev[section] ? prev : { ...prev, [section]: true })
   const ALL_WIDGETS = [
-    { key: 'all_items', label: 'All Items count' },
+    // 'all_items' and 'recipes' removed — the dashboard now has fixed
+    // Inventory / Add Products / Recipes tiles instead (user request).
     { key: 'expiring',  label: 'Expiring Soon' },
     { key: 'expired',   label: 'Expired items' },
     { key: 'critical',  label: 'Critical Stock level' },
     { key: 'in_date',   label: 'In Date items' },
     { key: 'use_today', label: 'Use Today (urgent)' },
-    { key: 'recipes',   label: 'Recipes shortcut' },
     { key: 'rota_today', label: 'Today\'s Rota' },
     { key: 'waste_week', label: 'Waste (this week)' },
     { key: 'expiry_alerts', label: 'Expiry alert banner' },
@@ -584,8 +584,7 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
     { key: 'search',        label: 'Global search box' },
   ]
   const ALL_MODULES = [
-    { key: 'stock',     label: 'Stock Monitoring', desc: 'Inventory + expiry tracking' },
-    { key: 'recipes',   label: 'Recipes',          desc: 'AI recipe parsing & ingredient match' },
+    // 'stock' and 'recipes' removed — always on (dashboard tiles cover them).
     { key: 'rota',      label: 'Rota',             desc: 'Weekly staff scheduling' },
     { key: 'analytics', label: 'Waste Analytics',  desc: 'Track disposals, reasons & cost' },
     { key: 'haccp',     label: 'HACCP Compliance', desc: 'Fridge temps, cleaning, delivery checks' },
@@ -737,7 +736,7 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
   const tabs = [
     { key: 'profile', label: 'Kitchen', longLabel: 'Kitchen Profile', icon: ChefHat },
     { key: 'login', label: 'Login', longLabel: 'Login & Alerts', icon: Settings },
-    ...(isOwner ? [{ key: 'staff', label: 'Staff', longLabel: 'Staff & Activity', icon: Users }] : []),
+    ...(isOwner ? [{ key: 'staff', label: 'Staff', longLabel: 'Staff', icon: Users }] : []),
     { key: 'dashboard', label: 'Dashboard', longLabel: 'Dashboard', icon: LayoutDashboard },
     { key: 'haccp', label: 'Fridges', longLabel: 'Fridges & Freezers', icon: Thermometer },
     { key: 'fields', label: 'Fields', longLabel: 'Custom Fields', icon: Package },
@@ -1796,55 +1795,26 @@ export function SensorSettingsCard({ locations = [] }) {
 }
 
 // ============================================================================
-// Staff & Activity (owner only) — see who logged in via code, remove names,
-// and browse the full activity history (who added/edited/deleted what, when).
+// Staff (owner only) — see who logged in via code, remove names, and set
+// per-person access. (Activity history section removed per user request.)
 // Hides itself automatically for non-owners (API returns 403).
 // ============================================================================
-const ACTIVITY_LABELS = {
-  item_added: { label: 'Added item', emoji: '➕', cls: 'bg-emerald-100 text-emerald-800' },
-  item_updated: { label: 'Edited item', emoji: '✏️', cls: 'bg-blue-100 text-blue-800' },
-  item_deleted: { label: 'Deleted item', emoji: '🗑️', cls: 'bg-red-100 text-red-700' },
-  recipe_saved: { label: 'Saved recipe', emoji: '📖', cls: 'bg-purple-100 text-purple-800' },
-  recipe_updated: { label: 'Edited recipe', emoji: '📖', cls: 'bg-purple-100 text-purple-800' },
-  recipe_deleted: { label: 'Deleted recipe', emoji: '🗑️', cls: 'bg-red-100 text-red-700' },
-  waste_logged: { label: 'Logged waste', emoji: '♻️', cls: 'bg-amber-100 text-amber-800' },
-  temp_logged: { label: 'Logged temp', emoji: '🌡️', cls: 'bg-sky-100 text-sky-800' },
-}
-
 export function StaffActivityCard() {
   const [allowed, setAllowed] = useState(true)   // false when API says "Owner only"
   const [staff, setStaff] = useState([])
-  const [items, setItems] = useState([])
-  const [note, setNote] = useState('')
   const [loading, setLoading] = useState(true)
-  const [hasMore, setHasMore] = useState(false)
-  const [loadingMore, setLoadingMore] = useState(false)
   const [removing, setRemoving] = useState('')
 
   const load = async () => {
     setLoading(true)
     try {
-      const [sRes, aRes] = await Promise.all([fetch('/api/staff'), fetch('/api/activity?limit=25')])
-      if (sRes.status === 403 || aRes.status === 403) { setAllowed(false); return }
+      const sRes = await fetch('/api/staff')
+      if (sRes.status === 403) { setAllowed(false); return }
       const s = await sRes.json().catch(() => ({}))
-      const a = await aRes.json().catch(() => ({}))
       setStaff(Array.isArray(s.staff) ? s.staff : [])
-      setItems(Array.isArray(a.items) ? a.items : [])
-      setHasMore(!!a.hasMore)
-      setNote(a.note || '')
     } catch {} finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
-
-  const loadMore = async () => {
-    setLoadingMore(true)
-    try {
-      const res = await fetch(`/api/activity?limit=25&offset=${items.length}`)
-      const a = await res.json().catch(() => ({}))
-      setItems(prev => [...prev, ...(Array.isArray(a.items) ? a.items : [])])
-      setHasMore(!!a.hasMore)
-    } catch {} finally { setLoadingMore(false) }
-  }
 
   const removeStaff = async (name) => {
     if (!window.confirm(`Remove "${name}" from the staff list?\n\nTheir past activity stays in the log — this just frees the name so it can be used again.`)) return
@@ -1858,10 +1828,9 @@ export function StaffActivityCard() {
   }
 
   // Access options a person can be granted on top of standard staff access
-  // (standard = add/view items, view/add recipes, log temps, notifications)
+  // (standard = add/view items, view/add recipes, log temps, waste analytics, notifications)
   const PERM_OPTIONS = [
     { key: 'orders', label: 'Orders', emoji: '🚚' },
-    { key: 'waste', label: 'Waste analytics', emoji: '♻️' },
     { key: 'logbook', label: 'Print & scan logbook', emoji: '📒' },
     { key: 'settings', label: 'Full kitchen settings', emoji: '⚙️' },
   ]
@@ -1924,8 +1893,8 @@ export function StaffActivityCard() {
     <div className="rounded-lg border-2 border-indigo-200 bg-indigo-50/40 p-4">
       <div className="flex items-center justify-between gap-2">
         <div>
-          <Label className="text-indigo-900 text-sm font-bold">👥 Staff & Activity</Label>
-          <p className="text-xs text-indigo-700 mt-0.5">People who logged in with the kitchen code, and everything they did.</p>
+          <Label className="text-indigo-900 text-sm font-bold">👥 Staff</Label>
+          <p className="text-xs text-indigo-700 mt-0.5">People who logged in with the kitchen code, and their access.</p>
         </div>
         <Button variant="outline" size="sm" type="button" onClick={load} disabled={loading} className="bg-white shrink-0">
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -1997,42 +1966,7 @@ export function StaffActivityCard() {
         )}
       </div>
 
-      {/* Activity history */}
-      <div className="mt-4">
-        <p className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider mb-1.5">Activity history</p>
-        {note && (
-          <div className="text-xs bg-amber-50 border border-amber-300 text-amber-800 rounded-md p-2 mb-2">
-            ⚠️ {note}
-          </div>
-        )}
-        {items.length === 0 && !note ? (
-          <p className="text-xs text-muted-foreground">{loading ? 'Loading…' : 'No activity recorded yet. Actions appear here as your team uses the app.'}</p>
-        ) : (
-          <div className="space-y-1 max-h-80 overflow-y-auto pr-1">
-            {items.map(it => {
-              const meta = ACTIVITY_LABELS[it.action] || { label: it.action, emoji: '•', cls: 'bg-slate-100 text-slate-700' }
-              return (
-                <div key={it.id} className="flex items-start gap-2 bg-white rounded-md border px-3 py-2">
-                  <span className="text-base leading-none mt-0.5">{meta.emoji}</span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs">
-                      <span className="font-semibold capitalize">{it.person || 'Unknown'}</span>{' '}
-                      <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold ${meta.cls}`}>{meta.label}</span>{' '}
-                      <span className="text-slate-700 break-words">{it.detail}</span>
-                    </p>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">{fmtTime(it.created_at)}</p>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-        {hasMore && (
-          <Button variant="outline" size="sm" type="button" onClick={loadMore} disabled={loadingMore} className="mt-2 w-full bg-white">
-            {loadingMore ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null} Load older activity
-          </Button>
-        )}
-      </div>
+      {/* Activity history section removed per user request (June 2025). */}
     </div>
   )
 }
