@@ -517,7 +517,7 @@ export function ExpiryScanDialog({ open, onClose, onDateFound }) {
               autoPlay
               playsInline
               muted
-              className="absolute inset-0 w-full h-full object-cover"
+              className="absolute inset-0 w-full h-full object-contain"
             />
             {!error && (
               <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-10">
@@ -741,3 +741,207 @@ export function BarcodeScanDialog({ open, onClose, onFound, loading, onManual })
   )
 }
 
+
+// ============================================================================
+// LensCameraView — Google-Lens-style live camera for "Snap Label".
+// • Live viewfinder with corner brackets + scanning line
+// • AUTO-CAPTURE: samples small grayscale frames ~4×/sec; once the scene is
+//   steady (phone held still on the label) for ~1 second it captures
+//   automatically — no button press needed. Manual shutter also available.
+// • Shows the frozen frame + "AI reading…" overlay while busy.
+// • Parent controls the flow: onCapture(dataUrl) fires with a JPEG data URL.
+//   Setting frozenImage (parent state) freezes the view; clearing it re-arms
+//   the auto-capture for another attempt.
+// ============================================================================
+export function LensCameraView({ active, busy, frozenImage, onCapture, onGalleryFile, onManual }) {
+  const videoRef = useRef(null)
+  const streamRef = useRef(null)
+  const [error, setError] = useState('')
+  const [ready, setReady] = useState(false)
+  const [status, setStatus] = useState('Starting camera…')
+  const [aspect, setAspect] = useState(3 / 4) // portrait default; updated from real stream
+  const [flash, setFlash] = useState(false)
+
+  // --- motion-stability auto capture refs ---
+  const prevFrameRef = useRef(null)
+  const stableCountRef = useRef(0)
+  const warmupRef = useRef(0)
+  const firedRef = useRef(false)
+
+  // Start / stop camera with dialog lifecycle
+  useEffect(() => {
+    if (!active) return
+    setError(''); setReady(false); setStatus('Starting camera…')
+    let cancelled = false
+    ;(async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+          audio: false,
+        })
+        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
+        streamRef.current = stream
+        const v = videoRef.current
+        if (v) {
+          v.srcObject = stream
+          v.onloadedmetadata = () => {
+            if (v.videoWidth && v.videoHeight) setAspect(v.videoWidth / v.videoHeight)
+            setReady(true)
+          }
+          await v.play().catch(() => {})
+        }
+      } catch (e) {
+        if (!cancelled) setError('Camera blocked. Allow camera permission, or upload from gallery below.')
+      }
+    })()
+    return () => {
+      cancelled = true
+      if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null }
+    }
+  }, [active])
+
+  const doCapture = useCallback((auto) => {
+    const video = videoRef.current
+    if (!video || !video.videoWidth || firedRef.current) return
+    firedRef.current = true
+    try { navigator.vibrate?.(auto ? [30, 40, 30] : 40) } catch {}
+    setFlash(true); setTimeout(() => setFlash(false), 250)
+    // Full-quality frame → JPEG data URL
+    const maxDim = 1400
+    let w = video.videoWidth, h = video.videoHeight
+    if (w > maxDim || h > maxDim) {
+      const s = Math.min(maxDim / w, maxDim / h)
+      w = Math.round(w * s); h = Math.round(h * s)
+    }
+    const canvas = document.createElement('canvas')
+    canvas.width = w; canvas.height = h
+    canvas.getContext('2d').drawImage(video, 0, 0, w, h)
+    onCapture(canvas.toDataURL('image/jpeg', 0.85))
+  }, [onCapture])
+
+  // Auto-capture sampler — runs only while live (no frozen image, not busy)
+  useEffect(() => {
+    if (!active || busy || frozenImage || error) return
+    // (re)arm for a fresh attempt
+    firedRef.current = false
+    prevFrameRef.current = null
+    stableCountRef.current = 0
+    warmupRef.current = 0
+    setStatus('Point at the label…')
+    const SAMPLE_W = 48, SAMPLE_H = 36
+    const canvas = document.createElement('canvas')
+    canvas.width = SAMPLE_W; canvas.height = SAMPLE_H
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
+    const timer = setInterval(() => {
+      const video = videoRef.current
+      if (!video || !video.videoWidth || firedRef.current) return
+      warmupRef.current += 1
+      ctx.drawImage(video, 0, 0, SAMPLE_W, SAMPLE_H)
+      const { data } = ctx.getImageData(0, 0, SAMPLE_W, SAMPLE_H)
+      // grayscale
+      const gray = new Uint8Array(SAMPLE_W * SAMPLE_H)
+      let lum = 0
+      for (let i = 0; i < gray.length; i++) {
+        const g = (data[i * 4] * 0.299 + data[i * 4 + 1] * 0.587 + data[i * 4 + 2] * 0.114) | 0
+        gray[i] = g; lum += g
+      }
+      lum /= gray.length
+      const prev = prevFrameRef.current
+      prevFrameRef.current = gray
+      if (warmupRef.current < 4 || !prev) { setStatus('Point at the label…'); return }
+      if (lum < 18) { stableCountRef.current = 0; setStatus('Too dark — uncover the camera'); return }
+      let diff = 0
+      for (let i = 0; i < gray.length; i++) diff += Math.abs(gray[i] - prev[i])
+      diff /= gray.length
+      if (diff < 7) {
+        stableCountRef.current += 1
+        setStatus(stableCountRef.current >= 2 ? '📸 Capturing…' : 'Hold steady…')
+        if (stableCountRef.current >= 3) doCapture(true)
+      } else {
+        stableCountRef.current = 0
+        setStatus('Hold steady over the label…')
+      }
+    }, 280)
+    return () => clearInterval(timer)
+  }, [active, busy, frozenImage, error, doCapture])
+
+  return (
+    <div className="space-y-3">
+      <div
+        className="rounded-2xl overflow-hidden bg-black relative w-full"
+        style={{ aspectRatio: aspect > 1 ? '4/3' : '3/4', maxHeight: '55vh' }}
+      >
+        {/* Live video (kept mounted; hidden behind frozen frame when captured) */}
+        <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain" />
+        {frozenImage && (
+          <img src={frozenImage} alt="captured" className="absolute inset-0 w-full h-full object-contain bg-black" />
+        )}
+        {/* Capture flash */}
+        {flash && <div className="absolute inset-0 bg-white/80 z-30 animate-pulse" />}
+
+        {!error && !frozenImage && (
+          <>
+            {/* Lens-style corner brackets */}
+            <div className="absolute inset-0 pointer-events-none z-10 p-6">
+              <div className="relative w-full h-full">
+                <span className="absolute left-0 top-0 h-8 w-8 border-l-4 border-t-4 border-white rounded-tl-xl" />
+                <span className="absolute right-0 top-0 h-8 w-8 border-r-4 border-t-4 border-white rounded-tr-xl" />
+                <span className="absolute left-0 bottom-0 h-8 w-8 border-l-4 border-b-4 border-white rounded-bl-xl" />
+                <span className="absolute right-0 bottom-0 h-8 w-8 border-r-4 border-b-4 border-white rounded-br-xl" />
+                {/* animated scan line */}
+                {ready && <span className="absolute left-2 right-2 top-1/2 h-0.5 bg-emerald-400/80 shadow-[0_0_12px_2px_rgba(52,211,153,0.7)] animate-pulse" />}
+              </div>
+            </div>
+            {/* Status pill */}
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20">
+              <span className="text-[11px] font-semibold text-white bg-black/60 backdrop-blur px-3 py-1 rounded-full">
+                {ready ? status : 'Starting camera…'}
+              </span>
+            </div>
+            {/* AUTO badge */}
+            <div className="absolute top-3 right-3 z-20">
+              <span className="text-[10px] font-bold text-emerald-300 bg-black/60 px-2 py-0.5 rounded-full">✨ AUTO</span>
+            </div>
+            {/* Shutter button (manual fallback, Lens-style) */}
+            <div className="absolute bottom-4 left-0 right-0 z-20 flex items-center justify-center">
+              <button
+                type="button"
+                onClick={() => doCapture(false)}
+                disabled={!ready}
+                className="h-16 w-16 rounded-full bg-white/25 backdrop-blur border-4 border-white flex items-center justify-center active:scale-90 transition disabled:opacity-40"
+                title="Capture now"
+              >
+                <span className="h-11 w-11 rounded-full bg-white" />
+              </button>
+            </div>
+          </>
+        )}
+
+        {busy && (
+          <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center text-white text-sm font-medium gap-2 z-20">
+            <Loader2 className="h-6 w-6 animate-spin" /> AI reading label…
+          </div>
+        )}
+      </div>
+
+      {error && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">{error}</p>
+      )}
+
+      <div className="flex items-center justify-center gap-2">
+        <label className="inline-flex">
+          <input type="file" accept="image/*" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) onGalleryFile(f); e.target.value = '' }} />
+          <span className="px-3 py-2 text-xs font-semibold border rounded-lg cursor-pointer hover:bg-slate-50 flex items-center gap-1.5">
+            <Upload className="h-3.5 w-3.5" /> Upload from gallery
+          </span>
+        </label>
+        {onManual && (
+          <button type="button" onClick={onManual} className="px-3 py-2 text-xs font-semibold border rounded-lg hover:bg-slate-50 flex items-center gap-1.5">
+            <Pencil className="h-3.5 w-3.5" /> Fill manually
+          </button>
+        )}
+      </div>
+      <p className="text-[11px] text-center text-muted-foreground">✨ Hold the camera still over the label — it captures automatically, like Google Lens.</p>
+    </div>
+  )
+}

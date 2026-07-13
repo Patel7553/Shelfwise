@@ -1457,6 +1457,24 @@ test_plan:
 agent_communication:
     - agent: "main"
       message: |
+        ROUND 2 (June 2025, same session) — user feedback fixes (frontend-only):
+        1. dashboard.jsx: 3 big cards shrunk back to compact tiles (same size as old quick buttons).
+           "Add Products" tile now toggles an expandable row below with 4 compact options
+           (Snap Label / Voice / Manual / Invoice) via new local `addOpen` state.
+        2. page.js: Location/Shelf reverted to plain free-text Inputs everywhere (user wants to
+           type their own). LocationSelect component deleted.
+        3. scanners.jsx: NEW `LensCameraView` — Google-Lens-style live camera for Snap Label with
+           AUTO-CAPTURE (samples 48x36 grayscale frames ~4x/sec; captures automatically when scene
+           is steady for ~3 consecutive samples after warmup; too-dark guard; manual shutter,
+           gallery upload + "Fill manually" fallbacks). page.js snap dialog now uses it instead of
+           the old file-input; scan logic refactored into runSnapScan(dataUrl) which re-arms the
+           live camera on scan failure/no-detect.
+        4. scanners.jsx ExpiryScanDialog: video object-cover → object-contain (fixes "zoomed in"
+           camera complaint — the 16:9 stream was being cropped into the 4:3 box).
+        NOTE: camera features CANNOT be verified headless (no camera); user must test on device.
+        Verified compact dashboard + expander via temp preview page (deleted after).
+    - agent: "main"
+      message: |
         NEW SESSION (June 2025): Android UI fix + Dashboard overhaul + Location dropdowns (frontend-only changes).
         1. /app/app/page.js — Add/Edit Product dialog grid fixed for mobile: parent is now
            `grid-cols-1 sm:grid-cols-2` and all full-width children use `sm:col-span-2`

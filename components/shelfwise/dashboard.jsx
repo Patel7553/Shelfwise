@@ -260,6 +260,7 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
   const [quickSearch, setQuickSearch] = useState('')
   const [globalResults, setGlobalResults] = useState(null)
   const [globalLoading, setGlobalLoading] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)  // "Add Products" tile expander
   // If widgets is undefined → show all (backwards compat).
   // If widgets array is provided (even empty) → strict include check.
   const show = (k) => widgets === undefined || (Array.isArray(widgets) && widgets.includes(k))
@@ -341,80 +342,48 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
       </div>
 
       {/* ====================================================================
-          3 MAIN ACTION CARDS (user request — replaces the old scattered
-          quick-action buttons): Inventory · Add Products · Recipes.
-          "Add Products" contains all the ways to add items (manual, snap,
-          voice, invoice) inside one card. Mobile-first: stacks on phones.
+          3 MAIN ACTIONS — compact tiles, same size as the old quick buttons
+          (user request). Tapping "Add Products" expands its options
+          (Snap Label / Voice / Manual / Invoice) right below.
           ==================================================================== */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {/* 1) INVENTORY */}
-        <button onClick={() => goToInventory('All')} className="text-left group">
-          <Card className="h-full border-2 border-emerald-200 bg-gradient-to-br from-emerald-50 to-white hover:border-emerald-400 hover:shadow-lg transition-all cursor-pointer">
-            <CardContent className="p-5 flex flex-col gap-3 h-full">
-              <div className="flex items-center justify-between">
-                <div className="h-12 w-12 rounded-xl bg-emerald-100 flex items-center justify-center">
-                  <Boxes className="h-6 w-6 text-emerald-700" />
-                </div>
-                <span className="text-3xl font-bold text-emerald-700">{L(stats.total)}</span>
-              </div>
-              <div>
-                <p className="font-bold text-lg text-emerald-950">Inventory</p>
-                <p className="text-sm text-muted-foreground">View, search &amp; manage all your stock</p>
-              </div>
-              <span className="mt-auto text-sm font-semibold text-emerald-700 flex items-center gap-1">
-                Open inventory <ArrowRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform" />
-              </span>
-            </CardContent>
-          </Card>
-        </button>
-
-        {/* 2) ADD PRODUCTS — snap / voice / manual / invoice inside */}
-        <Card className="h-full border-2 border-blue-200 bg-gradient-to-br from-blue-50 to-white">
-          <CardContent className="p-5 flex flex-col gap-3 h-full">
-            <div className="h-12 w-12 rounded-xl bg-blue-100 flex items-center justify-center">
-              <Plus className="h-6 w-6 text-blue-700" />
-            </div>
-            <div>
-              <p className="font-bold text-lg text-blue-950">Add Products</p>
-              <p className="text-sm text-muted-foreground">Pick how you want to add items</p>
-            </div>
-            <div className="grid grid-cols-2 gap-2 mt-auto">
-              <button onClick={openSnap} className="flex items-center justify-center gap-1.5 px-2 py-2.5 rounded-lg border-2 border-blue-200 bg-white hover:bg-blue-100 hover:border-blue-300 transition text-blue-900 text-xs font-semibold">
-                <span className="text-base">📸</span> Snap Label
-              </button>
-              <button onClick={openVoice} className="flex items-center justify-center gap-1.5 px-2 py-2.5 rounded-lg border-2 border-blue-200 bg-white hover:bg-blue-100 hover:border-blue-300 transition text-blue-900 text-xs font-semibold">
-                <span className="text-base">🎤</span> Voice
-              </button>
-              <button onClick={openAdd} className="flex items-center justify-center gap-1.5 px-2 py-2.5 rounded-lg border-2 border-blue-200 bg-white hover:bg-blue-100 hover:border-blue-300 transition text-blue-900 text-xs font-semibold">
-                <span className="text-base">✏️</span> Manual
-              </button>
-              <button onClick={openReceipt} className="flex items-center justify-center gap-1.5 px-2 py-2.5 rounded-lg border-2 border-blue-200 bg-white hover:bg-blue-100 hover:border-blue-300 transition text-blue-900 text-xs font-semibold">
-                <span className="text-base">🧾</span> Invoice
-              </button>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* 3) RECIPES */}
-        <button onClick={gotoRecipes} className="text-left group">
-          <Card className="h-full border-2 border-purple-200 bg-gradient-to-br from-purple-50 to-white hover:border-purple-400 hover:shadow-lg transition-all cursor-pointer">
-            <CardContent className="p-5 flex flex-col gap-3 h-full">
-              <div className="flex items-center justify-between">
-                <div className="h-12 w-12 rounded-xl bg-purple-100 flex items-center justify-center">
-                  <BookOpen className="h-6 w-6 text-purple-700" />
-                </div>
-                <span className="text-3xl font-bold text-purple-700">{recipesCount ?? '—'}</span>
-              </div>
-              <div>
-                <p className="font-bold text-lg text-purple-950">Recipes</p>
-                <p className="text-sm text-muted-foreground">Your saved recipes &amp; AI recipe ideas</p>
-              </div>
-              <span className="mt-auto text-sm font-semibold text-purple-700 flex items-center gap-1">
-                Open recipes <ArrowRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform" />
-              </span>
-            </CardContent>
-          </Card>
-        </button>
+      <div className="space-y-2">
+        <div className="grid grid-cols-3 gap-2">
+          <button onClick={() => goToInventory('All')} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-emerald-200 bg-emerald-50 hover:bg-emerald-100 hover:border-emerald-300 transition text-emerald-800">
+            <span className="text-2xl">📦</span>
+            <span className="text-xs font-semibold">Inventory</span>
+          </button>
+          <button
+            onClick={() => setAddOpen(v => !v)}
+            className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition text-blue-800 ${addOpen ? 'border-blue-400 bg-blue-100 shadow-inner' : 'border-blue-200 bg-blue-50 hover:bg-blue-100 hover:border-blue-300'}`}
+          >
+            <span className="text-2xl">➕</span>
+            <span className="text-xs font-semibold">Add Products</span>
+          </button>
+          <button onClick={gotoRecipes} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-300 transition text-purple-800">
+            <span className="text-2xl">📖</span>
+            <span className="text-xs font-semibold">Recipes</span>
+          </button>
+        </div>
+        {addOpen && (
+          <div className="grid grid-cols-4 gap-2">
+            <button onClick={openSnap} className="flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 border-blue-200 bg-white hover:bg-blue-50 hover:border-blue-300 transition text-blue-900">
+              <span className="text-xl">📸</span>
+              <span className="text-[11px] font-semibold">Snap Label</span>
+            </button>
+            <button onClick={openVoice} className="flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 border-blue-200 bg-white hover:bg-blue-50 hover:border-blue-300 transition text-blue-900">
+              <span className="text-xl">🎤</span>
+              <span className="text-[11px] font-semibold">Voice</span>
+            </button>
+            <button onClick={openAdd} className="flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 border-blue-200 bg-white hover:bg-blue-50 hover:border-blue-300 transition text-blue-900">
+              <span className="text-xl">✏️</span>
+              <span className="text-[11px] font-semibold">Manual</span>
+            </button>
+            <button onClick={openReceipt} className="flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 border-blue-200 bg-white hover:bg-blue-50 hover:border-blue-300 transition text-blue-900">
+              <span className="text-xl">🧾</span>
+              <span className="text-[11px] font-semibold">Invoice</span>
+            </button>
+          </div>
+        )}
       </div>
 
       <UseTodayPanel products={products} goToInventory={goToInventory} formatDate={(d) => new Date(d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} />

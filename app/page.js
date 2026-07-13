@@ -23,7 +23,7 @@ const fetch = apiFetch
 
 // ---- Refactored (June 2025): views/dialogs now live in /components/shelfwise/ ----
 import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText } from '@/components/shelfwise/shared'
-import { ReceiptScanDialog, ExpiryScanDialog, BarcodeScanDialog } from '@/components/shelfwise/scanners'
+import { ReceiptScanDialog, ExpiryScanDialog, BarcodeScanDialog, LensCameraView } from '@/components/shelfwise/scanners'
 import { PrintLogbookDialog } from '@/components/shelfwise/logbook-print'
 import { DashboardView, UseTodayPanel, RecentItemsToday, ExpiryAlertBanner, UrgentList } from '@/components/shelfwise/dashboard'
 import { RecipeResult, RecipesView, WebRecipeCard, ViewRecipeDialog, RecipeGenDialog } from '@/components/shelfwise/recipes'
@@ -55,68 +55,6 @@ function useTheme() {
 }
 
 function ThemeToggle() { return null }
-
-// ============================================================================
-// LocationSelect — dropdown for "Shelf / Location" fields (user request).
-// Options come from the kitchen's predefined storage units in Settings
-// (settings.haccpLocations: fridges, chillers, freezers, hot-holds) PLUS any
-// distinct location names already used on existing products. A final
-// "Other (type your own)" entry falls back to a free-text input, so nothing
-// is ever blocked. This standardises data entry and prevents shelf-name typos.
-// ============================================================================
-function LocationSelect({ value, onChange, locations, products, triggerClassName }) {
-  const [customMode, setCustomMode] = useState(false)
-  const opts = useMemo(() => {
-    const set = new Set()
-    ;(locations || []).forEach(l => { const n = (l?.name || '').trim(); if (n && l.active !== false) set.add(n) })
-    ;(products || []).forEach(p => { const n = (p?.location || '').trim(); if (n) set.add(n) })
-    return [...set].sort((a, b) => a.localeCompare(b))
-  }, [locations, products])
-
-  // No predefined locations at all → plain input (backwards compatible)
-  if (opts.length === 0) {
-    return (
-      <Input
-        value={value || ''}
-        onChange={e => onChange(e.target.value)}
-        placeholder="e.g. Shelf A1"
-        className={triggerClassName}
-      />
-    )
-  }
-
-  const isCustom = customMode || (!!value && !opts.includes(value))
-  const selectValue = isCustom ? '__custom__' : (value || '__none__')
-
-  return (
-    <div className="space-y-1.5">
-      <Select
-        value={selectValue}
-        onValueChange={v => {
-          if (v === '__custom__') { setCustomMode(true); onChange('') }
-          else if (v === '__none__') { setCustomMode(false); onChange('') }
-          else { setCustomMode(false); onChange(v) }
-        }}
-      >
-        <SelectTrigger className={triggerClassName}><SelectValue placeholder="Select location…" /></SelectTrigger>
-        <SelectContent>
-          <SelectItem value="__none__">— None —</SelectItem>
-          {opts.map(o => <SelectItem key={o} value={o}>📍 {o}</SelectItem>)}
-          <SelectItem value="__custom__">✏️ Other (type your own)</SelectItem>
-        </SelectContent>
-      </Select>
-      {isCustom && (
-        <Input
-          value={value || ''}
-          onChange={e => onChange(e.target.value)}
-          placeholder="Type location name…"
-          autoFocus
-          className={triggerClassName}
-        />
-      )}
-    </div>
-  )
-}
 
 function App() {
   const T = useT()  // language-aware translator — re-renders whole app when user changes language
@@ -1117,11 +1055,11 @@ function App() {
     reader.readAsDataURL(file)
   })
 
-  const onSnapFile = async (file) => {
-    if (!file) return
-    const dataUrl = await resizeImage(file)
+  // Shared AI label-scan logic — used by the live Lens camera (auto-capture)
+  // AND the gallery upload. On failure/no-detect the frozen frame is cleared
+  // so the live camera re-arms for another automatic attempt.
+  const runSnapScan = async (dataUrl) => {
     setSnapImage(dataUrl)
-    // Auto-run scan immediately
     setSnapLoading(true)
     try {
       const res = await fetch('/api/scan', {
@@ -1133,8 +1071,8 @@ function App() {
       if (!res.ok) throw new Error(data.error || 'Scan failed')
       const first = (data.items || [])[0]
       if (!first) {
-        toast.warning('No product detected. Try a clearer photo or fill manually.')
-        setSnapItem({ name: '', quantity: 1, unit: 'ea', expiryDate: '', category: '', storageType: 'Fridge', location: '', preparedBy: getPersonName() })
+        toast.warning('No product detected — hold the camera over the label and it will rescan.')
+        setSnapImage(null)  // re-arm live camera for another auto-capture
       } else {
         // Set sensible defaults if AI didn't return expiry
         if (!first.expiryDate) {
@@ -1145,10 +1083,17 @@ function App() {
         toast.success(`Detected: ${first.name}`)
       }
     } catch (e) {
-      toast.error(e.message || 'Scan failed')
+      toast.error(e.message || 'Scan failed — trying again is free!')
+      setSnapImage(null)  // re-arm live camera
     } finally {
       setSnapLoading(false)
     }
+  }
+
+  const onSnapFile = async (file) => {
+    if (!file) return
+    const dataUrl = await resizeImage(file)
+    await runSnapScan(dataUrl)
   }
 
   const saveSnapItem = async (force) => {
@@ -1797,12 +1742,7 @@ function App() {
             </div>
             <div>
               <Label htmlFor="loc">Shelf / Location</Label>
-              <LocationSelect
-                value={form.location}
-                onChange={v => setForm({ ...form, location: v })}
-                locations={settings.haccpLocations}
-                products={products}
-              />
+              <Input id="loc" value={form.location} onChange={e => setForm({ ...form, location: e.target.value })} placeholder="Type your own — e.g. Shelf A1" />
             </div>
             <div>
               <Label htmlFor="dr">📅 Date Received</Label>
@@ -2058,12 +1998,11 @@ function App() {
                           </div>
                           <div>
                             <Label className="text-xs">Location</Label>
-                            <LocationSelect
+                            <Input
                               value={it.location || ''}
-                              onChange={v => updateVoiceItem(idx, { location: v })}
-                              locations={settings.haccpLocations}
-                              products={products}
-                              triggerClassName="h-9"
+                              onChange={e => updateVoiceItem(idx, { location: e.target.value })}
+                              placeholder="Type your own"
+                              className="h-9"
                             />
                           </div>
                         </div>
@@ -2227,34 +2166,19 @@ function App() {
             <DialogTitle className="flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-emerald-600" /> Snap Product Label
             </DialogTitle>
-            <p className="text-sm text-muted-foreground">Take ONE photo of a product label, package, or sticker. AI fills the details for you.</p>
+            <p className="text-sm text-muted-foreground">Hold your camera over the label — it captures &amp; reads automatically, like Google Lens.</p>
           </DialogHeader>
 
           {!snapItem && (
-            <div className="space-y-3 py-2">
-              <label className="block">
-                <input type="file" accept="image/*" capture="environment" className="hidden"
-                  onChange={e => onSnapFile(e.target.files?.[0])} />
-                <div className="border-2 border-dashed border-emerald-300 rounded-xl p-8 hover:border-emerald-500 hover:bg-emerald-50/50 transition cursor-pointer text-center">
-                  {snapImage ? (
-                    <div className="space-y-3">
-                      <img src={snapImage} alt="preview" className="max-h-60 mx-auto rounded-lg shadow-sm" />
-                      {snapLoading && <div className="flex items-center justify-center gap-2 text-emerald-700 text-sm"><Loader2 className="h-4 w-4 animate-spin" /> AI reading label...</div>}
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <div className="h-16 w-16 mx-auto rounded-full bg-emerald-100 flex items-center justify-center">
-                        <ScanLine className="h-8 w-8 text-emerald-600" />
-                      </div>
-                      <div>
-                        <p className="text-base font-semibold">📸 Tap to take photo</p>
-                        <p className="text-xs text-muted-foreground mt-1">Or upload from gallery — works with handwritten labels too</p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </label>
-              <p className="text-[11px] text-center text-muted-foreground">💡 Tip: For multiple items at once, use the &quot;Scan Logbook&quot; option instead</p>
+            <div className="py-2">
+              <LensCameraView
+                active={snapOpen && !snapItem}
+                busy={snapLoading}
+                frozenImage={snapImage}
+                onCapture={runSnapScan}
+                onGalleryFile={onSnapFile}
+                onManual={() => setSnapItem({ name: '', quantity: 1, unit: 'ea', expiryDate: '', category: '', storageType: 'Fridge', location: '', preparedBy: getPersonName() })}
+              />
             </div>
           )}
 
@@ -2354,12 +2278,7 @@ function App() {
                 </div>
                 <div>
                   <Label className="text-xs">Location/Shelf</Label>
-                  <LocationSelect
-                    value={snapItem.location || ''}
-                    onChange={v => setSnapItem({ ...snapItem, location: v })}
-                    locations={settings.haccpLocations}
-                    products={products}
-                  />
+                  <Input value={snapItem.location || ''} onChange={e => setSnapItem({ ...snapItem, location: e.target.value })} placeholder="Type your own" />
                 </div>
               </div>
               <div>
