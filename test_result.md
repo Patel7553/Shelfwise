@@ -1473,6 +1473,10 @@ agent_communication:
         Verified via temporary mock-prop preview page at desktop (1920px) and mobile (390px iframe):
         single-column stacking works, no horizontal overflow. Preview pages deleted after verification.
         No backend changes were made in this session.
+        TESTED by frontend testing agent (chef-JWT localStorage injection, Supabase-less local env):
+        18/19 passed — mobile 390px: no overflow, single-column form, 3 cards stacked, old buttons gone,
+        all 4 Add-Products dialogs open; desktop: 3 cards side-by-side, All Items/Recipes stat cards removed,
+        2-column dialog layout. Only miss: one flaky Inventory-card click (same pattern passed for Recipes).
     - agent: "testing"
       message: |
         ✅ FRONTEND TESTING COMPLETE - Mobile Responsive Dashboard & Add Product Dialog (18/19 tests passed)
