@@ -77,6 +77,27 @@ export default function AdminPage() {
     }
   }
 
+  async function changeAlertEmail(k) {
+    const newEmail = window.prompt(
+      `Fix ALERT email for "${k.kitchenName || 'kitchen'}"\n(where expiry alerts & weekly digests are sent)\n\nCurrent: ${k.alertEmail || '(not set)'}\n\nType the CORRECT alert email:`,
+      k.alertEmail || ''
+    )
+    if (!newEmail || newEmail.trim() === (k.alertEmail || '')) return
+    setBusyId(k.id)
+    try {
+      const data = await apiJson('/api/admin/change-alert-email', {
+        method: 'POST',
+        body: JSON.stringify({ kitchenId: k.id, newEmail: newEmail.trim() }),
+      })
+      toast.success(`Alert email updated to ${data.newEmail}. Use "Test email" to verify delivery.`, { duration: 10000 })
+      load()
+    } catch (err) {
+      toast.error(err.message || 'Alert email change failed', { duration: 10000 })
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   async function testEmail() {
     const to = window.prompt('Send test email to:', me?.userEmail || '')
     if (!to) return
@@ -174,6 +195,9 @@ export default function AdminPage() {
                   <div className="flex gap-2 flex-wrap">
                     <Button size="sm" variant="outline" onClick={() => changeEmail(k)} disabled={busyId === k.id} title="Fix a wrong login email">
                       ✉️ Change email
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => changeAlertEmail(k)} disabled={busyId === k.id} title="Fix where expiry alerts & digests are sent">
+                      🔔 Alert email
                     </Button>
                     {k.status !== 'approved' && (
                       <Button size="sm" onClick={() => act('approve', k.id)} disabled={busyId === k.id} className="bg-emerald-600 hover:bg-emerald-700">

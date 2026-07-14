@@ -2312,6 +2312,23 @@ export async function POST(request, { params }) {
     }
 
     // -------- ADMIN endpoints --------
+    // ------- Admin: fix a kitchen's ALERT email (where expiry alerts/digests go) -------
+    if (path === 'admin/change-alert-email') {
+      const { ctx, error } = await requireAdmin(request)
+      if (error) return error
+      const body = await request.json()
+      const kitchenId = String(body.kitchenId || '')
+      const newEmail = String(body.newEmail || '').trim().toLowerCase()
+      if (!kitchenId) return json({ error: 'kitchenId required' }, 400)
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) return json({ error: 'Invalid email address' }, 400)
+      const { data: k, error: e1 } = await sb.from('kitchens').select('id, alert_email').eq('id', kitchenId).maybeSingle()
+      if (e1) return json({ error: e1.message }, 500)
+      if (!k) return json({ error: 'Kitchen not found' }, 404)
+      const { error: e2 } = await sb.from('kitchens').update({ alert_email: newEmail }).eq('id', kitchenId)
+      if (e2) return json({ error: e2.message }, 500)
+      return json({ ok: true, oldEmail: k.alert_email || '', newEmail })
+    }
+
     // ------- Admin: fix a user's login email (typo at signup) -------
     // Body: { kitchenId, newEmail }. Updates the Supabase Auth user AND
     // kitchens.owner_email so approval emails / digests go to the right place.
