@@ -101,13 +101,10 @@ export function InventoryView({ products, loading, statusFilter, setStatusFilter
               Delete {selectedIds.size} selected
             </Button>
           )}
-          <Button variant="outline" onClick={exportCSV}><Download className="h-4 w-4 mr-2" /> Export CSV</Button>
-          <Button variant="outline" onClick={openVoice} className="border-purple-300 bg-purple-50 text-purple-700 hover:bg-purple-100 font-semibold">🎤 Voice</Button>
-          {/* <Button variant="outline" onClick={openBarcode} className="border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 font-semibold"><ScanLine className="h-4 w-4 mr-2" /> 🔢 Barcode</Button> */}
-          <Button variant="outline" onClick={openSnap} className="border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-semibold"><Sparkles className="h-4 w-4 mr-2" /> 📸 Snap Label</Button>
+          {/* Export CSV / Voice / Snap Label / Add Product buttons removed —
+              all adding happens via the dashboard "Add Products" tile (user request) */}
           {printLogbook && <Button variant="outline" onClick={openScan} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"><ScanLine className="h-4 w-4 mr-2" /> Scan Logbook</Button>}
           {printLogbook && <Button variant="outline" onClick={printLogbook} className="border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100">📒 Print Logbook</Button>}
-          <Button onClick={openAdd} className="bg-emerald-600 hover:bg-emerald-700"><Plus className="h-4 w-4 mr-2" /> Add Product</Button>
         </div>
       </div>
 

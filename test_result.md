@@ -1597,6 +1597,18 @@ test_plan:
 agent_communication:
     - agent: "main"
       message: |
+        ROUND 6 (June 2025, same session) — UI removals + recipe save UX (frontend-only):
+        1. dashboard.jsx: hero "Add Product" button removed (Add Products tile covers it).
+        2. inventory.jsx: Export CSV / Voice / Snap Label / Add Product header buttons removed
+           (bulk-delete + owner Scan/Print Logbook buttons kept).
+        3. recipes.jsx WebRecipeCard: added always-visible "Save" button in card header
+           (bottom Save button kept too) — user wanted an obvious way to save liked web recipes.
+        4. recipes.jsx RecipeResult: "Done" button removed; "Save Recipe" is now the primary
+           purple button (saveCurrentRecipe already auto-closes the dialog on success).
+        Alert email question answered: editable in Settings (owner) — no code change needed.
+
+    - agent: "main"
+      message: |
         ROUND 5 (June 2025, same session) — Cleanups + Manual waste logging (frontend-only):
         1. settings-auth.jsx: removed 'all_items'+'recipes' from ALL_WIDGETS and 'stock'+'recipes'
            from ALL_MODULES (always-on now); page.js hasStock/hasRecipes forced true.

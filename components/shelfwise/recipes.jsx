@@ -295,12 +295,9 @@ export function RecipeResult({ result, setResult, onBack, onClose, goToInventory
 
       <div className="flex justify-between pt-2 border-t">
         <Button variant="ghost" onClick={onBack}><X className="h-4 w-4 mr-2" /> Scan another</Button>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={onSave} disabled={saving}>
-            {saving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving...</> : <><Check className="h-4 w-4 mr-2" /> Save Recipe</>}
-          </Button>
-          <Button onClick={onClose} className="bg-purple-600 hover:bg-purple-700">Done</Button>
-        </div>
+        <Button onClick={onSave} disabled={saving} className="bg-purple-600 hover:bg-purple-700">
+          {saving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving...</> : <><Check className="h-4 w-4 mr-2" /> Save Recipe</>}
+        </Button>
       </div>
     </div>
   )
@@ -570,13 +567,21 @@ export function WebRecipeCard({ recipe: r, onSaved }) {
     <div className="rounded-xl border-2 border-sky-100 bg-white overflow-hidden">
       {/* Header */}
       <div className="p-4 sm:p-5 bg-gradient-to-r from-sky-50 to-white border-b border-sky-100">
-        <div className="flex flex-wrap items-center gap-2 mb-1.5">
-          {r.style && <Badge className="bg-sky-600 text-white hover:bg-sky-600 text-[10px]">{r.style}</Badge>}
-          {r.source && (
-            <Badge variant="outline" className="border-sky-300 text-sky-700 bg-sky-50 text-[10px]">
-              <Globe className="h-3 w-3 mr-1" /> Inspired by {r.source}
-            </Badge>
-          )}
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2 mb-1.5">
+            {r.style && <Badge className="bg-sky-600 text-white hover:bg-sky-600 text-[10px]">{r.style}</Badge>}
+            {r.source && (
+              <Badge variant="outline" className="border-sky-300 text-sky-700 bg-sky-50 text-[10px]">
+                <Globe className="h-3 w-3 mr-1" /> Inspired by {r.source}
+              </Badge>
+            )}
+          </div>
+          {/* Always-visible save — like ❤️ a recipe you found (user request) */}
+          <Button size="sm" onClick={saveRecipe} disabled={saving || saved}
+            className={`shrink-0 ${saved ? 'bg-emerald-600 hover:bg-emerald-600 text-white' : 'bg-sky-600 hover:bg-sky-700 text-white'}`}>
+            {saving ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : saved ? <Check className="h-4 w-4 mr-1.5" /> : <BookOpen className="h-4 w-4 mr-1.5" />}
+            {saved ? 'Saved ✓' : 'Save'}
+          </Button>
         </div>
         <h3 className="text-lg font-bold leading-tight">{r.title}</h3>
         {r.description && <p className="text-sm text-muted-foreground mt-0.5">{r.description}</p>}

@@ -334,9 +334,7 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
                 <Sparkles className="h-4 w-4 mr-2" /> Sample data
               </Button>
             )}
-            <Button size="sm" onClick={openAdd} className="bg-white text-emerald-700 hover:bg-emerald-50 font-semibold shadow-md">
-              <Plus className="h-4 w-4 mr-2" /> Add Product
-            </Button>
+            {/* "Add Product" button removed — use the Add Products tile below (user request) */}
           </div>
         </div>
       </div>
