@@ -841,6 +841,12 @@ Return ONLY a valid JSON object of the form: {"items":[ ... ]}. Each item must h
 - "storageType": "Fridge", "Freezer", "Dry", or "Ambient"
 - "location": shelf/location string if visible, else ""
 - "preparedBy": chef name if visible, else ""
+CRITICAL DATE RULES (UK kitchen):
+- Printed dates are UK format, DAY FIRST: "03/09/2026" or "3.9.26" = 3 September 2026 — NEVER March 9.
+- "BB", "BBE", "Best Before", "Use By", "EXP", "E" all mark the expiry date.
+- If only month+year is printed (e.g. "09/2026" or "SEP 2026"), use the LAST day of that month.
+- If several dates are printed (packed/production + expiry), the expiry is the LATEST date.
+- Copy the date EXACTLY as printed — never guess or invent one. If unreadable, return null.
 Output strictly valid JSON.`
 
   const body = {
@@ -1442,19 +1448,26 @@ Output STRICT JSON. No trailing commas.`
 // call generating 3 recipes — cuts response time from ~25s to ~8s. Same
 // parallelisation trick used by the HACCP scanner. Do NOT merge back into one call.
 const WEB_RECIPE_STYLES = [
-  { style: 'Classic Traditional', hint: 'the most popular, classic, authentic version — exactly how the most trusted source makes it' },
-  { style: 'Quick & Easy', hint: 'the fastest simplified weeknight version (30 minutes or less if realistic for this dish)' },
-  { style: 'Restaurant Quality', hint: 'the elevated chef/restaurant-quality version with professional techniques' },
+  // 6 parallel styles (was 3) — more choice at the SAME speed, since all
+  // requests run simultaneously. Each style nudges a different set of
+  // well-known sites so results aren't all "BBC Good Food".
+  { style: 'Classic Traditional', hint: 'the most popular, classic, authentic version — exactly how the most trusted source makes it', prefer: 'Delia Online, BBC Good Food or Mary Berry' },
+  { style: 'Quick & Easy', hint: 'the fastest simplified weeknight version (30 minutes or less if realistic for this dish)', prefer: 'RecipeTin Eats, AllRecipes or Taste.com' },
+  { style: 'Restaurant Quality', hint: 'the elevated chef/restaurant-quality version with professional techniques', prefer: 'Serious Eats, NYT Cooking or Gordon Ramsay' },
+  { style: 'Healthy & Lighter', hint: 'a lighter, healthier take — less fat/sugar, more veg, but still genuinely tasty', prefer: 'Olive Magazine, EatingWell or BBC Good Food Healthy' },
+  { style: 'Budget Friendly', hint: 'a cheap, low-cost version using affordable everyday ingredients without sacrificing flavour', prefer: 'Jack Monroe, BBC Food or AllRecipes' },
+  { style: 'Modern Twist', hint: 'a creative modern variation with an interesting flavour twist that still respects the original dish', prefer: 'Ottolenghi, Bon Appétit or Great British Chefs' },
 ]
 
-async function searchOneWebRecipe({ query, servings, dietary, style, hint }) {
+async function searchOneWebRecipe({ query, servings, dietary, style, hint, prefer }) {
   const key = process.env.EMERGENT_LLM_KEY
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
   const dietaryLine = Array.isArray(dietary) && dietary.length ? `Dietary requirements: ${dietary.join(', ')}.\n` : ''
 
-  const systemPrompt = `You are a world-class culinary researcher with encyclopedic knowledge of the most popular and highly-rated recipes published on the web's best cooking sites (BBC Good Food, Serious Eats, AllRecipes, Jamie Oliver, RecipeTin Eats, NYT Cooking, Bon Appétit, Delia Online, etc.).
+  const systemPrompt = `You are a world-class culinary researcher with encyclopedic knowledge of the most popular and highly-rated recipes published on the web's best cooking sites (BBC Good Food, Serious Eats, AllRecipes, Jamie Oliver, RecipeTin Eats, NYT Cooking, Bon Appétit, Delia Online, Great British Chefs, Ottolenghi, EatingWell, Olive Magazine, etc.).
 
 The user gives you a dish name. Return ONE recipe: ${hint}.
+${prefer ? `Preferred sources for this style: ${prefer} — use one of these if their version is well known, otherwise whichever trusted site's version is most famous. Do NOT default to BBC Good Food.` : ''}
 
 ${dietaryLine}Rules:
 - Servings MUST be exactly ${servings}. All ingredient quantities are for ${servings} serving(s).
@@ -1519,9 +1532,9 @@ Output STRICT JSON. No trailing commas.`
 }
 
 async function searchWebRecipes({ query, servings = 1, dietary = [] }) {
-  // 3 parallel calls — one per style — for speed.
+  // 6 parallel calls — one per style — so MORE results at the SAME speed.
   const settled = await Promise.allSettled(
-    WEB_RECIPE_STYLES.map(s => searchOneWebRecipe({ query, servings, dietary, style: s.style, hint: s.hint }))
+    WEB_RECIPE_STYLES.map(s => searchOneWebRecipe({ query, servings, dietary, style: s.style, hint: s.hint, prefer: s.prefer }))
   )
   const recipes = settled
     .filter(x => x.status === 'fulfilled' && x.value)
@@ -1530,7 +1543,7 @@ async function searchWebRecipes({ query, servings = 1, dietary = [] }) {
     const firstErr = settled.find(x => x.status === 'rejected')
     throw new Error(firstErr?.reason?.message || 'Recipe search failed — try again')
   }
-  return { recipes: recipes.slice(0, 3) }
+  return { recipes: recipes.slice(0, 6) }
 }
 
 

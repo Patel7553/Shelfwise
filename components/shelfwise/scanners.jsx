@@ -342,7 +342,7 @@ export function ReceiptScanDialog({ open, onClose, onImport, settings }) {
                       </div>
                       <div>
                         <Label className="text-xs">Storage</Label>
-                        <select value={r.storageType} onChange={e => updateRow(i, { storageType: e.target.value })} className="h-10 text-sm border rounded-md w-full bg-white px-2">
+                        <select value={r.storageType} onChange={e => updateRow(i, { storageType: e.target.value, expiryDate: suggestExpiryDate(r.category || '', e.target.value) })} className="h-10 text-sm border rounded-md w-full bg-white px-2">
                           {['Fridge', 'Freezer', 'Dry', 'Ambient'].map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
                       </div>

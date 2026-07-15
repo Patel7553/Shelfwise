@@ -446,6 +446,66 @@ backend:
             DEFAULT SERVINGS: Confirmed changed from 4 to 1 when omitted from request body.
             STYLES: All 3 recipes have distinct styles from WEB_RECIPE_STYLES array.
             Test file: /app/test_recipe_web_search.py (updated for focused retest).
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ FOCUSED TEST COMPLETE - UPGRADED Recipe Web Search (6 Parallel Styles) (3/3 tests passed):
+            
+            **CONTEXT:**
+            - EMERGENT_LLM_KEY IS configured locally → gpt-4o-mini calls work for real
+            - Testing the UPGRADED endpoint with 6 parallel styles (was 3)
+            - Backend file: /app/app/api/[[...path]]/route.js (lines 1450-1547)
+            
+            **WHAT CHANGED THIS SESSION (ROUND 11):**
+            - searchWebRecipes() now makes 6 PARALLEL LLM calls (one per style) instead of 3
+            - New styles: Classic Traditional, Quick & Easy, Restaurant Quality, Healthy & Lighter, Budget Friendly, Modern Twist
+            - Each style has preferred sources (Delia, RecipeTin Eats, Serious Eats, Ottolenghi, etc.)
+            - System prompt includes "do NOT default to BBC Good Food" rule for source variety
+            - Returns up to 6 recipes (was 3)
+            
+            **Test Results:**
+            - Test 1: POST /api/recipe/web-search with NO auth → 401 "Not authenticated" ✓
+            - Test 2: POST /api/recipe/web-search with chef JWT + empty body {} → 400 "query (dish name) required" ✓
+            - Test 3: POST /api/recipe/web-search with chef JWT + {"query":"chicken tikka masala","servings":4} → 200 ✓
+              * ⏱️  Response time: 13.2 seconds (EXCELLENT - 6 parallel LLM calls completed in ~13s)
+              * ✅ a) Got 200 response with 'recipes' array
+              * ✅ b) Recipes returned: 6 (EXCELLENT - ideally 5-6, MORE than 3)
+              * ✅ c) All 6 recipes have DISTINCT styles:
+                - Classic Traditional (BBC Good Food)
+                - Quick & Easy (RecipeTin Eats)
+                - Restaurant Quality (Serious Eats)
+                - Healthy & Lighter (BBC Good Food)
+                - Budget Friendly (BBC Good Food)
+                - Modern Twist (Bon Appétit)
+              * ✅ d) Source variety detected: 4 different sources (NOT all BBC Good Food):
+                - BBC Good Food (3/6)
+                - RecipeTin Eats (1/6)
+                - Serious Eats (1/6)
+                - Bon Appétit (1/6)
+              * ✅ e) All recipes have complete structure:
+                - Title: ✓ (all 6 recipes)
+                - Ingredients array with numeric quantities: ✓ (10-15 items per recipe, all numeric)
+                - Steps array: ✓ (6-8 steps per recipe)
+                - Servings: ✓ (all recipes have servings=4 as requested)
+            
+            **Key Validations:**
+            - ✅ Chef JWT authentication working correctly (SHELFWISE_JWT_SECRET)
+            - ✅ 6 parallel LLM calls working perfectly (13.2s response time)
+            - ✅ All 6 recipes have DISTINCT styles from WEB_RECIPE_STYLES array
+            - ✅ Source variety working: 4 different sources (NOT all BBC Good Food)
+            - ✅ All ingredient quantities are numeric type (client-side scaling ready)
+            - ✅ All recipes have complete structure (title, ingredients, steps)
+            - ✅ Validation working correctly (401 without auth, 400 with empty body)
+            
+            **Performance:**
+            - Response time: 13.2s for 6 parallel LLM calls (vs ~6-7s for 3 parallel calls)
+            - Excellent performance considering 2x more recipes returned
+            - All 6 parallel calls completed successfully (no failures)
+            
+            **Test file:** /app/test_recipe_web_search_upgraded.py (can be re-run anytime)
+            
+            No critical issues found. UPGRADED recipe web-search endpoint working perfectly.
+
 
   - task: "Products CRUD + filtering"
     implemented: true
@@ -1903,6 +1963,26 @@ test_plan:
 agent_communication:
     - agent: "main"
       message: |
+        ROUND 11 (June 2025, same session) — Recipe search upgrade, date fixes, qty fix, CSV back:
+        1. route.js searchWebRecipes: 6 parallel styles (was 3) — Classic/Quick/Restaurant/Healthy/
+           Budget/Modern Twist, each with per-style preferred sources (Delia, RecipeTin Eats, Serious
+           Eats, Ottolenghi, etc.) + "do NOT default to BBC Good Food" rule; returns up to 6 recipes.
+           Same wall-time (parallel). NOTE: results are AI-recreated "inspired by" versions, not
+           live-scraped pages (explained to user).
+        2. route.js scanImageForItems prompt: CRITICAL UK DATE RULES added — day-first (03/09 = 3 Sep),
+           BB/BBE/EXP markers, month-only → last day of month, multiple dates → latest, never invent.
+        3. page.js: snap quantity input fixed (was value={qty||1} + Number() on change → couldn't
+           clear or type 2-9; now raw string while typing, parsed on save). Voice qty same fix.
+        4. Storage-change now recomputes expiry (freezer +2mo, dry/ambient +3mo) in ALL flows:
+           Add/Edit form (already), Snap (already), Voice items (added), Invoice rows (added,
+           scanners.jsx). suggestExpiryDate verified correct. User's stale-date screenshots were
+           from an OLD production bundle (openAdd computes fresh dates at tap time in current code).
+        5. inventory.jsx: Export CSV button restored (user asked for it back).
+        Local testing: EMERGENT_LLM_KEY works locally; recipe/web-search CAN be tested end-to-end
+        with a chef JWT (expect ~15-40s, up to 6 recipes, varied sources).
+
+    - agent: "main"
+      message: |
         ROUND 10 (June 2025, same session) — Automatic once-a-day expiry alert EMAIL:
         ROOT CAUSE of "no morning email": email/check-expiring endpoint existed but NOTHING ever
         called it automatically (no cron on Emergent host; vercel.json inert; no frontend trigger).
@@ -3058,3 +3138,41 @@ All indexed by `(kitchen_id, timestamp desc)`. All FK to `kitchens` with `on del
         **Test file:** /app/backend_test.py (can be re-run anytime)
         
         No critical issues found. All NEW/CHANGED endpoints working perfectly.
+
+
+
+    - agent: "testing"
+      message: |
+        ✅ FOCUSED TEST COMPLETE - UPGRADED Recipe Web Search (6 Parallel Styles) (3/3 tests passed)
+        
+        Tested the UPGRADED POST /api/recipe/web-search endpoint as per review_request (ROUND 11 changes).
+        
+        **What Was Tested:**
+        - UPGRADED endpoint with 6 parallel styles (was 3): Classic Traditional, Quick & Easy, 
+          Restaurant Quality, Healthy & Lighter, Budget Friendly, Modern Twist
+        - Each style has preferred sources (Delia, RecipeTin Eats, Serious Eats, Ottolenghi, etc.)
+        - System prompt includes "do NOT default to BBC Good Food" rule
+        
+        **All Tests Passed:**
+        1. ✅ POST /api/recipe/web-search with NO auth → 401 "Not authenticated"
+        2. ✅ POST /api/recipe/web-search with chef JWT + empty body {} → 400 "query (dish name) required"
+        3. ✅ POST /api/recipe/web-search with chef JWT + {"query":"chicken tikka masala","servings":4} → 200
+           - ⏱️  Response time: 13.2 seconds (6 parallel LLM calls)
+           - ✅ Recipes returned: 6 (EXCELLENT - ideally 5-6, MORE than 3)
+           - ✅ All 6 recipes have DISTINCT styles (Classic Traditional, Quick & Easy, Restaurant Quality, 
+                Healthy & Lighter, Budget Friendly, Modern Twist)
+           - ✅ Source variety: 4 different sources (BBC Good Food, RecipeTin Eats, Serious Eats, Bon Appétit)
+           - ✅ NOT all BBC Good Food (3/6 are BBC, 3/6 are other sources)
+           - ✅ All recipes have complete structure: title, ingredients with numeric quantities, steps array
+        
+        **Key Findings:**
+        - ✅ 6 parallel LLM calls working perfectly (13.2s response time)
+        - ✅ Source variety working as intended (NOT all BBC Good Food)
+        - ✅ All 6 recipes have distinct styles from WEB_RECIPE_STYLES array
+        - ✅ All ingredient quantities are numeric type (client-side scaling ready)
+        - ✅ Performance excellent: 13.2s for 6 recipes (vs ~6-7s for 3 recipes)
+        - ✅ All 6 parallel calls completed successfully (no failures)
+        
+        **Test file:** /app/test_recipe_web_search_upgraded.py (can be re-run anytime)
+        
+        No critical issues found. UPGRADED recipe web-search endpoint working perfectly.

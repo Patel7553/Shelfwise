@@ -1277,7 +1277,7 @@ function App() {
       const res = await fetch('/api/products', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...snapItem, preparedBy: snapItem.preparedBy || getPersonName() })
+        body: JSON.stringify({ ...snapItem, quantity: Number(snapItem.quantity) || 1, preparedBy: snapItem.preparedBy || getPersonName() })
       })
       if (!res.ok) {
         let msg = `Save failed (${res.status})`
@@ -2130,9 +2130,10 @@ function App() {
                             <Input
                               type="number"
                               step="0.1"
-                              value={it.quantity}
-                              onChange={e => updateVoiceItem(idx, { quantity: Number(e.target.value) || 0 })}
+                              value={it.quantity ?? ''}
+                              onChange={e => updateVoiceItem(idx, { quantity: e.target.value })}
                               className="h-9"
+                              placeholder="1"
                             />
                           </div>
                           <div>
@@ -2159,7 +2160,7 @@ function App() {
                         <div className="grid grid-cols-2 gap-2">
                           <div>
                             <Label className="text-xs">Storage</Label>
-                            <Select value={it.storageType || 'Fridge'} onValueChange={v => updateVoiceItem(idx, { storageType: v })}>
+                            <Select value={it.storageType || 'Fridge'} onValueChange={v => updateVoiceItem(idx, { storageType: v, expiryDate: suggestExpiryDate(it.category || '', v) })}>
                               <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                               <SelectContent>
                                 {['Fridge','Freezer','Dry','Ambient'].map(s => (
@@ -2379,7 +2380,7 @@ function App() {
               <div className="grid grid-cols-1 gap-2">
                 <div>
                   <Label className="text-xs">Qty</Label>
-                  <Input type="number" min="0" step="0.1" value={snapItem.quantity || 1} onChange={e => setSnapItem({ ...snapItem, quantity: Number(e.target.value) })} />
+                  <Input type="number" min="0" step="0.1" value={snapItem.quantity ?? ''} onChange={e => setSnapItem({ ...snapItem, quantity: e.target.value })} placeholder="1" />
                 </div>
                 <div>
                   <Label className="text-xs">Unit</Label>
