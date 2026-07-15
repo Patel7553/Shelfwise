@@ -463,6 +463,63 @@ async function runExpiryPushForKitchen(sb, kid) {
   return { sent: true, expired: expired.length, expiring: expiring.length }
 }
 
+// ============================================================================
+// Daily expiry ALERT EMAIL (user request: "mail should come once a day")
+// Sends the owner ONE email per calendar day listing expired + soon-expiring
+// items. Triggered by the same heartbeat/cron as the push alerts, but
+// throttled to once/day via kitchens.last_alert_email_at.
+// SAFETY: if the migration-21 column is missing we DO NOT send (emails can't
+// be deduped like push notifications — better silent than spam).
+// ============================================================================
+async function runDailyExpiryEmailForKitchen(sb, kid) {
+  // --- once-per-day throttle (REQUIRED — refuse to send without it) ---
+  let k
+  try {
+    const { data, error } = await sb.from('kitchens')
+      .select('id, owner_email, alert_email, kitchen_name, tagline, last_alert_email_at')
+      .eq('id', kid).maybeSingle()
+    if (error) return { skipped: 'migration-21-needed', detail: error.message }
+    k = data
+  } catch (e) { return { skipped: 'migration-21-needed', detail: e.message } }
+  if (!k) return { skipped: 'no-kitchen' }
+  const to = k.owner_email || k.alert_email
+  if (!to) return { skipped: 'no-email' }
+  const today = new Date().toISOString().slice(0, 10)
+  if (k.last_alert_email_at && String(k.last_alert_email_at).slice(0, 10) === today) {
+    return { skipped: 'already-today' }
+  }
+
+  // --- expired + expiring within 6 days (same window as the manual test email) ---
+  const in6 = new Date(Date.now() + 6 * 86400000).toISOString().slice(0, 10)
+  const { data: expRows } = await sb.from('products').select('name,quantity,unit,expiry_date')
+    .eq('kitchen_id', kid).not('expiry_date', 'is', null).lt('expiry_date', today).limit(200)
+  const { data: soonRows } = await sb.from('products').select('name,quantity,unit,expiry_date')
+    .eq('kitchen_id', kid).not('expiry_date', 'is', null).gte('expiry_date', today).lte('expiry_date', in6).limit(200)
+  const expired = expRows || []
+  const soon = soonRows || []
+  if (!expired.length && !soon.length) return { skipped: 'nothing-expiring' }
+
+  const row = (p, color) => `<tr><td style="padding:8px;border-bottom:1px solid #eee">${p.name}</td><td style="padding:8px;border-bottom:1px solid #eee">${p.quantity} ${p.unit || ''}</td><td style="padding:8px;border-bottom:1px solid #eee;color:${color}"><b>${p.expiry_date}</b></td></tr>`
+  const html = `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#f9fafb;padding:24px;color:#111">
+    <div style="max-width:600px;margin:auto;background:white;border-radius:16px;padding:32px;box-shadow:0 2px 8px rgba(0,0,0,0.05)">
+      <h1 style="font-size:22px;margin:0;color:#064e3b">ShelfWise${k.kitchen_name ? ' · ' + k.kitchen_name : ''}</h1>
+      <p style="color:#6b7280;font-size:13px;margin:0 0 24px">${k.tagline || 'From shelf to plate — never lose track.'}</p>
+      ${expired.length ? `<h2 style="font-size:15px;color:#b91c1c;margin:0 0 8px">🚨 Expired (${expired.length})</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:20px">${expired.map(p => row(p, '#b91c1c')).join('')}</table>` : ''}
+      ${soon.length ? `<h2 style="font-size:15px;color:#b45309;margin:0 0 8px">⏳ Expiring within 6 days (${soon.length})</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">${soon.map(p => row(p, '#b45309')).join('')}</table>` : ''}
+      <p style="color:#9ca3af;font-size:11px;margin-top:24px">This is your once-a-day food alert. Push notifications repeat every 2.5h until items are dealt with.</p>
+    </div></body></html>`
+
+  const parts = []
+  if (expired.length) parts.push(`${expired.length} expired`)
+  if (soon.length) parts.push(`${soon.length} expiring soon`)
+  const r = await resendSend({ to, subject: `⚠️ ShelfWise food alert — ${parts.join(', ')}`, html })
+  if (!r.ok) return { skipped: 'email-failed', detail: r.error }
+  try { await sb.from('kitchens').update({ last_alert_email_at: new Date().toISOString() }).eq('id', kid) } catch {}
+  return { sent: true, expired: expired.length, soon: soon.length }
+}
+
 async function runHaccpReminderForKitchen(sb, kid) {
   const today = new Date().toISOString().slice(0, 10)
   // --- throttle: max one HACCP nag per day per kitchen ---
@@ -1740,6 +1797,17 @@ export async function GET(request, { params }) {
           results.push({ kitchen: kid, ok: false, error: e.message })
         }
       }
+      // 3) Daily expiry ALERT EMAIL — for ALL approved kitchens (even without
+      //    push subscriptions), max once per day per kitchen.
+      const { data: allK } = await sb.from('kitchens').select('id').eq('status', 'approved')
+      for (const krow of (allK || [])) {
+        try {
+          const email = await runDailyExpiryEmailForKitchen(sb, krow.id)
+          results.push({ kitchen: krow.id, ok: true, email })
+        } catch (e) {
+          results.push({ kitchen: krow.id, ok: false, emailError: e.message })
+        }
+      }
       return json({ ok: true, kitchens: kitchenIds.length, results })
     }
 
@@ -2773,7 +2841,8 @@ Output strictly valid JSON with no other text.`
         try {
           const exp = await runExpiryPushForKitchen(sb, kid)
           const haccp = await runHaccpReminderForKitchen(sb, kid)
-          return json({ ok: true, expiry: exp, haccp })
+          const email = await runDailyExpiryEmailForKitchen(sb, kid)
+          return json({ ok: true, expiry: exp, haccp, email })
         } catch (e) {
           return json({ ok: false, error: e.message })
         }
