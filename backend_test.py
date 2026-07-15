@@ -1,140 +1,408 @@
 #!/usr/bin/env python3
 """
-Backend test for POST /api/admin/change-email endpoint
-Testing ONLY auth rejection and routing (Supabase not configured locally)
+Backend API Testing for ShelfWise Next.js App
+Tests NEW/CHANGED endpoints as per review_request:
+- DELETE /api/shelves (NEW)
+- POST /api/push/heartbeat (NEW)
+- GET /api/cron/push-alerts (REWRITTEN - regression)
+- Regressions: POST /api/shelves (add), GET /api/auth/me
+
+CRITICAL: Supabase env vars NOT configured locally.
+Requests that pass validation/auth and reach DB will return 500 with supabase error - EXPECTED.
 """
 
 import requests
 import json
+import sys
+import subprocess
+import os
 
-# Read NEXT_PUBLIC_BASE_URL from .env
-BASE_URL = None
-with open('/app/.env', 'r') as f:
-    for line in f:
-        if line.startswith('NEXT_PUBLIC_BASE_URL='):
-            BASE_URL = line.strip().split('=', 1)[1]
-            break
+# Get base URL from .env
+BASE_URL = "https://kitchen-stock-39.preview.emergentagent.com/api"
 
-if not BASE_URL:
-    print("❌ NEXT_PUBLIC_BASE_URL not found in /app/.env")
-    exit(1)
+def generate_chef_jwt():
+    """Generate a chef JWT token using the SHELFWISE_JWT_SECRET from .env"""
+    cmd = """cd /app && export $(grep SHELFWISE_JWT_SECRET .env | xargs) && node -e "console.log(require('/app/node_modules/jsonwebtoken').sign({kitchen_id:'test-kitchen',role:'chef'},process.env.SHELFWISE_JWT_SECRET,{expiresIn:'1h'}))" """
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"❌ Failed to generate JWT: {result.stderr}")
+        sys.exit(1)
+    token = result.stdout.strip()
+    print(f"✅ Generated chef JWT token: {token[:20]}...")
+    return token
 
-API_BASE = f"{BASE_URL}/api"
-print(f"Testing against: {API_BASE}")
-
-# Chef JWT token (generated via review_request instructions)
-CHEF_JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJraXRjaGVuX2lkIjoidGVzdC1raXRjaGVuIiwicm9sZSI6ImNoZWYiLCJpYXQiOjE3ODM5NTU0MTYsImV4cCI6MTc4Mzk1OTAxNn0.0kw8324cIqQoU7JQTbzSnDlMKpla6O_OSweJ7AHmC60"
-
-print("\n" + "="*80)
-print("TEST 1: POST /api/admin/change-email with NO auth")
-print("="*80)
-try:
-    response = requests.post(
-        f"{API_BASE}/admin/change-email",
-        json={"kitchenId": "x", "newEmail": "a@b.com"},
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:200]}")
+def test_delete_shelves_no_auth():
+    """Test A1: DELETE /api/shelves with no auth → 401"""
+    print("\n" + "="*80)
+    print("TEST A1: DELETE /api/shelves with NO auth")
+    print("="*80)
     
-    if response.status_code in [401, 403]:
-        print("✅ Test 1 PASSED: Correctly rejected with 401/403 (no auth)")
-    else:
-        print(f"❌ Test 1 FAILED: Expected 401/403, got {response.status_code}")
-except Exception as e:
-    print(f"❌ Test 1 FAILED with exception: {e}")
+    try:
+        response = requests.delete(
+            f"{BASE_URL}/shelves",
+            json={"name": "Shelf 2"},
+            timeout=10
+        )
+        
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.text[:200]}")
+        
+        if response.status_code == 401:
+            print("✅ PASS: Correctly returned 401 (no auth)")
+            return True
+        else:
+            print(f"❌ FAIL: Expected 401, got {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ FAIL: Exception occurred: {e}")
+        return False
 
-print("\n" + "="*80)
-print("TEST 2: POST /api/admin/change-email with chef JWT (non-admin)")
-print("="*80)
-try:
-    response = requests.post(
-        f"{API_BASE}/admin/change-email",
-        json={"kitchenId": "x", "newEmail": "a@b.com"},
-        headers={"Authorization": f"Bearer {CHEF_JWT}"},
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:200]}")
+def test_delete_shelves_empty_body(chef_token):
+    """Test A2: DELETE /api/shelves with chef JWT, empty body → 400 'Shelf name required'"""
+    print("\n" + "="*80)
+    print("TEST A2: DELETE /api/shelves with chef JWT, empty body")
+    print("="*80)
     
-    if response.status_code in [401, 403]:
-        print("✅ Test 2 PASSED: Chef JWT correctly rejected with 401/403 (non-admin)")
-        # Check if response contains "Admin only" message
-        if "Admin only" in response.text or "admin" in response.text.lower():
-            print("   ✓ Response correctly indicates admin-only access")
-    else:
-        print(f"❌ Test 2 FAILED: Expected 401/403, got {response.status_code}")
-        print(f"   ⚠️  CRITICAL: Chef should NOT be able to access admin endpoints!")
-except Exception as e:
-    print(f"❌ Test 2 FAILED with exception: {e}")
+    try:
+        response = requests.delete(
+            f"{BASE_URL}/shelves",
+            headers={"Authorization": f"Bearer {chef_token}"},
+            json={},
+            timeout=10
+        )
+        
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.text[:200]}")
+        
+        if response.status_code == 400:
+            data = response.json()
+            if "Shelf name required" in data.get("error", ""):
+                print("✅ PASS: Correctly returned 400 'Shelf name required'")
+                return True
+            else:
+                print(f"❌ FAIL: Expected 'Shelf name required', got: {data.get('error')}")
+                return False
+        else:
+            print(f"❌ FAIL: Expected 400, got {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ FAIL: Exception occurred: {e}")
+        return False
 
-print("\n" + "="*80)
-print("TEST 3a: Routing sanity - POST /api/admin/approve with no auth")
-print("="*80)
-try:
-    response = requests.post(
-        f"{API_BASE}/admin/approve",
-        json={"kitchenId": "x"},
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:200]}")
+def test_delete_shelves_with_name(chef_token):
+    """Test A3: DELETE /api/shelves with chef JWT, body {"name":"Shelf 2"} → 500 supabase error (handler reached DB)"""
+    print("\n" + "="*80)
+    print("TEST A3: DELETE /api/shelves with chef JWT, body {\"name\":\"Shelf 2\"}")
+    print("="*80)
     
-    if response.status_code in [401, 403]:
-        print("✅ Test 3a PASSED: admin/approve correctly requires auth (no collision)")
-    else:
-        print(f"⚠️  Test 3a: Expected 401/403, got {response.status_code} (may be OK if endpoint validates differently)")
-except Exception as e:
-    print(f"❌ Test 3a FAILED with exception: {e}")
+    try:
+        response = requests.delete(
+            f"{BASE_URL}/shelves",
+            headers={"Authorization": f"Bearer {chef_token}"},
+            json={"name": "Shelf 2"},
+            timeout=10
+        )
+        
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.text[:500]}")
+        
+        # Expected: 500 with supabase/fetch error (NOT 404)
+        if response.status_code == 500:
+            response_text = response.text.lower()
+            if "supabase" in response_text or "fetch" in response_text or "database" in response_text:
+                print("✅ PASS: Correctly returned 500 with supabase/DB error (handler reached DB)")
+                return True
+            else:
+                print(f"⚠️  WARNING: Got 500 but error message doesn't mention supabase/fetch/database")
+                print(f"    This still counts as correct wiring (reached DB layer)")
+                return True
+        elif response.status_code == 404:
+            print(f"❌ FAIL: Got 404 - endpoint not found or not wired correctly")
+            return False
+        else:
+            print(f"⚠️  Got {response.status_code} - checking if it's a valid response...")
+            # If we get 200, it means Supabase is actually configured (unexpected but not a bug)
+            if response.status_code == 200:
+                print("⚠️  Got 200 - Supabase might be configured (unexpected but not a bug)")
+                return True
+            return False
+    except Exception as e:
+        print(f"❌ FAIL: Exception occurred: {e}")
+        return False
 
-print("\n" + "="*80)
-print("TEST 3b: Routing sanity - POST /api/shelves with no auth")
-print("="*80)
-try:
-    response = requests.post(
-        f"{API_BASE}/shelves",
-        json={"name": "Test Shelf"},
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:200]}")
+def test_push_heartbeat_no_auth():
+    """Test B4: POST /api/push/heartbeat with no auth → 401"""
+    print("\n" + "="*80)
+    print("TEST B4: POST /api/push/heartbeat with NO auth")
+    print("="*80)
     
-    if response.status_code == 401:
-        print("✅ Test 3b PASSED: shelves endpoint unaffected (still requires auth)")
-    else:
-        print(f"⚠️  Test 3b: Expected 401, got {response.status_code} (may be OK if endpoint validates differently)")
-except Exception as e:
-    print(f"❌ Test 3b FAILED with exception: {e}")
+    try:
+        response = requests.post(
+            f"{BASE_URL}/push/heartbeat",
+            json={},
+            timeout=10
+        )
+        
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.text[:200]}")
+        
+        if response.status_code == 401:
+            print("✅ PASS: Correctly returned 401 (no auth)")
+            return True
+        else:
+            print(f"❌ FAIL: Expected 401, got {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ FAIL: Exception occurred: {e}")
+        return False
 
-print("\n" + "="*80)
-print("TEST 4: Confirm POST /api/admin/change-email does NOT return 404")
-print("="*80)
-try:
-    # Test with no auth - should get 401/403, NOT 404
-    response = requests.post(
-        f"{API_BASE}/admin/change-email",
-        json={"kitchenId": "x", "newEmail": "a@b.com"},
-        timeout=10
-    )
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.text[:200]}")
+def test_push_heartbeat_with_auth(chef_token):
+    """Test B5: POST /api/push/heartbeat with chef JWT → should NOT 404. 
+    Expect 200 with {ok:false, error:...} OR supabase-related failure in JSON.
+    Must NOT be ReferenceError/TypeError crash."""
+    print("\n" + "="*80)
+    print("TEST B5: POST /api/push/heartbeat with chef JWT")
+    print("="*80)
     
-    if response.status_code == 404:
-        print("❌ Test 4 FAILED: Route returned 404 - endpoint NOT registered!")
-    elif response.status_code in [401, 403]:
-        print("✅ Test 4 PASSED: Route is registered (got 401/403, not 404)")
-    else:
-        print(f"✅ Test 4 PASSED: Route is registered (got {response.status_code}, not 404)")
-except Exception as e:
-    print(f"❌ Test 4 FAILED with exception: {e}")
+    try:
+        response = requests.post(
+            f"{BASE_URL}/push/heartbeat",
+            headers={"Authorization": f"Bearer {chef_token}"},
+            json={},
+            timeout=30  # Might take longer due to DB calls
+        )
+        
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.text[:500]}")
+        
+        # Must NOT be 404
+        if response.status_code == 404:
+            print(f"❌ FAIL: Got 404 - endpoint not found or not wired correctly")
+            return False
+        
+        # Check for JS crashes (ReferenceError/TypeError)
+        response_text = response.text.lower()
+        if "referenceerror" in response_text or "typeerror" in response_text:
+            print(f"❌ FAIL: Got JS crash (ReferenceError/TypeError)")
+            return False
+        
+        # Expected: 200 with {ok:false, error:...} OR 500 with supabase error
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                if "ok" in data:
+                    if data["ok"] is False and "error" in data:
+                        print(f"✅ PASS: Got 200 with {{ok:false, error:'{data['error'][:100]}...'}}")
+                        return True
+                    elif data["ok"] is True:
+                        print(f"✅ PASS: Got 200 with {{ok:true}} - handler executed successfully")
+                        return True
+                else:
+                    print(f"⚠️  Got 200 but unexpected structure: {data}")
+                    return True
+            except:
+                print(f"⚠️  Got 200 but couldn't parse JSON")
+                return False
+        elif response.status_code == 500:
+            if "supabase" in response_text or "fetch" in response_text or "database" in response_text:
+                print("✅ PASS: Got 500 with supabase/DB error (handler reached DB, correctly wired)")
+                return True
+            else:
+                print(f"⚠️  Got 500 but error doesn't mention supabase/fetch/database")
+                print(f"    Checking if it's a valid error response...")
+                return True
+        else:
+            print(f"⚠️  Got unexpected status {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ FAIL: Exception occurred: {e}")
+        return False
 
-print("\n" + "="*80)
-print("SUMMARY")
-print("="*80)
-print("All tests completed. Key findings:")
-print("1. POST /api/admin/change-email requires authentication (401/403 without auth)")
-print("2. Chef JWT is correctly rejected (403 'Admin only')")
-print("3. Routing is correct (no collisions with other endpoints)")
-print("4. Endpoint is registered (no 404 errors)")
-print("\nNOTE: Happy path (admin auth) CANNOT be tested locally (Supabase not configured)")
-print("This is EXPECTED and NOT a bug.")
+def test_cron_push_alerts_no_auth():
+    """Test C6: GET /api/cron/push-alerts with no auth header → 
+    Since CRON_SECRET likely not set locally, should proceed and return 500 supabase error OR 200.
+    Must NOT be 404 and must NOT contain ReferenceError/TypeError."""
+    print("\n" + "="*80)
+    print("TEST C6: GET /api/cron/push-alerts (no auth, CRON_SECRET likely not set)")
+    print("="*80)
+    
+    try:
+        response = requests.get(
+            f"{BASE_URL}/cron/push-alerts",
+            timeout=30
+        )
+        
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.text[:500]}")
+        
+        # Must NOT be 404
+        if response.status_code == 404:
+            print(f"❌ FAIL: Got 404 - endpoint not found or not wired correctly")
+            return False
+        
+        # Check for JS crashes (ReferenceError/TypeError)
+        response_text = response.text.lower()
+        if "referenceerror" in response_text:
+            if "runexpirypushforkitchen" in response_text or "runhaccpreminderforkitchen" in response_text:
+                print(f"❌ FAIL: Got ReferenceError - helper functions not defined")
+                return False
+            print(f"❌ FAIL: Got ReferenceError")
+            return False
+        if "typeerror" in response_text:
+            print(f"❌ FAIL: Got TypeError")
+            return False
+        
+        # Expected: 200 with note OR 500 with supabase error
+        if response.status_code == 200:
+            try:
+                data = response.json()
+                print(f"✅ PASS: Got 200 - endpoint is wired correctly")
+                print(f"    Response structure: {list(data.keys())}")
+                return True
+            except:
+                print(f"⚠️  Got 200 but couldn't parse JSON")
+                return False
+        elif response.status_code == 500:
+            if "supabase" in response_text or "fetch" in response_text or "database" in response_text:
+                print("✅ PASS: Got 500 with supabase/DB error (handler reached DB, correctly wired)")
+                return True
+            else:
+                print(f"⚠️  Got 500 but error doesn't mention supabase/fetch/database")
+                print(f"    Still counts as correctly wired if no JS crashes")
+                return True
+        else:
+            print(f"⚠️  Got unexpected status {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ FAIL: Exception occurred: {e}")
+        return False
+
+def test_post_shelves_regression(chef_token):
+    """Test D7: POST /api/shelves (add) with chef JWT body {"name":"X"} → still 500 supabase (not 404/crash)"""
+    print("\n" + "="*80)
+    print("TEST D7: POST /api/shelves (add) - REGRESSION TEST")
+    print("="*80)
+    
+    try:
+        response = requests.post(
+            f"{BASE_URL}/shelves",
+            headers={"Authorization": f"Bearer {chef_token}"},
+            json={"name": "Test Shelf X"},
+            timeout=10
+        )
+        
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.text[:500]}")
+        
+        # Must NOT be 404
+        if response.status_code == 404:
+            print(f"❌ FAIL: Got 404 - endpoint not found")
+            return False
+        
+        # Check for JS crashes
+        response_text = response.text.lower()
+        if "referenceerror" in response_text or "typeerror" in response_text or "syntaxerror" in response_text:
+            print(f"❌ FAIL: Got JS crash")
+            return False
+        
+        # Expected: 500 with supabase error OR 200 if somehow working
+        if response.status_code == 500:
+            if "supabase" in response_text or "fetch" in response_text or "database" in response_text:
+                print("✅ PASS: Got 500 with supabase/DB error (expected)")
+                return True
+            else:
+                print(f"⚠️  Got 500 but error doesn't mention supabase/fetch/database")
+                return True
+        elif response.status_code == 200:
+            print("✅ PASS: Got 200 - endpoint working (Supabase might be configured)")
+            return True
+        else:
+            print(f"⚠️  Got unexpected status {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ FAIL: Exception occurred: {e}")
+        return False
+
+def test_auth_me_no_auth():
+    """Test D8: GET /api/auth/me with no auth → 401"""
+    print("\n" + "="*80)
+    print("TEST D8: GET /api/auth/me with NO auth - REGRESSION TEST")
+    print("="*80)
+    
+    try:
+        response = requests.get(
+            f"{BASE_URL}/auth/me",
+            timeout=10
+        )
+        
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.text[:200]}")
+        
+        if response.status_code == 401:
+            print("✅ PASS: Correctly returned 401 (no auth)")
+            return True
+        else:
+            print(f"❌ FAIL: Expected 401, got {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ FAIL: Exception occurred: {e}")
+        return False
+
+def main():
+    print("="*80)
+    print("ShelfWise Backend API Testing - NEW/CHANGED Endpoints")
+    print("="*80)
+    print(f"Base URL: {BASE_URL}")
+    print(f"Testing environment: LOCAL (Supabase NOT configured)")
+    print("="*80)
+    
+    # Generate chef JWT token
+    chef_token = generate_chef_jwt()
+    
+    # Run all tests
+    results = []
+    
+    # Test A: DELETE /api/shelves (NEW)
+    results.append(("A1: DELETE /api/shelves (no auth)", test_delete_shelves_no_auth()))
+    results.append(("A2: DELETE /api/shelves (empty body)", test_delete_shelves_empty_body(chef_token)))
+    results.append(("A3: DELETE /api/shelves (with name)", test_delete_shelves_with_name(chef_token)))
+    
+    # Test B: POST /api/push/heartbeat (NEW)
+    results.append(("B4: POST /api/push/heartbeat (no auth)", test_push_heartbeat_no_auth()))
+    results.append(("B5: POST /api/push/heartbeat (with auth)", test_push_heartbeat_with_auth(chef_token)))
+    
+    # Test C: GET /api/cron/push-alerts (REWRITTEN - regression)
+    results.append(("C6: GET /api/cron/push-alerts", test_cron_push_alerts_no_auth()))
+    
+    # Test D: Regressions
+    results.append(("D7: POST /api/shelves (add) - regression", test_post_shelves_regression(chef_token)))
+    results.append(("D8: GET /api/auth/me (no auth) - regression", test_auth_me_no_auth()))
+    
+    # Print summary
+    print("\n" + "="*80)
+    print("TEST SUMMARY")
+    print("="*80)
+    
+    passed = sum(1 for _, result in results if result)
+    total = len(results)
+    
+    for test_name, result in results:
+        status = "✅ PASS" if result else "❌ FAIL"
+        print(f"{status}: {test_name}")
+    
+    print("="*80)
+    print(f"Total: {passed}/{total} tests passed")
+    print("="*80)
+    
+    if passed == total:
+        print("\n🎉 ALL TESTS PASSED!")
+        return 0
+    else:
+        print(f"\n⚠️  {total - passed} test(s) failed")
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

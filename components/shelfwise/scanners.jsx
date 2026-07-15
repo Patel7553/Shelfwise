@@ -491,7 +491,10 @@ export function ExpiryScanDialog({ open, onClose, onDateFound }) {
         try { navigator.vibrate?.(60) } catch {}
         onDateFound(item.expiryDate)
       } else {
-        toast.warning('Date not detected — try a clearer angle or type manually.')
+        // No printed date readable → default to TODAY (user request)
+        try { navigator.vibrate?.(60) } catch {}
+        onDateFound(new Date().toISOString().slice(0, 10))
+        toast.info('No printed date found — set to today. Change it if needed.')
       }
     } catch (e) {
       toast.error('Could not read date. Try again or type manually.')

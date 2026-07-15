@@ -416,6 +416,81 @@ async function sendVerificationOtp(sb, kitchenId, email) {
 }
 
 // ============================================================================
+// Recurring expiry push alerts (user request, June 2025)
+// Re-notifies every ~2.5 hours while expiring/expired items remain — the
+// nagging only stops once the items are used/disposed/edited. PUSH ONLY
+// (emails stay once a day / weekly). Throttle state lives on the kitchen row
+// (migration-20 columns); tolerant of the columns not existing yet.
+// ============================================================================
+const EXPIRY_PUSH_INTERVAL_MS = 2.5 * 60 * 60 * 1000  // 2.5 hours
+
+async function runExpiryPushForKitchen(sb, kid) {
+  // --- throttle: max one expiry push per 2.5h per kitchen ---
+  let lastAt = null, canThrottle = true
+  try {
+    const { data: k, error } = await sb.from('kitchens').select('last_expiry_push_at').eq('id', kid).maybeSingle()
+    if (error) canThrottle = false  // migration-20 not run yet → behave like before (no throttle)
+    else lastAt = k?.last_expiry_push_at ? new Date(k.last_expiry_push_at).getTime() : null
+  } catch { canThrottle = false }
+  if (canThrottle && lastAt && (Date.now() - lastAt) < EXPIRY_PUSH_INTERVAL_MS) return { skipped: 'throttled' }
+
+  const today = new Date().toISOString().slice(0, 10)
+  const tD = new Date(); tD.setDate(tD.getDate() + 1)
+  const tomorrow = tD.toISOString().slice(0, 10)
+  const { data: prods } = await sb.from('products')
+    .select('name,expiry_date')
+    .eq('kitchen_id', kid)
+    .not('expiry_date', 'is', null)
+    .lte('expiry_date', tomorrow)
+    .limit(50)
+  const expired = (prods || []).filter(p => p.expiry_date < today)
+  const expiring = (prods || []).filter(p => p.expiry_date >= today && p.expiry_date <= tomorrow)
+  if (!expired.length && !expiring.length) return { skipped: 'nothing-expiring' }
+
+  const parts = []
+  if (expired.length) parts.push(`${expired.length} item${expired.length !== 1 ? 's' : ''} EXPIRED`)
+  if (expiring.length) parts.push(`${expiring.length} expiring by tomorrow`)
+  const names = [...expired, ...expiring].slice(0, 4).map(p => p.name).join(', ')
+  await sendPushToKitchen(sb, kid, {
+    title: `⚠️ Stock alert — ${parts.join(', ')}`,
+    body: `${names}${(expired.length + expiring.length) > 4 ? '…' : ''} — this reminder repeats until you deal with it`,
+    tag: 'shelfwise-expiry',
+    url: '/?view=inventory',
+  })
+  if (canThrottle) {
+    try { await sb.from('kitchens').update({ last_expiry_push_at: new Date().toISOString() }).eq('id', kid) } catch {}
+  }
+  return { sent: true, expired: expired.length, expiring: expiring.length }
+}
+
+async function runHaccpReminderForKitchen(sb, kid) {
+  const today = new Date().toISOString().slice(0, 10)
+  // --- throttle: max one HACCP nag per day per kitchen ---
+  let lastAt = null, canThrottle = true
+  try {
+    const { data: k, error } = await sb.from('kitchens').select('last_haccp_push_at').eq('id', kid).maybeSingle()
+    if (error) canThrottle = false
+    else lastAt = k?.last_haccp_push_at || null
+  } catch { canThrottle = false }
+  if (canThrottle && lastAt && String(lastAt).slice(0, 10) === today) return { skipped: 'already-today' }
+
+  const { data: temps } = await sb.from('haccp_temperature_logs')
+    .select('id').eq('kitchen_id', kid)
+    .gte('recorded_at', `${today}T00:00:00`).limit(1)
+  if (temps && temps.length) return { skipped: 'temps-logged' }
+  await sendPushToKitchen(sb, kid, {
+    title: '🌡️ HACCP reminder',
+    body: "No fridge temperatures logged yet today. Don't forget your checks!",
+    tag: 'shelfwise-haccp',
+    url: '/?view=haccp',
+  })
+  if (canThrottle) {
+    try { await sb.from('kitchens').update({ last_haccp_push_at: new Date().toISOString() }).eq('id', kid) } catch {}
+  }
+  return { sent: true }
+}
+
+// ============================================================================
 // Weekly Digest email
 // ============================================================================
 // Small helper that wraps Resend for anywhere in the file.
@@ -1653,48 +1728,14 @@ export async function GET(request, { params }) {
         throw subErr
       }
       const kitchenIds = [...new Set((subRows || []).map(r => r.kitchen_id))]
-      const today = new Date().toISOString().slice(0, 10)
-      const tomorrowD = new Date(); tomorrowD.setDate(tomorrowD.getDate() + 1)
-      const tomorrow = tomorrowD.toISOString().slice(0, 10)
       const results = []
       for (const kid of kitchenIds) {
         try {
-          // 1) Expiring / expired items
-          const { data: prods } = await sb.from('products')
-            .select('name,expiry_date,quantity,unit')
-            .eq('kitchen_id', kid)
-            .not('expiry_date', 'is', null)
-            .lte('expiry_date', tomorrow)
-            .limit(50)
-          const expired = (prods || []).filter(p => p.expiry_date < today)
-          const expiring = (prods || []).filter(p => p.expiry_date >= today && p.expiry_date <= tomorrow)
-          if (expired.length || expiring.length) {
-            const parts = []
-            if (expired.length) parts.push(`${expired.length} item${expired.length !== 1 ? 's' : ''} EXPIRED`)
-            if (expiring.length) parts.push(`${expiring.length} expiring by tomorrow`)
-            const names = [...expired, ...expiring].slice(0, 4).map(p => p.name).join(', ')
-            await sendPushToKitchen(sb, kid, {
-              title: `⚠️ Stock alert — ${parts.join(', ')}`,
-              body: names + ((expired.length + expiring.length) > 4 ? '…' : ''),
-              tag: 'shelfwise-expiry',
-              url: '/?view=inventory',
-            })
-          }
-          // 2) HACCP reminder — no temperature logged today?
-          const { data: temps } = await sb.from('haccp_temperature_logs')
-            .select('id')
-            .eq('kitchen_id', kid)
-            .gte('recorded_at', `${today}T00:00:00`)
-            .limit(1)
-          if (!temps || temps.length === 0) {
-            await sendPushToKitchen(sb, kid, {
-              title: '🌡️ HACCP reminder',
-              body: "No fridge temperatures logged yet today. Don't forget your checks!",
-              tag: 'shelfwise-haccp',
-              url: '/?view=haccp',
-            })
-          }
-          results.push({ kitchen: kid, ok: true })
+          // 1) Expiring/expired push — repeats every 2.5h until items are dealt with
+          const exp = await runExpiryPushForKitchen(sb, kid)
+          // 2) HACCP reminder — max once per day
+          const haccp = await runHaccpReminderForKitchen(sb, kid)
+          results.push({ kitchen: kid, ok: true, expiry: exp, haccp })
         } catch (e) {
           results.push({ kitchen: kid, ok: false, error: e.message })
         }
@@ -2720,11 +2761,23 @@ Output strictly valid JSON with no other text.`
     }
 
     // -------- Kitchen-scoped mutations --------
-    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect'].some(p => path === p)
+    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect'].some(p => path === p)
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
       const kid = ctx.kitchenId
+
+      // ------- Push heartbeat: app pings this while in use → repeat expiry
+      //         alerts every 2.5h until items are dealt with (user request) -------
+      if (path === 'push/heartbeat') {
+        try {
+          const exp = await runExpiryPushForKitchen(sb, kid)
+          const haccp = await runHaccpReminderForKitchen(sb, kid)
+          return json({ ok: true, expiry: exp, haccp })
+        } catch (e) {
+          return json({ ok: false, error: e.message })
+        }
+      }
 
       // ------- Sensor integration: connect a vendor -------
       if (path === 'sensors/connect') {
@@ -3536,6 +3589,21 @@ export async function DELETE(request, { params }) {
     const sb = supabaseAdmin
     const { ctx, error } = await requireOwnerOrChef(request)
     if (error) return error
+
+    // ------- Shelves: remove a shelf name from the kitchen's list -------
+    if (segs[0] === 'shelves') {
+      const body = await request.json().catch(() => ({}))
+      const name = String(body.name || '').trim()
+      if (!name) return json({ error: 'Shelf name required' }, 400)
+      const { data: krow, error: e1 } = await sb.from('kitchens').select('locations').eq('id', ctx.kitchenId).maybeSingle()
+      if (e1) return json({ error: e1.message }, 500)
+      const list = (Array.isArray(krow?.locations) ? krow.locations : [])
+        .map(x => String(x))
+        .filter(x => x.toLowerCase() !== name.toLowerCase())
+      const { error: e2 } = await sb.from('kitchens').update({ locations: list }).eq('id', ctx.kitchenId)
+      if (e2) return json({ error: e2.message }, 500)
+      return json({ ok: true, locations: list })
+    }
 
     if (segs[0] === 'products' && segs[1]) {
       const { data: prod } = await sb.from('products').select('name').eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).maybeSingle()

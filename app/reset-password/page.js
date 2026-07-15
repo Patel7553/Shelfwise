@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent } from '@/components/ui/card'
 import { toast, Toaster } from 'sonner'
-import { Loader2, KeyRound } from 'lucide-react'
+import { Loader2, KeyRound, Eye, EyeOff } from 'lucide-react'
 
 // Landing page for Supabase "reset password" email links.
 // Supabase JS parses the recovery token from the URL hash automatically and
@@ -18,6 +18,7 @@ export default function ResetPasswordPage() {
   const [ready, setReady] = useState(false)
   const [checking, setChecking] = useState(true)
   const [password, setPassword] = useState('')
+  const [showPw, setShowPw] = useState(false)
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -83,11 +84,16 @@ export default function ResetPasswordPage() {
               <form onSubmit={submit} className="space-y-3">
                 <div>
                   <Label htmlFor="npw">New password</Label>
-                  <Input id="npw" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 6 characters" required autoFocus />
+                  <div className="relative">
+                    <Input id="npw" type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="At least 6 characters" required autoFocus className="pr-10" />
+                    <button type="button" onClick={() => setShowPw(v => !v)} tabIndex={-1} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" aria-label={showPw ? 'Hide password' : 'Show password'}>
+                      {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <Label htmlFor="cpw">Confirm new password</Label>
-                  <Input id="cpw" type="password" value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="Type it again" required />
+                  <Input id="cpw" type={showPw ? 'text' : 'password'} value={confirm} onChange={e => setConfirm(e.target.value)} placeholder="Type it again" required />
                 </div>
                 <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700" disabled={busy}>
                   {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <KeyRound className="h-4 w-4 mr-2" />}

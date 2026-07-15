@@ -9,12 +9,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent } from '@/components/ui/card'
 import { toast, Toaster } from 'sonner'
-import { Loader2, UserPlus, CheckCircle2, MailCheck } from 'lucide-react'
+import { Loader2, UserPlus, CheckCircle2, MailCheck, Eye, EyeOff } from 'lucide-react'
 
 export default function SignupPage() {
   const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPw, setShowPw] = useState(false)
   const [busy, setBusy] = useState(false)
   // stage: 'form' → 'otp' (verify email code) → 'done'
   const [stage, setStage] = useState('form')
@@ -197,7 +198,12 @@ export default function SignupPage() {
               </div>
               <div>
                 <Label htmlFor="pw">Password * (min 8 chars)</Label>
-                <Input id="pw" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" required />
+                <div className="relative">
+                  <Input id="pw" type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" required className="pr-10" />
+                  <button type="button" onClick={() => setShowPw(v => !v)} tabIndex={-1} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" aria-label={showPw ? 'Hide password' : 'Show password'}>
+                    {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
                 <p className="text-[11px] text-slate-500 mt-1">Choose a strong password — you'll use this every day.</p>
               </div>
               <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 mt-2" disabled={busy}>

@@ -11,7 +11,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { toast, Toaster } from 'sonner'
-import { ChefHat, Loader2, LogIn } from 'lucide-react'
+import { ChefHat, Loader2, LogIn, Eye, EyeOff } from 'lucide-react'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
 import { useT } from '@/lib/i18n'
@@ -24,6 +24,7 @@ export default function LoginPage() {
   // Owner form
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPw, setShowPw] = useState(false)
   const [ownerBusy, setOwnerBusy] = useState(false)
 
   // Chef form
@@ -190,7 +191,12 @@ export default function LoginPage() {
                   </div>
                   <div>
                     <Label htmlFor="password">{T('login_password')}</Label>
-                    <Input id="password" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" required />
+                    <div className="relative">
+                      <Input id="password" type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" required className="pr-10" />
+                      <button type="button" onClick={() => setShowPw(v => !v)} tabIndex={-1} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600" aria-label={showPw ? 'Hide password' : 'Show password'}>
+                        {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                     <div className="flex justify-end mt-1">
                       <button type="button" onClick={forgotPassword} className="text-xs text-emerald-700 font-medium hover:underline">Forgot password?</button>
                     </div>

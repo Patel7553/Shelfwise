@@ -64,19 +64,28 @@ function ThemeToggle() { return null }
 //   each is saved to the kitchen via POST /api/shelves so the whole team
 //   sees it in every dropdown from then on.
 // ============================================================================
-function ShelfSelect({ value, onChange, shelves, products, onAddShelf, triggerClassName }) {
+function ShelfSelect({ value, onChange, shelves, products, onAddShelf, onRemoveShelf, triggerClassName }) {
   const [adding, setAdding] = useState(false)
+  const [managing, setManaging] = useState(false)   // delete-shelves panel
   const [newName, setNewName] = useState('')
   const [saving, setSaving] = useState(false)
+  const [removingName, setRemovingName] = useState('')
 
   const opts = useMemo(() => {
+    // Only the kitchen's SAVED shelf list (plus the current value so an old
+    // product's location stays selectable). Product-derived options removed —
+    // they caused duplicates like "Dry store"/"Dry Store" and couldn't be deleted.
     const set = new Set()
     ;(shelves || []).forEach(s => { const n = String(s || '').trim(); if (n) set.add(n) })
-    ;(products || []).forEach(p => { const n = (p?.location || '').trim(); if (n) set.add(n) })
     const v = String(value || '').trim()
-    if (v) set.add(v)  // keep current value selectable even if not in the list
+    if (v) set.add(v)
     return [...set].sort((a, b) => a.localeCompare(b))
-  }, [shelves, products, value])
+  }, [shelves, value])
+
+  const savedShelves = useMemo(
+    () => (shelves || []).map(s => String(s || '').trim()).filter(Boolean).sort((a, b) => a.localeCompare(b)),
+    [shelves]
+  )
 
   const confirmAdd = async () => {
     const n = newName.trim().slice(0, 60)
@@ -91,12 +100,22 @@ function ShelfSelect({ value, onChange, shelves, products, onAddShelf, triggerCl
     setSaving(false)
   }
 
+  const removeShelf = async (name) => {
+    setRemovingName(name)
+    try {
+      await onRemoveShelf(name)
+      if (value === name) onChange('')
+    } catch { /* toast shown by handler */ }
+    setRemovingName('')
+  }
+
   return (
     <div className="space-y-1.5">
       <Select
         value={value && opts.includes(value) ? value : '__none__'}
         onValueChange={v => {
-          if (v === '__add__') setAdding(true)
+          if (v === '__add__') { setAdding(true); setManaging(false) }
+          else if (v === '__manage__') { setManaging(m => !m); setAdding(false) }
           else if (v === '__none__') onChange('')
           else { setAdding(false); onChange(v) }
         }}
@@ -106,6 +125,9 @@ function ShelfSelect({ value, onChange, shelves, products, onAddShelf, triggerCl
           <SelectItem value="__none__">— None —</SelectItem>
           {opts.map(o => <SelectItem key={o} value={o}>📍 {o}</SelectItem>)}
           <SelectItem value="__add__">➕ Add new shelf…</SelectItem>
+          {savedShelves.length > 0 && onRemoveShelf && (
+            <SelectItem value="__manage__">🗑️ Remove a shelf…</SelectItem>
+          )}
         </SelectContent>
       </Select>
       {adding && (
@@ -124,6 +146,30 @@ function ShelfSelect({ value, onChange, shelves, products, onAddShelf, triggerCl
           <Button type="button" size="sm" variant="ghost" onClick={() => { setAdding(false); setNewName('') }} className="shrink-0 h-9 px-2">
             <X className="h-4 w-4" />
           </Button>
+        </div>
+      )}
+      {managing && (
+        <div className="rounded-lg border bg-slate-50 p-2 space-y-1">
+          <div className="flex items-center justify-between px-1">
+            <p className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">Tap 🗑️ to remove a shelf</p>
+            <button type="button" onClick={() => setManaging(false)} className="text-slate-400 hover:text-slate-600"><X className="h-4 w-4" /></button>
+          </div>
+          {savedShelves.map(s => (
+            <div key={s} className="flex items-center justify-between bg-white rounded-md border px-2.5 py-1.5">
+              <span className="text-sm">📍 {s}</span>
+              <button
+                type="button"
+                onClick={() => removeShelf(s)}
+                disabled={removingName === s}
+                className="text-red-500 hover:text-red-700 disabled:opacity-40"
+                title={`Remove "${s}"`}
+              >
+                {removingName === s ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+              </button>
+            </div>
+          ))}
+          {savedShelves.length === 0 && <p className="text-xs text-muted-foreground px-1">No saved shelves.</p>}
+          <p className="text-[10px] text-muted-foreground px-1">Removing a shelf doesn't change products already stored on it.</p>
         </div>
       )}
     </div>
@@ -430,6 +476,17 @@ function App() {
   // Recipes: fetch once at login (so the dashboard Recipes count is correct),
   // then again whenever the Recipes tab is opened/searched.
   useEffect(() => { if (authed) fetchRecipes() }, [authed])
+
+  // PUSH HEARTBEAT — while anyone uses the app, ping the backend so expiry
+  // push alerts repeat every 2.5h until items are dealt with (backend
+  // throttles; calling often is safe). Runs on login + every 30 min.
+  useEffect(() => {
+    if (!authed) return
+    const ping = () => { fetch('/api/push/heartbeat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {}) }
+    ping()
+    const t = setInterval(ping, 30 * 60 * 1000)
+    return () => clearInterval(t)
+  }, [authed])
   useEffect(() => { if (authed && view === 'recipes') fetchRecipes() }, [authed, view, recipesSearch])
 
   // Browser expiry notifications — fires once per day when app is opened.
@@ -718,6 +775,22 @@ function App() {
     setSnapImage(null)
     setSnapItem(null)
     setSnapOpen(true)
+  }
+
+  // Remove a shelf name from the kitchen's saved list.
+  const removeShelf = async (name) => {
+    const res = await fetch('/api/shelves', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      toast.error(data.error || 'Could not remove shelf')
+      throw new Error(data.error || 'remove failed')
+    }
+    setSettings(prev => ({ ...prev, locations: data.locations || (prev.locations || []).filter(s => s !== name) }))
+    toast.success(`Shelf "${name}" removed`)
   }
 
   // Add a shelf name to the kitchen's saved list (shared by all shelf dropdowns).
@@ -1164,9 +1237,11 @@ function App() {
         toast.warning('No product detected — hold the camera over the label and it will rescan.')
         setSnapImage(null)  // re-arm live camera for another auto-capture
       } else {
-        // Set sensible defaults if AI didn't return expiry
+        // No printed date found on the label → default to TODAY (user request).
+        // The AI scans whatever date is printed; today is only the fallback.
         if (!first.expiryDate) {
-          first.expiryDate = suggestExpiryDate(first.category, first.storageType)
+          first.expiryDate = new Date().toISOString().slice(0, 10)
+          toast.info('No printed date found — expiry set to today. Change it if needed.')
         }
         if (!first.preparedBy) first.preparedBy = getPersonName()
         setSnapItem(first)
@@ -1838,6 +1913,7 @@ function App() {
                 shelves={settings.locations}
                 products={products}
                 onAddShelf={addShelf}
+                onRemoveShelf={removeShelf}
               />
             </div>
             <div>
@@ -2100,6 +2176,7 @@ function App() {
                               shelves={settings.locations}
                               products={products}
                               onAddShelf={addShelf}
+                              onRemoveShelf={removeShelf}
                               triggerClassName="h-9"
                             />
                           </div>
@@ -2382,6 +2459,7 @@ function App() {
                     shelves={settings.locations}
                     products={products}
                     onAddShelf={addShelf}
+                    onRemoveShelf={removeShelf}
                   />
                 </div>
               </div>
