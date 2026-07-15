@@ -187,6 +187,9 @@ export default function AdminPage() {
                         'text-slate-700 border-slate-300 bg-slate-50'
                       }>{k.status}</Badge>
                       {k.kitchenType && <Badge variant="secondary">{k.kitchenType}</Badge>}
+                      {k.emailVerified
+                        ? <Badge variant="outline" className="text-emerald-700 border-emerald-300 bg-emerald-50">✅ email verified</Badge>
+                        : <Badge variant="outline" className="text-amber-700 border-amber-300 bg-amber-50">⚠️ email not verified</Badge>}
                     </div>
                     <div className="text-xs text-slate-500 mt-1">
                       {k.ownerEmail} · {k.timezone} · Signed up {new Date(k.createdAt).toLocaleString()}

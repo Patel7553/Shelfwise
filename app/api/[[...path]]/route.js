@@ -378,9 +378,41 @@ function kitchenToApi(k) {
     weeklyDigestEnabled: k.weekly_digest_enabled !== false,
     haccpLocations: Array.isArray(k.haccp_locations) ? k.haccp_locations : [],
     lastDigestSentAt: k.last_digest_sent_at,
+    // false only when the column exists AND is explicitly false — old kitchens
+    // (pre-migration-19) show as verified so the admin panel doesn't panic.
+    emailVerified: k.email_verified === false ? false : true,
     createdAt: k.created_at,
     approvedAt: k.approved_at,
   }
+}
+
+// ============================================================================
+// Email-verification OTP (user request, June 2025)
+// Generates a 6-digit code, stores it on the kitchen row (15 min expiry) and
+// emails it via Resend. Returns true when the email was actually sent.
+// Tolerant of the migration-19 columns not existing yet (returns false).
+// ============================================================================
+async function sendVerificationOtp(sb, kitchenId, email) {
+  const code = String(Math.floor(100000 + Math.random() * 900000))
+  const expires = new Date(Date.now() + 15 * 60 * 1000).toISOString()
+  const { error: upErr } = await sb.from('kitchens')
+    .update({ email_otp: code, email_otp_expires: expires, email_otp_attempts: 0 })
+    .eq('id', kitchenId)
+  if (upErr) { console.warn('OTP store failed (migration-19 not run yet?):', upErr.message); return false }
+  const html = `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#f9fafb;padding:24px;color:#111">
+    <div style="max-width:560px;margin:auto;background:white;border-radius:16px;padding:32px;box-shadow:0 2px 8px rgba(0,0,0,0.05)">
+      <h1 style="font-size:22px;margin:0 0 8px;color:#064e3b">Verify your email</h1>
+      <p style="color:#374151;font-size:14px;line-height:1.6;margin:0 0 20px">
+        Enter this code in the ShelfWise app to confirm your email address:
+      </p>
+      <div style="text-align:center;margin:24px 0">
+        <span style="display:inline-block;background:#ecfdf5;border:2px solid #a7f3d0;border-radius:12px;padding:16px 28px;font-size:32px;font-weight:800;letter-spacing:8px;color:#064e3b">${code}</span>
+      </div>
+      <p style="color:#9ca3af;font-size:12px">This code expires in 15 minutes. If you didn't sign up for ShelfWise, you can ignore this email.</p>
+    </div></body></html>`
+  const r = await resendSend({ to: email, subject: `${code} is your ShelfWise verification code`, html })
+  if (!r.ok) { console.warn('OTP email failed:', r.error); return false }
+  return true
 }
 
 // ============================================================================
@@ -2257,7 +2289,54 @@ export async function POST(request, { params }) {
         console.warn('Admin notify skipped — SHELFWISE_ADMIN_EMAIL or RESEND_API_KEY missing')
       }
 
-      return json({ ok: true, status: 'pending', message: 'Account created. Awaiting admin approval.' }, 201)
+      // 3b) Email verification OTP — send a 6-digit code so the user proves
+      //     their email is typed correctly (user request, June 2025).
+      let otpSent = false
+      try { otpSent = await sendVerificationOtp(sb, kitchenId, email) } catch (e) { console.warn('OTP send failed:', e.message) }
+
+      return json({ ok: true, status: 'pending', otpSent, message: 'Account created. Awaiting admin approval.' }, 201)
+    }
+
+    // ------- Email verification: check the 6-digit OTP (public — used right after signup) -------
+    if (path === 'auth/verify-otp') {
+      const body = await request.json().catch(() => ({}))
+      const email = String(body.email || '').trim().toLowerCase()
+      const code = String(body.code || '').trim()
+      if (!email || !/^\d{6}$/.test(code)) return json({ error: 'Email and 6-digit code required' }, 400)
+      const { data: k, error: e1 } = await sb.from('kitchens')
+        .select('id, email_otp, email_otp_expires, email_otp_attempts, email_verified')
+        .eq('owner_email', email).maybeSingle()
+      if (e1) return json({ error: e1.message }, 500)
+      if (!k) return json({ error: 'No account found for this email' }, 404)
+      if (k.email_verified) return json({ ok: true, alreadyVerified: true })
+      if ((k.email_otp_attempts || 0) >= 8) return json({ error: 'Too many attempts. Tap "Resend code" for a fresh one.' }, 429)
+      if (!k.email_otp || !k.email_otp_expires || new Date(k.email_otp_expires) < new Date()) {
+        return json({ error: 'Code expired. Tap "Resend code" for a fresh one.' }, 400)
+      }
+      if (k.email_otp !== code) {
+        await sb.from('kitchens').update({ email_otp_attempts: (k.email_otp_attempts || 0) + 1 }).eq('id', k.id)
+        return json({ error: 'Wrong code — check the email and try again.' }, 400)
+      }
+      const { error: e2 } = await sb.from('kitchens')
+        .update({ email_verified: true, email_otp: null, email_otp_expires: null, email_otp_attempts: 0 })
+        .eq('id', k.id)
+      if (e2) return json({ error: e2.message }, 500)
+      return json({ ok: true })
+    }
+
+    // ------- Email verification: resend a fresh OTP (public) -------
+    if (path === 'auth/resend-otp') {
+      const body = await request.json().catch(() => ({}))
+      const email = String(body.email || '').trim().toLowerCase()
+      if (!email) return json({ error: 'Email required' }, 400)
+      const { data: k, error: e1 } = await sb.from('kitchens')
+        .select('id, email_verified').eq('owner_email', email).maybeSingle()
+      if (e1) return json({ error: e1.message }, 500)
+      if (!k) return json({ error: 'No account found for this email' }, 404)
+      if (k.email_verified) return json({ ok: true, alreadyVerified: true })
+      const sent = await sendVerificationOtp(sb, k.id, email)
+      if (!sent) return json({ error: 'Could not send the code right now. Try again in a minute.' }, 500)
+      return json({ ok: true })
     }
 
     if (path === 'auth/chef-login') {
@@ -3175,7 +3254,10 @@ Output strictly valid JSON with no other text.`
         if (!apiKey) return json({ error: 'RESEND_API_KEY not configured' }, 500)
 
         const body = await request.json().catch(() => ({}))
-        const to = body.to || ctx.kitchen?.alert_email
+        // Alerts go to the kitchen owner's LOGIN email (user request — the
+        // separate "alert email" setting was removed). alert_email kept as
+        // a legacy fallback for old kitchens.
+        const to = body.to || ctx.kitchen?.owner_email || ctx.kitchen?.alert_email
         if (!to) return json({ error: 'No alert email configured. Set one in Settings.' }, 400)
 
         const today = new Date()

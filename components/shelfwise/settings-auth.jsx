@@ -641,20 +641,13 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
   const rotateCode = () => { markTouched('login'); setInviteCode(Math.floor(100000 + Math.random() * 900000).toString()) }
 
   const sendTestEmail = async () => {
-    if (!alertEmail.trim()) { toast.error('Set an alert email first'); return }
+    // No "to" needed — the backend sends to the owner's LOGIN email.
     setTesting(true)
     try {
-      // Only save NON-EMPTY name & email so we don't accidentally overwrite kitchen name.
-      const patch = { onboarded: true, alertEmail: alertEmail.trim() }
-      if (name.trim()) patch.kitchenName = name.trim()
-      if (type) patch.kitchenType = type
-      if (fields.length) patch.customFields = fields.filter(f => f.label.trim())
-      if (inviteCode) patch.inviteCode = inviteCode
-      await saveSettings(patch)
-      const res = await fetch('/api/email/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: alertEmail.trim() }) })
+      const res = await fetch('/api/email/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed')
-      toast.success(`Test email sent to ${alertEmail}! Check your inbox.`)
+      toast.success('Test email sent to your login email! Check your inbox.')
     } catch (e) {
       toast.error(e.message || 'Failed to send')
     } finally { setTesting(false) }
@@ -675,8 +668,7 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
     }
 
     if (touched.login) {
-      const trimmedEmail = alertEmail.trim()
-      if (trimmedEmail) payload.alertEmail = trimmedEmail
+      // alertEmail removed — all emails go to the owner's login email now
       if (inviteCode) payload.inviteCode = inviteCode
       payload.weeklyDigestEnabled = weeklyDigest
     }
@@ -872,24 +864,19 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
             <div className="space-y-5">
               <ChefCodeCard />
 
-              <div className="rounded-lg border-2 border-amber-200 bg-amber-50 p-4">
-                <Label className="text-amber-900 text-sm font-bold">📧 Alert Email</Label>
-                <p className="text-xs text-amber-700 mt-1 mb-3">Daily expiry alerts will be sent here.</p>
-                <div className="flex gap-2">
-                  <Input type="email" value={alertEmail} onChange={e => { markTouched('login'); setAlertEmail(e.target.value) }} placeholder="chef@kitchen.com" className="bg-white" />
-                  <Button variant="outline" size="sm" type="button" onClick={sendTestEmail} disabled={testing}>
-                    {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Send Test'}
-                  </Button>
-                </div>
-              </div>
-
+              {/* Alert Email input removed (user request) — every email (daily
+                  expiry alerts, weekly digest, password reset) now goes to the
+                  owner's LOGIN email automatically. */}
               <div className="rounded-lg border-2 border-emerald-200 bg-emerald-50 p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <Label className="text-emerald-900 text-sm font-bold">📊 Weekly Digest Email</Label>
-                    <p className="text-xs text-emerald-700 mt-1">Every Monday 8am — waste, cost, expiring items and top-wasted items. Sent to the kitchen owner's email.</p>
+                    <Label className="text-emerald-900 text-sm font-bold">📬 Email Notifications</Label>
+                    <p className="text-xs text-emerald-700 mt-1">
+                      Daily expiry alerts and the Monday 8am weekly digest (waste, cost, expiring &amp; top-wasted items)
+                      are all sent to your <b>login email</b> automatically.
+                    </p>
                   </div>
-                  <label className="inline-flex items-center gap-2 shrink-0 cursor-pointer">
+                  <label className="inline-flex items-center gap-2 shrink-0 cursor-pointer" title="Weekly digest on/off">
                     <input
                       type="checkbox"
                       checked={weeklyDigest}
@@ -899,9 +886,14 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
                     <span className="text-xs font-semibold text-emerald-900">{weeklyDigest ? 'ON' : 'OFF'}</span>
                   </label>
                 </div>
-                <Button variant="outline" size="sm" type="button" onClick={sendTestDigest} disabled={digestSending} className="mt-3 bg-white">
-                  {digestSending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Sending…</> : '📤 Send me a test digest now'}
-                </Button>
+                <div className="flex gap-2 flex-wrap mt-3">
+                  <Button variant="outline" size="sm" type="button" onClick={sendTestEmail} disabled={testing} className="bg-white">
+                    {testing ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Sending…</> : '📧 Send test alert'}
+                  </Button>
+                  <Button variant="outline" size="sm" type="button" onClick={sendTestDigest} disabled={digestSending} className="bg-white">
+                    {digestSending ? <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Sending…</> : '📤 Send test digest'}
+                  </Button>
+                </div>
               </div>
 
               <NotificationSettingsCard />
