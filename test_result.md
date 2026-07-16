@@ -2031,7 +2031,7 @@ test_plan:
 agent_communication:
     - agent: "main"
       message: |
-        ROUND 13 (July 2026) — Frequent-logout fix:
+        ROUND 13+14 (July 2026) — Frequent-logout fix (chef token now PERMANENT ~10y per user request):
         Cause 1: lib/auth.js signChefToken expiresIn was '24h' → kitchen-code users logged out daily.
         Changed to '30d'.
         Cause 2: page.js mount auth-check treated ANY fetch failure (weak wifi / PWA waking) as
