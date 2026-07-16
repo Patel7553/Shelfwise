@@ -1914,9 +1914,9 @@ function App() {
               <Select
                 value={form.storageType}
                 onValueChange={(v) => {
-                  // Smart auto-expiry: when chef picks storage, suggest expiry date.
-                  // Always update so user sees the helpful suggestion; they can edit if needed.
-                  setForm({ ...form, storageType: v, expiryDate: suggestExpiryDate(form.category, v) })
+                  // Auto-expiry FROM the Date Received (not actual today):
+                  // Freezer = +2 months, Dry/Ambient = +3 months (user request).
+                  setForm({ ...form, storageType: v, expiryDate: suggestExpiryDate(form.category, v, form.dateReceived) })
                 }}
               >
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -1924,7 +1924,7 @@ function App() {
                   {['Fridge', 'Freezer', 'Dry', 'Ambient'].map(u => <SelectItem key={u} value={u}>{u}</SelectItem>)}
                 </SelectContent>
               </Select>
-              <p className="text-[10px] text-muted-foreground mt-0.5">💡 Expiry auto-set: Fridge ~7d, Freezer ~2 months, Dry/Ambient ~3 months</p>
+              <p className="text-[10px] text-muted-foreground mt-0.5">💡 Expiry auto-set from Date Received: Fridge ~7d, Freezer +2 months, Dry/Ambient +3 months</p>
             </div>
             <div>
               <Label htmlFor="loc">Shelf / Location</Label>
@@ -1939,8 +1939,18 @@ function App() {
             </div>
             <div>
               <Label htmlFor="dr">📅 Date Received</Label>
-              <Input id="dr" type="date" value={form.dateReceived || ''} onChange={e => setForm({ ...form, dateReceived: e.target.value })} />
-              <p className="text-[10px] text-muted-foreground mt-0.5">Auto-set to today — change if it arrived earlier</p>
+              <Input
+                id="dr"
+                type="date"
+                value={form.dateReceived || ''}
+                onChange={e => {
+                  const v = e.target.value
+                  // Changing Date Received recalculates the expiry FROM that date
+                  // (e.g. received 2026-05-03 + Freezer → 2026-07-03). User request.
+                  setForm({ ...form, dateReceived: v, expiryDate: suggestExpiryDate(form.category, form.storageType, v) })
+                }}
+              />
+              <p className="text-[10px] text-muted-foreground mt-0.5">Auto-set to today — change it and the expiry recalculates from this date</p>
             </div>
             <div className="sm:col-span-2">
               <Label htmlFor="prep">Prepared By</Label>
@@ -2453,7 +2463,15 @@ function App() {
               </div>
               <div>
                 <Label className="text-xs">Date received (today)</Label>
-                <Input type="date" value={snapItem.dateReceived || new Date().toISOString().slice(0,10)} onChange={e => setSnapItem({ ...snapItem, dateReceived: e.target.value })} />
+                <Input
+                  type="date"
+                  value={snapItem.dateReceived || new Date().toISOString().slice(0, 10)}
+                  onChange={e => {
+                    const v = e.target.value
+                    // Changing Date Received recalculates expiry FROM that date (user request)
+                    setSnapItem({ ...snapItem, dateReceived: v, expiryDate: suggestExpiryDate(snapItem.category || '', snapItem.storageType || 'Fridge', v) })
+                  }}
+                />
               </div>
               <div className="grid grid-cols-1 gap-2">
                 <div>
@@ -2461,7 +2479,8 @@ function App() {
                   <Select
                     value={snapItem.storageType || 'Fridge'}
                     onValueChange={(v) => {
-                      setSnapItem({ ...snapItem, storageType: v, expiryDate: suggestExpiryDate(snapItem.category || '', v) })
+                      // Expiry FROM the Date Received: Freezer +2mo, Dry/Ambient +3mo
+                      setSnapItem({ ...snapItem, storageType: v, expiryDate: suggestExpiryDate(snapItem.category || '', v, snapItem.dateReceived) })
                     }}
                   >
                     <SelectTrigger><SelectValue /></SelectTrigger>

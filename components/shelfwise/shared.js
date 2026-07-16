@@ -67,10 +67,15 @@ export function dateInDays(days) {
 
 // Smart expiry SUGGESTION using calendar-correct math (months for long, days for short).
 // Returns YYYY-MM-DD string.
-export function suggestExpiryDate(category = '', storageType = '') {
+// baseDate (optional, YYYY-MM-DD): calculate FROM this date instead of today —
+// e.g. Date Received 2026-05-03 + Freezer = 2026-07-03 (user request, July 2026).
+export function suggestExpiryDate(category = '', storageType = '', baseDate = '') {
   const c = String(category || '').toLowerCase()
   const s = String(storageType || '').toLowerCase()
-  const d = new Date()
+  const d = (baseDate && /^\d{4}-\d{2}-\d{2}/.test(String(baseDate)))
+    ? new Date(String(baseDate).slice(0, 10) + 'T12:00:00')  // noon avoids timezone day-shift
+    : new Date()
+  if (isNaN(d.getTime())) return suggestExpiryDate(category, storageType) // bad date → from today
   // Long-term storage uses calendar MONTHS (so Jun 14 + 2 mo = Aug 14 exactly)
   if (s === 'freezer') {
     d.setMonth(d.getMonth() + 2)

@@ -2031,6 +2031,19 @@ test_plan:
 agent_communication:
     - agent: "main"
       message: |
+        ROUND 15 (July 2026) — Expiry calculated FROM Date Received (user clarification):
+        shared.js suggestExpiryDate(category, storage, baseDate?) — new optional 3rd param; when a
+        valid YYYY-MM-DD is given, calendar math runs from that date (noon-anchored to avoid TZ
+        shift), else from today. Verified: 2026-05-03+Freezer=2026-07-03, +Dry=2026-08-03.
+        page.js Add/Edit form: Storage onChange AND Date Received onChange both recompute
+        expiryDate from form.dateReceived (Edit shares the same form → works when editing too).
+        Snap form: same for snapItem.dateReceived + storage. Voice/invoice keep today-based calc
+        (no date-received field there). Helper text updated.
+        IMPORTANT CONTEXT: user's live app is shelfwise.co.in (Vercel via Save-to-GitHub flow) —
+        their "date issue still not fixed" was because earlier fixes were never published there.
+
+    - agent: "main"
+      message: |
         ROUND 13+14 (July 2026) — Frequent-logout fix (chef token now PERMANENT ~10y per user request):
         Cause 1: lib/auth.js signChefToken expiresIn was '24h' → kitchen-code users logged out daily.
         Changed to '30d'.
