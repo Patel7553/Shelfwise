@@ -1395,29 +1395,41 @@ export function LoginGate({ settings, onAuth, saveSettings }) {
 // Notification settings card — browser Notification API opt-in.
 // ============================================================================
 export function NotificationSettingsCard() {
-  // Real Web Push (server-sent): works even when the app is closed.
-  // Requires: /sw.js service worker + VAPID keys on the server + migration-14.
+  // Notification mode per device (user request, June 2025):
+  //  'mute'  — nothing: no in-app expiry banner, no home-screen push
+  //  'inapp' — expiry alerts inside the app only (banner on dashboard)
+  //  'push'  — in-app + real Web Push to the device home screen
+  // Stored in localStorage 'sw_notify_mode'; push subscription is synced to it.
   const [supported, setSupported] = useState(true)
   const [permission, setPermission] = useState('default')
   const [subscribed, setSubscribed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [isIOSBrowser, setIsIOSBrowser] = useState(false)
+  const [mode, setMode] = useState('inapp')
 
   useEffect(() => {
     if (typeof window === 'undefined') return
     const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
     const standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
     setIsIOSBrowser(iOS && !standalone)
-    if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) {
-      setSupported(false)
-      return
-    }
-    setPermission(Notification.permission)
+    const pushSupported = ('Notification' in window) && ('serviceWorker' in navigator) && ('PushManager' in window)
+    if (!pushSupported) setSupported(false)
+    if (pushSupported) setPermission(Notification.permission)
     ;(async () => {
+      let isSub = false
       try {
-        const reg = await navigator.serviceWorker.getRegistration()
-        const sub = reg ? await reg.pushManager.getSubscription() : null
-        setSubscribed(!!sub)
+        if (pushSupported) {
+          const reg = await navigator.serviceWorker.getRegistration()
+          const sub = reg ? await reg.pushManager.getSubscription() : null
+          isSub = !!sub
+          setSubscribed(isSub)
+        }
+      } catch {}
+      // Restore saved mode; default to 'push' when already subscribed, else 'inapp'
+      try {
+        const saved = localStorage.getItem('sw_notify_mode')
+        if (saved === 'mute' || saved === 'inapp' || saved === 'push') setMode(saved)
+        else setMode(isSub ? 'push' : 'inapp')
       } catch {}
     })()
   }, [])
@@ -1431,45 +1443,33 @@ export function NotificationSettingsCard() {
     return outputArray
   }
 
-  const enable = async () => {
-    if (!supported) { toast.error("Your browser doesn't support push notifications"); return }
-    setBusy(true)
-    try {
-      const perm = await Notification.requestPermission()
-      setPermission(perm)
-      if (perm !== 'granted') { toast.error('Permission denied. Re-enable it in your browser settings.'); return }
-      // 1) Register the service worker
-      const reg = await navigator.serviceWorker.register('/sw.js')
-      await navigator.serviceWorker.ready
-      // 2) Get the server's public VAPID key
-      const keyRes = await fetch('/api/push/public-key')
-      const keyData = await keyRes.json().catch(() => ({}))
-      if (!keyRes.ok || !keyData.key) throw new Error(keyData.error || 'Push not configured on the server')
-      // 3) Subscribe this device
-      let sub = await reg.pushManager.getSubscription()
-      if (!sub) {
-        sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(keyData.key),
-        })
-      }
-      // 4) Save it on the server
-      const saveRes = await fetch('/api/push/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subscription: sub.toJSON() }),
+  const subscribePush = async () => {
+    const perm = await Notification.requestPermission()
+    setPermission(perm)
+    if (perm !== 'granted') throw new Error('Permission denied. Re-enable it in your browser settings.')
+    const reg = await navigator.serviceWorker.register('/sw.js')
+    await navigator.serviceWorker.ready
+    const keyRes = await fetch('/api/push/public-key')
+    const keyData = await keyRes.json().catch(() => ({}))
+    if (!keyRes.ok || !keyData.key) throw new Error(keyData.error || 'Push not configured on the server')
+    let sub = await reg.pushManager.getSubscription()
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(keyData.key),
       })
-      const saveData = await saveRes.json().catch(() => ({}))
-      if (!saveRes.ok) throw new Error(saveData.error || 'Could not save subscription')
-      setSubscribed(true)
-      toast.success('Push notifications enabled on this device ✅')
-    } catch (e) {
-      toast.error(e.message || 'Could not enable push notifications')
-    } finally { setBusy(false) }
+    }
+    const saveRes = await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription: sub.toJSON() }),
+    })
+    const saveData = await saveRes.json().catch(() => ({}))
+    if (!saveRes.ok) throw new Error(saveData.error || 'Could not save subscription')
+    setSubscribed(true)
   }
 
-  const disable = async () => {
-    setBusy(true)
+  const unsubscribePush = async () => {
     try {
       const reg = await navigator.serviceWorker.getRegistration()
       const sub = reg ? await reg.pushManager.getSubscription() : null
@@ -1481,10 +1481,26 @@ export function NotificationSettingsCard() {
         }).catch(() => {})
         await sub.unsubscribe()
       }
-      setSubscribed(false)
-      toast.success('Push notifications turned off on this device')
-    } catch {
-      toast.error('Could not unsubscribe')
+    } catch {}
+    setSubscribed(false)
+  }
+
+  const chooseMode = async (next) => {
+    if (busy || next === mode) return
+    setBusy(true)
+    try {
+      if (next === 'push') {
+        if (!supported) { toast.error("This browser doesn't support home-screen notifications"); return }
+        await subscribePush()
+        toast.success('Notifications ON — in app + home screen 🔔')
+      } else {
+        if (subscribed) await unsubscribePush()
+        toast.success(next === 'mute' ? 'Notifications muted on this device 🔕' : 'Notifications will show inside the app only 📱')
+      }
+      setMode(next)
+      try { localStorage.setItem('sw_notify_mode', next) } catch {}
+    } catch (e) {
+      toast.error(e.message || 'Could not change notification setting')
     } finally { setBusy(false) }
   }
 
@@ -1500,42 +1516,50 @@ export function NotificationSettingsCard() {
     } finally { setBusy(false) }
   }
 
-  if (!supported) {
-    return (
-      <div className="rounded-lg border-2 border-slate-200 bg-slate-50 p-4">
-        <Label className="text-slate-700 text-sm font-bold">🔔 Push Notifications</Label>
-        <p className="text-xs text-slate-600 mt-1">
-          {isIOSBrowser
-            ? 'On iPhone/iPad: first install the app (Share → Add to Home Screen), then open it from your home screen to enable push notifications.'
-            : 'Not supported on this browser.'}
-        </p>
-      </div>
-    )
-  }
+  const OPTIONS = [
+    { key: 'mute',  emoji: '🔕', label: 'Mute', desc: 'No alerts on this device — not in the app, not on the home screen.' },
+    { key: 'inapp', emoji: '📱', label: 'In app only', desc: 'Expiry alerts show inside the app (dashboard banner). Nothing pops up on the home screen.' },
+    { key: 'push',  emoji: '🔔', label: 'App + home screen', desc: 'In-app alerts PLUS push notifications on this device — expiring items & HACCP reminders, even when the app is closed.', disabled: !supported },
+  ]
 
   return (
-    <div className={`rounded-lg border-2 p-4 ${subscribed ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
-      <Label className="text-sm font-bold">🔔 Push Notifications</Label>
-      <p className="text-xs text-muted-foreground mt-1 mb-3">
-        Daily alerts sent to this device — items expiring soon and HACCP temperature-check reminders. Works even when the app is closed.
-      </p>
-      {subscribed ? (
-        <div className="flex gap-2 flex-wrap">
-          <Button variant="outline" size="sm" onClick={test} disabled={busy}>
-            {busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null} Send test
-          </Button>
-          <Button variant="outline" size="sm" onClick={disable} disabled={busy} className="text-red-600">
-            <BellOff className="h-4 w-4 mr-1" /> Turn off
-          </Button>
-        </div>
-      ) : (
-        <Button size="sm" onClick={enable} disabled={busy} className="bg-emerald-600 hover:bg-emerald-700">
-          {busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Bell className="h-4 w-4 mr-1" />}
-          {permission === 'denied' ? 'Blocked — allow in browser settings' : 'Enable push notifications'}
+    <div className={`rounded-lg border-2 p-4 ${mode === 'push' ? 'border-emerald-300 bg-emerald-50' : mode === 'mute' ? 'border-slate-300 bg-slate-50' : 'border-sky-200 bg-sky-50/50'}`}>
+      <Label className="text-sm font-bold">🔔 Notifications on this device</Label>
+      <p className="text-xs text-muted-foreground mt-1 mb-3">Choose how alerts reach you. This setting is per device — the kitchen tablet and each phone can be different.</p>
+      <div className="space-y-1.5">
+        {OPTIONS.map(o => (
+          <button
+            key={o.key}
+            type="button"
+            onClick={() => chooseMode(o.key)}
+            disabled={busy || o.disabled}
+            className={`w-full text-left rounded-lg border-2 px-3 py-2.5 transition flex items-start gap-2.5 ${
+              mode === o.key ? 'border-emerald-500 bg-white shadow-sm' : 'border-transparent bg-white/70 hover:border-slate-300'
+            } ${o.disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            <span className="text-xl leading-none mt-0.5">{o.emoji}</span>
+            <span className="min-w-0">
+              <span className="text-sm font-semibold flex items-center gap-1.5">
+                {o.label}
+                {mode === o.key && <Check className="h-4 w-4 text-emerald-600" />}
+                {busy && mode !== o.key && <span />}
+              </span>
+              <span className="block text-[11px] text-muted-foreground">{o.desc}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+      {busy && <p className="text-[11px] text-muted-foreground mt-2 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Updating…</p>}
+      {mode === 'push' && subscribed && (
+        <Button variant="outline" size="sm" onClick={test} disabled={busy} className="mt-2 bg-white">
+          Send test notification
         </Button>
       )}
-      {isIOSBrowser && (
-        <p className="text-[11px] text-amber-700 mt-2">iPhone/iPad: install the app first (Share → Add to Home Screen) for push to work.</p>
+      {!supported && isIOSBrowser && (
+        <p className="text-[11px] text-amber-700 mt-2">iPhone/iPad: install the app first (Share → Add to Home Screen), then reopen it to unlock "App + home screen".</p>
+      )}
+      {supported && permission === 'denied' && (
+        <p className="text-[11px] text-amber-700 mt-2">Notifications are blocked in your browser settings — allow them to use "App + home screen".</p>
       )}
     </div>
   )

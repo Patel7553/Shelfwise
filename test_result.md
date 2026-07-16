@@ -2072,6 +2072,17 @@ frontend:
             clock.install/fast_forward/run_for: prompt at 5min ✓, reset ✓,
             re-prompt ✓, auto-lock after 60s grace ✓.
         - working: true
+          agent: "main"
+          comment: |
+            ADDED (user request): per-device notification mode selector in
+            Settings -> Login & Alerts ("Notifications on this device"):
+            🔕 Mute (no in-app banner, push unsubscribed), 📱 In app only
+            (banner yes, push unsubscribed), 🔔 App + home screen (banner +
+            Web Push subscribe). Stored in localStorage 'sw_notify_mode';
+            ExpiryAlertBanner (dashboard.jsx) returns null when mode='mute'.
+            Verified via mocked-session screenshot: card renders, clicking
+            Mute sets localStorage + shows toast + checkmark.
+        - working: true
           agent: "testing"
           comment: |
             ✅ FOCUSED TEST COMPLETE - Staff Code PIN Frontend (7/7 tests passed):

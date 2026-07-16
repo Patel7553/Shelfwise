@@ -604,6 +604,13 @@ export function RecentItemsToday({ products, goToInventory, openEdit }) {
 }
 
 export function ExpiryAlertBanner({ stats, goToInventory }) {
+  // Respect the per-device notification mode (Settings → Notifications):
+  // 'mute' hides the in-app expiry alert banner entirely.
+  const [muted, setMuted] = useState(false)
+  useEffect(() => {
+    try { setMuted(localStorage.getItem('sw_notify_mode') === 'mute') } catch {}
+  }, [])
+  if (muted) return null
   if (!stats.expired && !stats.expiring) return null
   const messages = []
   if (stats.expired > 0) messages.push({ key: 'Expired', text: `${stats.expired} item${stats.expired !== 1 ? 's' : ''} already expired`, color: 'bg-red-50 border-red-200 text-red-800', dot: 'bg-red-500' })
