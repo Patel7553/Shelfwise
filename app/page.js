@@ -1929,8 +1929,8 @@ function App() {
               </Button>
             )}
             {showSwitchUser && (
-              <Button variant="ghost" size="icon" onClick={switchUser} title="Switch user — back to staff code screen" className="text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50">
-                <Users className="h-4 w-4" />
+              <Button size="sm" onClick={switchUser} title="Switch user — back to staff code screen" className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold">
+                <Users className="h-4 w-4 mr-1.5" /> Switch user
               </Button>
             )}
             <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title={T('nav_settings')}>
@@ -1941,10 +1941,25 @@ function App() {
             </Button>
           </nav>
 
-          {/* Mobile menu button */}
-          <Button variant="ghost" size="icon" className="md:hidden" onClick={() => setMobileNav(v => !v)}>
-            <Settings className="h-5 w-5" />
-          </Button>
+          {/* Mobile: Switch User is always visible next to the menu button —
+              staff on the shared tablet tap it to hand over to the next person */}
+          <div className="flex items-center gap-1 md:hidden">
+            {showSwitchUser && (
+              <Button
+                size="sm"
+                onClick={switchUser}
+                title="Switch user — back to staff code screen"
+                className="h-9 px-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold"
+              >
+                <Users className="h-4 w-4 mr-1" />
+                <span className="text-xs">Switch</span>
+              </Button>
+            )}
+            {/* Mobile menu button */}
+            <Button variant="ghost" size="icon" onClick={() => setMobileNav(v => !v)}>
+              <Settings className="h-5 w-5" />
+            </Button>
+          </div>
         </div>
 
         {/* Mobile nav drawer */}
