@@ -276,28 +276,49 @@ function App() {
   const [namePromptBusy, setNamePromptBusy] = useState(false)
   const router = useRouter()
 
-  // Check auth on mount by calling /api/auth/me
+  // Check auth on mount by calling /api/auth/me.
+  // HARDENED (July 2026): only a REAL 401 logs you out. Network hiccups
+  // (weak kitchen wifi, PWA waking from background) retry a few times and
+  // then fall back to "assume still logged in if a local token exists" —
+  // users were being logged out by transient connection failures.
   useEffect(() => {
     if (typeof window === 'undefined') return
     let cancelled = false
     ;(async () => {
-      try {
-        const res = await fetch('/api/auth/me')
-        if (res.status === 401) {
-          if (!cancelled) { setAuthed(false); router.replace('/login') }
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const res = await fetch('/api/auth/me')
+          if (cancelled) return
+          if (res.status === 401) {
+            setAuthed(false); router.replace('/login')
+            return
+          }
+          if (!res.ok) throw new Error(`auth/me ${res.status}`)
+          const data = await res.json()
+          if (cancelled) return
+          setMe(data)
+          setAuthed(true)
+          // Existing code-login users from before the names feature: ask for their name once.
+          if (data?.role === 'chef') {
+            try { if (!localStorage.getItem('sw_person_name')) setNamePromptOpen(true) } catch {}
+          }
           return
+        } catch {
+          // Network/server hiccup — wait and retry (2s, 4s)
+          if (cancelled) return
+          if (attempt < 3) await new Promise(r => setTimeout(r, attempt * 2000))
         }
-        const data = await res.json()
-        if (cancelled) return
-        setMe(data)
+      }
+      if (cancelled) return
+      // Still unreachable after retries → DON'T force logout. If we have a
+      // local token, assume the session is fine and let data calls retry.
+      let hasLocalToken = false
+      try { hasLocalToken = !!localStorage.getItem('shelfwise_chef_token') || !!localStorage.getItem('shelfwise-auth') } catch {}
+      if (hasLocalToken) {
         setAuthed(true)
-        // Existing code-login users from before the names feature: ask for their name once.
-        if (data?.role === 'chef') {
-          try { if (!localStorage.getItem('sw_person_name')) setNamePromptOpen(true) } catch {}
-        }
-        // If owner kitchen not approved, show waiting screen (handled below in render)
-      } catch {
-        if (!cancelled) { setAuthed(false); router.replace('/login') }
+        toast.warning('Connection is shaky — some data may load slowly.')
+      } else {
+        setAuthed(false); router.replace('/login')
       }
     })()
     return () => { cancelled = true }

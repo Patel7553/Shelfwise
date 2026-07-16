@@ -2029,6 +2029,23 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+    - agent: "main"
+      message: |
+        ROUND 13 (July 2026) — Frequent-logout fix:
+        Cause 1: lib/auth.js signChefToken expiresIn was '24h' → kitchen-code users logged out daily.
+        Changed to '30d'.
+        Cause 2: page.js mount auth-check treated ANY fetch failure (weak wifi / PWA waking) as
+        logged out → router.replace('/login'). Now: 401 = immediate logout (unchanged); network
+        errors retry 3x (2s/4s backoff) then fall back to optimistic-authed IF a local token exists
+        (localStorage shelfwise_chef_token or shelfwise-auth) with a "connection is shaky" toast;
+        only forces login when no local token at all.
+        Verified: /api/auth/me still 401 {"authed":false} unauthenticated; app compiles; login
+        redirect works. Owner Supabase sessions unaffected (persistSession + autoRefreshToken on).
+        DISCOVERY (round 12 context): user's REAL production is https://www.shelfwise.co.in (Vercel,
+        has latest code + migrations, cron endpoint returns ok:true, 2 kitchens, daily email already
+        sent). kitchen-stock-39.emergent.host is an empty shell WITHOUT Supabase env vars — ignore.
+        User was told to point cron-job.org at https://www.shelfwise.co.in/api/cron/push-alerts.
+
     - agent: "testing"
       message: |
         ✅ HARDENING TEST COMPLETE - GET /api/cron/push-alerts (3/3 tests passed)
