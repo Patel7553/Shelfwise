@@ -12,8 +12,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe } from 'lucide-react'
-import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe, Users, Lock, Delete, Eye, EyeOff } from 'lucide-react'
+import { apiFetch, signOutAll, getChefToken, setChefToken, clearChefToken } from '@/lib/apiClient'
+import { getBrowserSupabase } from '@/lib/supabaseBrowser'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
 import { useT } from '@/lib/i18n'
@@ -55,6 +56,158 @@ function useTheme() {
 }
 
 function ThemeToggle() { return null }
+
+// ============================================================================
+// KIOSK STAFF-CODE LOCK (June 2025) — shared-tablet flow.
+// The Head Chef/owner logs in once with email+password; the tablet then locks
+// to this screen. Each staff member taps THEIR 4-digit code to start their
+// session (their name is stamped on everything they do). The owner's own code
+// unlocks full owner mode. Fallback: owner password unlock.
+// ============================================================================
+function PinLockScreen({ kitchenName, ownerEmail, onOwnerUnlock, onStaffUnlock }) {
+  const [pin, setPin] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [shake, setShake] = useState(false)
+  const [pwMode, setPwMode] = useState(false)
+  const [pw, setPw] = useState('')
+  const [showPw, setShowPw] = useState(false)
+
+  const submitPin = async (fullPin) => {
+    setBusy(true)
+    try {
+      const res = await fetch('/api/staff/pin-login', {
+        method: 'POST',
+        body: JSON.stringify({ pin: fullPin }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Wrong staff code')
+      if (data.owner) {
+        toast.success(`Welcome back!`)
+        onOwnerUnlock(data.personName || 'Owner')
+      } else {
+        toast.success(`Welcome, ${data.personName}!`)
+        onStaffUnlock(data)
+      }
+    } catch (e) {
+      toast.error(e.message || 'Wrong staff code')
+      setShake(true)
+      setTimeout(() => setShake(false), 500)
+      setPin('')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const press = (d) => {
+    if (busy) return
+    const next = (pin + d).slice(0, 4)
+    setPin(next)
+    if (next.length === 4) submitPin(next)
+  }
+
+  const submitPassword = async (e) => {
+    e.preventDefault()
+    if (!pw) return
+    setBusy(true)
+    try {
+      const sb = getBrowserSupabase()
+      const { error } = await sb.auth.signInWithPassword({ email: (ownerEmail || '').toLowerCase(), password: pw })
+      if (error) throw new Error('Wrong password')
+      toast.success('Unlocked')
+      onOwnerUnlock('Owner')
+    } catch (err) {
+      toast.error(err.message || 'Wrong password')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'back']
+
+  return (
+    <div className="fixed inset-0 z-[100] bg-gradient-to-br from-emerald-900 via-emerald-800 to-teal-900 flex flex-col items-center justify-center p-4 select-none">
+      <img src="/logo-icon.png" alt="" className="h-14 w-14 rounded-2xl object-contain bg-white shadow-lg mb-3" />
+      <h1 className="text-white font-bold text-xl uppercase tracking-wide text-center">{kitchenName || 'ShelfWise'}</h1>
+
+      {!pwMode ? (
+        <>
+          <p className="text-emerald-200 text-sm mt-1 mb-5">Enter your staff code</p>
+          {/* PIN dots */}
+          <div className={`flex gap-4 mb-6 ${shake ? 'animate-bounce' : ''}`}>
+            {[0, 1, 2, 3].map(i => (
+              <div key={i} className={`h-5 w-5 rounded-full border-2 transition-all ${i < pin.length ? 'bg-white border-white scale-110' : 'border-emerald-300/60'}`} />
+            ))}
+          </div>
+          {/* Keypad */}
+          <div className="grid grid-cols-3 gap-3 w-full max-w-[280px]">
+            {keys.map((k, idx) => k === '' ? (
+              <div key={idx} />
+            ) : k === 'back' ? (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => setPin(p => p.slice(0, -1))}
+                disabled={busy}
+                className="h-16 rounded-2xl bg-white/10 text-white flex items-center justify-center active:bg-white/30 transition"
+                aria-label="Delete"
+              >
+                <Delete className="h-6 w-6" />
+              </button>
+            ) : (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => press(k)}
+                disabled={busy}
+                className="h-16 rounded-2xl bg-white/10 text-white text-2xl font-bold active:bg-white/30 transition"
+              >
+                {k}
+              </button>
+            ))}
+          </div>
+          {busy && <Loader2 className="h-5 w-5 animate-spin text-white mt-4" />}
+          <button type="button" onClick={() => setPwMode(true)} className="text-emerald-300 text-xs mt-6 underline underline-offset-2">
+            I'm the owner — unlock with password
+          </button>
+          <p className="text-emerald-400/70 text-[11px] mt-2 text-center max-w-[280px]">
+            No code yet? Ask the owner — codes are in Settings → Staff.
+          </p>
+        </>
+      ) : (
+        <form onSubmit={submitPassword} className="w-full max-w-[300px] mt-5 space-y-3">
+          <p className="text-emerald-200 text-sm text-center">Owner unlock — enter your account password</p>
+          <div className="relative">
+            <Input
+              type={showPw ? 'text' : 'password'}
+              value={pw}
+              onChange={e => setPw(e.target.value)}
+              placeholder="Password"
+              autoFocus
+              className="bg-white pr-10"
+            />
+            <button type="button" onClick={() => setShowPw(v => !v)} tabIndex={-1} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400">
+              {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
+          <Button type="submit" disabled={busy} className="w-full bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-bold">
+            {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Lock className="h-4 w-4 mr-2" />} Unlock
+          </Button>
+          <button type="button" onClick={() => { setPwMode(false); setPw('') }} className="text-emerald-300 text-xs w-full text-center underline underline-offset-2">
+            Back to staff code
+          </button>
+        </form>
+      )}
+
+      <button
+        type="button"
+        onClick={async () => { await signOutAll(); try { localStorage.removeItem('sw_kiosk_user'); localStorage.removeItem('sw_kiosk') } catch {}; window.location.href = '/login' }}
+        className="text-emerald-500/70 text-[11px] mt-8 underline underline-offset-2"
+      >
+        Log this device out completely
+      </button>
+    </div>
+  )
+}
 
 // ============================================================================
 // ShelfSelect — Location/Shelf dropdown (user request, round 3).
@@ -274,6 +427,8 @@ function App() {
   const [namePromptOpen, setNamePromptOpen] = useState(false)   // "add your name" popup for existing users
   const [namePromptValue, setNamePromptValue] = useState('')
   const [namePromptBusy, setNamePromptBusy] = useState(false)
+  const [kioskLocked, setKioskLocked] = useState(false)         // owner device → staff-code lock screen
+  const [isKioskDevice, setIsKioskDevice] = useState(false)     // chef session started FROM the kiosk lock
   const router = useRouter()
 
   // Check auth on mount by calling /api/auth/me.
@@ -302,6 +457,12 @@ function App() {
           if (data?.role === 'chef') {
             try { if (!localStorage.getItem('sw_person_name')) setNamePromptOpen(true) } catch {}
           }
+          // KIOSK: owner-authed devices lock to the staff-code screen until
+          // someone identifies themselves with their 4-digit code.
+          if (data?.role === 'owner' || (data?.role === 'admin' && data?.kitchen)) {
+            try { if (!localStorage.getItem('sw_kiosk_user')) setKioskLocked(true) } catch {}
+          }
+          try { setIsKioskDevice(localStorage.getItem('sw_kiosk') === '1') } catch {}
           return
         } catch {
           // Network/server hiccup — wait and retry (2s, 4s)
@@ -1601,6 +1762,37 @@ function App() {
 
   const formatDate = (d) => d ? new Date(d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—'
 
+  // ---- KIOSK unlock / switch-user handlers --------------------------------
+  const unlockAsOwner = (name) => {
+    try {
+      localStorage.setItem('sw_kiosk_user', JSON.stringify({ name: name || 'Owner', isOwner: true, at: Date.now() }))
+      if (name && name !== 'Owner' && !localStorage.getItem('sw_person_name')) localStorage.setItem('sw_person_name', name)
+    } catch {}
+    setKioskLocked(false)
+  }
+  const unlockAsStaff = (data) => {
+    try {
+      setChefToken(data.token)   // scoped staff JWT replaces owner token for all requests
+      localStorage.setItem('sw_person_name', data.personName || '')
+      localStorage.setItem('sw_kiosk', '1')
+      localStorage.setItem('sw_kiosk_user', JSON.stringify({ name: data.personName, at: Date.now() }))
+    } catch {}
+    window.location.reload()     // re-run auth/me under the staff token
+  }
+  const switchUser = () => {
+    try { localStorage.removeItem('sw_kiosk_user'); localStorage.removeItem('sw_person_name') } catch {}
+    if (me?.role === 'chef') {
+      // Staff session on the shared tablet — drop the staff token; the
+      // owner's session underneath brings the lock screen back.
+      clearChefToken()
+      try { localStorage.removeItem('sw_kiosk') } catch {}
+      window.location.reload()
+    } else {
+      setKioskLocked(true)
+    }
+  }
+  const showSwitchUser = me?.role === 'owner' || me?.role === 'admin' || (me?.role === 'chef' && isKioskDevice)
+
   // ---- AUTH GATE ----------------------------------------------------------
   if (authed === null) {
     return (
@@ -1630,6 +1822,18 @@ function App() {
   const hasRota = modulesEnabled.includes('rota')
   const hasHaccp = modulesEnabled.includes('haccp')
   const hasAnalytics = modulesEnabled.length === 0 || modulesEnabled.includes('analytics')
+
+  // ---- KIOSK LOCK — staff must enter their 4-digit code ----
+  if (kioskLocked && me && (me.role === 'owner' || me.role === 'admin')) {
+    return (
+      <PinLockScreen
+        kitchenName={settings.kitchenName || me?.kitchen?.kitchenName || ''}
+        ownerEmail={me?.userEmail || ''}
+        onOwnerUnlock={unlockAsOwner}
+        onStaffUnlock={unlockAsStaff}
+      />
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-amber-50/30 via-white to-emerald-50/40">
@@ -1724,6 +1928,11 @@ function App() {
                 <ShieldCheck className="h-4 w-4 mr-1" /> {T('nav_admin')}
               </Button>
             )}
+            {showSwitchUser && (
+              <Button variant="ghost" size="icon" onClick={switchUser} title="Switch user — back to staff code screen" className="text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50">
+                <Users className="h-4 w-4" />
+              </Button>
+            )}
             <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title={T('nav_settings')}>
               <Settings className="h-4 w-4" />
             </Button>
@@ -1781,6 +1990,11 @@ function App() {
                 onClick={() => { setMobileNav(false); router.push('/admin') }}
               >
                 <ShieldCheck className="h-4 w-4 mr-2" /> {T('nav_admin')}
+              </Button>
+            )}
+            {showSwitchUser && (
+              <Button variant="ghost" className="w-full justify-start text-indigo-600" onClick={() => { setMobileNav(false); switchUser() }}>
+                <Users className="h-4 w-4 mr-2" /> Switch user
               </Button>
             )}
             <Button variant="ghost" className="w-full justify-start" onClick={() => { setSettingsOpen(true); setMobileNav(false) }}>

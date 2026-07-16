@@ -27,16 +27,18 @@ export default function LoginPage() {
   const [showPw, setShowPw] = useState(false)
   const [ownerBusy, setOwnerBusy] = useState(false)
 
-  // Chef form
+  // Staff form (personal phone: kitchen name + 4-digit staff code)
   const [kitchenName, setKitchenName] = useState('')
-  const [code, setCode] = useState('')
-  const [personName, setPersonName] = useState('')
+  const [staffPin, setStaffPin] = useState('')
   const [ownerName, setOwnerName] = useState('')
   const [chefBusy, setChefBusy] = useState(false)
 
-  // Prefill the person's name if they've logged in on this phone before
+  // Prefill from previous logins on this phone
   useEffect(() => {
-    try { const n = localStorage.getItem('sw_person_name'); if (n) { setPersonName(n); setOwnerName(n) } } catch {}
+    try {
+      const n = localStorage.getItem('sw_person_name'); if (n) setOwnerName(n)
+      const k = localStorage.getItem('sw_kitchen_name'); if (k) setKitchenName(k)
+    } catch {}
   }, [])
 
   // Stable per-device id — lets the same person log in again with their name,
@@ -91,6 +93,8 @@ export default function LoginPage() {
       }
       // Remember the owner's display name — stamped on items they add + activity log
       if (ownerName.trim()) { try { localStorage.setItem('sw_person_name', ownerName.trim()) } catch {} }
+      // Fresh owner login → engage the staff-code lock screen on this device
+      try { localStorage.removeItem('sw_kiosk_user'); localStorage.removeItem('sw_kiosk') } catch {}
       toast.success('Welcome back!')
       router.replace(me.isAdmin ? '/admin' : '/')
     } catch (err) {
@@ -119,47 +123,30 @@ export default function LoginPage() {
 
   async function submitChef(e) {
     e.preventDefault()
-    if (!kitchenName.trim() || !code.trim()) return
-    if (!personName.trim()) { toast.error('Please enter your name — it shows on everything you add'); return }
+    if (!kitchenName.trim()) return
+    if (!/^\d{4}$/.test(staffPin.trim())) { toast.error('Enter your 4-digit staff code'); return }
     setChefBusy(true)
-    const attempt = async (claimName) => apiJson('/api/auth/chef-login', {
-      method: 'POST',
-      body: JSON.stringify({
-        kitchenName: kitchenName.trim(),
-        code: code.trim().toUpperCase(),
-        personName: personName.trim(),
-        deviceId: getDeviceId(),
-        ...(claimName ? { claimName: true } : {}),
-      }),
-    })
     try {
       // Make sure any owner session is cleared so we don't send both tokens.
       try { const sb = getBrowserSupabase(); await sb.auth.signOut() } catch {}
-      let res
-      try {
-        res = await attempt(false)
-      } catch (err) {
-        // Name in use on another device — could be the SAME person on a new
-        // phone/PC/browser. Ask, then move the name to this device.
-        if (err.status === 409 && err.data?.nameConflict) {
-          const itsMe = window.confirm(
-            `The name "${personName.trim()}" is already used on another device in this kitchen.\n\n` +
-            `Is this YOU logging in from a new phone/PC/browser?\n\n` +
-            `OK = yes, it's me (move my name to this device)\n` +
-            `Cancel = no, I'll pick a different name`
-          )
-          if (!itsMe) { toast.info('Please choose a different name'); return }
-          res = await attempt(true)
-        } else {
-          throw err
-        }
-      }
+      const res = await apiJson('/api/auth/staff-pin-login', {
+        method: 'POST',
+        body: JSON.stringify({
+          kitchenName: kitchenName.trim(),
+          pin: staffPin.trim(),
+          deviceId: getDeviceId(),
+        }),
+      })
       setChefToken(res.token)
-      try { localStorage.setItem('sw_person_name', personName.trim()) } catch {}
-      toast.success(`Welcome, ${personName.trim()}!`)
+      try {
+        localStorage.setItem('sw_person_name', res.personName || '')
+        localStorage.setItem('sw_kitchen_name', kitchenName.trim())
+        localStorage.removeItem('sw_kiosk') // personal phone, not a shared tablet
+      } catch {}
+      toast.success(`Welcome, ${res.personName}!`)
       router.replace('/')
     } catch (err) {
-      toast.error(err.message || 'Chef login failed')
+      toast.error(err.message || 'Staff login failed')
     } finally {
       setChefBusy(false)
     }
@@ -180,7 +167,7 @@ export default function LoginPage() {
             <Tabs value={tab} onValueChange={setTab}>
               <TabsList className="grid w-full grid-cols-2 mb-4">
                 <TabsTrigger value="owner">📧 Email</TabsTrigger>
-                <TabsTrigger value="chef">🔑 Code</TabsTrigger>
+                <TabsTrigger value="chef">🔢 Staff Code</TabsTrigger>
               </TabsList>
 
               <TabsContent value="owner">
@@ -223,14 +210,19 @@ export default function LoginPage() {
                     <Input id="kname" value={kitchenName} onChange={e => setKitchenName(e.target.value)} placeholder="e.g. Bella Cucina" required autoFocus />
                   </div>
                   <div>
-                    <Label htmlFor="code">Today's chef code</Label>
-                    <Input id="code" value={code} onChange={e => setCode(e.target.value.toUpperCase())} placeholder="e.g. TIGER-42" required style={{ letterSpacing: '2px', fontFamily: 'monospace' }} />
-                    <p className="text-[11px] text-slate-500 mt-1">Ask your kitchen manager for today's code. It changes daily at midnight.</p>
-                  </div>
-                  <div>
-                    <Label htmlFor="pname">Your name</Label>
-                    <Input id="pname" value={personName} onChange={e => setPersonName(e.target.value)} placeholder="e.g. Maria" maxLength={40} required />
-                    <p className="text-[11px] text-slate-500 mt-1">Shows on everything you add. Each person needs their own name.</p>
+                    <Label htmlFor="staffpin">Your staff code</Label>
+                    <Input
+                      id="staffpin"
+                      value={staffPin}
+                      onChange={e => setStaffPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                      placeholder="• • • •"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      required
+                      className="text-center text-2xl font-bold tracking-[0.6em]"
+                      style={{ fontFamily: 'monospace' }}
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">Your personal 4-digit code — ask your manager if you don't have one yet.</p>
                   </div>
                   <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700" disabled={chefBusy}>
                     {chefBusy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ChefHat className="h-4 w-4 mr-2" />}

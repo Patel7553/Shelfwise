@@ -586,7 +586,7 @@ export function RecentItemsToday({ products, goToInventory, openEdit }) {
                       {p.quantity} {p.unit}
                       {p.storageType ? ` · ${p.storageType}` : ''}
                       {p.expiryDate ? ` · exp ${p.expiryDate}` : ''}
-                      {p.preparedBy ? ` · by ${p.preparedBy}` : ''}
+                      {p.preparedBy ? ` · by ${p.preparedBy}` : (p.addedBy ? ` · by ${p.addedBy}` : '')}
                     </p>
                   </div>
                   <div className="text-[11px] text-slate-400 shrink-0 whitespace-nowrap">{time}</div>

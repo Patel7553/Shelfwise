@@ -202,6 +202,7 @@ function fromDb(row) {
     source: row.source || 'manual',
     sourceMeta: row.source_meta || null,
     customFields: cf,
+    addedBy: cf._addedBy || '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -1645,9 +1646,11 @@ async function requireAdmin(request) {
 }
 
 // ---- Activity log helpers ----
-// WHO did the action: the x-person-name header is attached automatically by the
-// client (set at login), falling back to the auth identity.
+// WHO did the action: staff-PIN logins embed the person in the JWT (can't be
+// spoofed); otherwise the x-person-name header (set at login) is used,
+// falling back to the auth identity.
 function personFromRequest(request, ctx) {
+  if (ctx?.person) return String(ctx.person).slice(0, 40)
   try {
     const h = request.headers.get('x-person-name')
     if (h) {
@@ -1656,6 +1659,39 @@ function personFromRequest(request, ctx) {
     }
   } catch {}
   return ctx?.userEmail || (ctx?.role === 'chef' ? 'Chef (code login)' : ctx?.role || 'Unknown')
+}
+
+// ---- Staff PIN helpers ----
+// 4-digit staff codes, unique per kitchen. Stored inside kitchens.staff_names
+// jsonb entries as { pin: "4829" } — no schema migration required.
+function genPin(taken = new Set()) {
+  for (let i = 0; i < 200; i++) {
+    const pin = String(Math.floor(1000 + Math.random() * 9000))
+    if (!taken.has(pin)) return pin
+  }
+  return String(Math.floor(1000 + Math.random() * 9000))
+}
+
+// Ensure every staff entry has a unique PIN + an Owner entry exists.
+// Returns { list, changed } — caller persists when changed is true.
+function ensureStaffPins(rawList) {
+  const list = Array.isArray(rawList) ? rawList.map(e => ({ ...e })) : []
+  let changed = false
+  const taken = new Set(list.map(e => e?.pin).filter(Boolean))
+  if (!list.some(e => e?.isOwner)) {
+    const pin = genPin(taken)
+    taken.add(pin)
+    list.unshift({ name: 'Owner', isOwner: true, role: 'manager', pin, perms: [] })
+    changed = true
+  }
+  for (const e of list) {
+    if (!e.pin) {
+      e.pin = genPin(taken)
+      taken.add(e.pin)
+      changed = true
+    }
+  }
+  return { list, changed }
 }
 
 // Best-effort insert into activity_logs — never fails the main request.
@@ -1894,12 +1930,22 @@ export async function GET(request, { params }) {
       let personName = null
       let personRole = null
       let personPerms = []
-      try {
-        const h = request.headers.get('x-person-name')
-        if (h) personName = decodeURIComponent(h).trim().slice(0, 40) || null
-      } catch {}
-      if (ctx.role === 'chef' && ctx.kitchen) {
-        const list = Array.isArray(ctx.kitchen.staff_names) ? ctx.kitchen.staff_names : []
+      // Staff-PIN tokens embed the person (authoritative); header is fallback
+      // for legacy daily-code logins.
+      if (ctx.person) personName = ctx.person
+      if (!personName) {
+        try {
+          const h = request.headers.get('x-person-name')
+          if (h) personName = decodeURIComponent(h).trim().slice(0, 40) || null
+        } catch {}
+      }
+      let chefKitchen = ctx.kitchen
+      if (ctx.role === 'chef' && !chefKitchen && ctx.kitchenId) {
+        const { data: kRow } = await sb.from('kitchens').select('*').eq('id', ctx.kitchenId).maybeSingle()
+        chefKitchen = kRow || null
+      }
+      if (ctx.role === 'chef' && chefKitchen) {
+        const list = Array.isArray(chefKitchen.staff_names) ? chefKitchen.staff_names : []
         const entry = personName ? list.find(x => String(x?.name || '').toLowerCase() === personName.toLowerCase()) : null
         personRole = entry?.role === 'manager' ? 'manager' : 'staff'
         personPerms = personRole === 'manager'
@@ -1914,7 +1960,7 @@ export async function GET(request, { params }) {
         personName,
         personRole,
         personPerms,
-        kitchen: kitchenToApi(ctx.kitchen),
+        kitchen: kitchenToApi(ctx.kitchen || chefKitchen),
       })
     }
 
@@ -2224,19 +2270,24 @@ export async function GET(request, { params }) {
       }
     }
 
-    // ------- Staff list (owner only) — names that have logged in via code -------
+    // ------- Staff list (owner only) — includes each person's 4-digit PIN -------
     if (path === 'staff') {
       const { ctx, error } = await requireAuth(request)
       if (error) return error
       if (ctx.role !== 'owner' && ctx.role !== 'admin') return json({ error: 'Owner only' }, 403)
       const kId = ctx.kitchenId || ctx.kitchen?.id
       const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', kId).maybeSingle()
-      const staff = Array.isArray(k?.staff_names) ? k.staff_names : []
+      // Auto-generate PINs for existing staff + create the Owner PIN entry.
+      const { list, changed } = ensureStaffPins(k?.staff_names)
+      if (changed) {
+        const { error: uErr } = await sb.from('kitchens').update({ staff_names: list }).eq('id', kId)
+        if (uErr) return json({ error: 'Could not save PINs — run migration-17 in Supabase' }, 500)
+      }
       return json({
-        staff: staff
-          .map(s => ({ name: s?.name || '', lastSeen: s?.lastSeen || null, role: s?.role === 'manager' ? 'manager' : 'staff', perms: Array.isArray(s?.perms) ? s.perms : [] }))
+        staff: list
+          .map(s => ({ name: s?.name || '', lastSeen: s?.lastSeen || null, role: s?.role === 'manager' ? 'manager' : 'staff', perms: Array.isArray(s?.perms) ? s.perms : [], pin: s?.pin || '', isOwner: !!s?.isOwner }))
           .filter(s => s.name)
-          .sort((a, b) => new Date(b.lastSeen || 0) - new Date(a.lastSeen || 0)),
+          .sort((a, b) => (b.isOwner - a.isOwner) || (new Date(b.lastSeen || 0) - new Date(a.lastSeen || 0))),
       })
     }
 
@@ -2250,7 +2301,7 @@ export async function GET(request, { params }) {
       const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 100)
       const offset = Math.max(Number(url.searchParams.get('offset')) || 0, 0)
       const { data, error: aErr } = await sb.from('activity_logs').select('*')
-        .eq('kitchen_id', kId).order('created_at', { ascending: false })
+        .eq('kitchen_id', kId).neq('action', 'login').order('created_at', { ascending: false })
         .range(offset, offset + limit - 1)
       if (aErr) {
         if (/does not exist|schema cache/i.test(aErr.message || '')) {
@@ -2325,11 +2376,97 @@ export async function POST(request, { params }) {
       }
       const next = [
         ...list.filter(e => String(e?.name || '').toLowerCase() !== lower),
-        { name: personName, deviceId, role: existing?.role === 'manager' ? 'manager' : 'staff', perms: Array.isArray(existing?.perms) ? existing.perms : [], lastSeen: new Date().toISOString() },
+        { ...(existing || {}), name: personName, deviceId, role: existing?.role === 'manager' ? 'manager' : 'staff', perms: Array.isArray(existing?.perms) ? existing.perms : [], lastSeen: new Date().toISOString() },
       ].slice(-100)
       const { error: uErr } = await sb.from('kitchens').update({ staff_names: next }).eq('id', ctx.kitchenId)
       if (uErr) return json({ error: 'Could not save name — run migration-17 in Supabase' }, 500)
       return json({ ok: true, personName, personRole: existing?.role === 'manager' ? 'manager' : 'staff' })
+    }
+
+    // ------- Staff: owner adds a new staff member (PIN auto-generated) -------
+    if (path === 'staff/add') {
+      const { ctx, error } = await requireAuth(request)
+      if (error) return error
+      if (ctx.role !== 'owner' && ctx.role !== 'admin') return json({ error: 'Owner only' }, 403)
+      const kId = ctx.kitchenId || ctx.kitchen?.id
+      if (!kId) return json({ error: 'No kitchen' }, 403)
+      const body = await request.json()
+      const name = String(body.name || '').trim().slice(0, 40)
+      if (!name) return json({ error: 'Name required' }, 400)
+      const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', kId).maybeSingle()
+      const { list } = ensureStaffPins(k?.staff_names)
+      if (list.some(e => String(e?.name || '').toLowerCase() === name.toLowerCase())) {
+        return json({ error: `"${name}" already exists in this kitchen` }, 409)
+      }
+      const taken = new Set(list.map(e => e?.pin).filter(Boolean))
+      const entry = { name, pin: genPin(taken), role: 'staff', perms: [], lastSeen: null }
+      const next = [...list, entry].slice(-100)
+      const { error: uErr } = await sb.from('kitchens').update({ staff_names: next }).eq('id', kId)
+      if (uErr) return json({ error: 'Could not save — run migration-17 in Supabase' }, 500)
+      return json({ ok: true, staff: entry }, 201)
+    }
+
+    // ------- Staff: owner regenerates someone's PIN -------
+    if (path === 'staff/regenerate-pin') {
+      const { ctx, error } = await requireAuth(request)
+      if (error) return error
+      if (ctx.role !== 'owner' && ctx.role !== 'admin') return json({ error: 'Owner only' }, 403)
+      const kId = ctx.kitchenId || ctx.kitchen?.id
+      const body = await request.json()
+      const target = String(body.name || '').trim().toLowerCase()
+      if (!target) return json({ error: 'Name required' }, 400)
+      const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', kId).maybeSingle()
+      const { list } = ensureStaffPins(k?.staff_names)
+      const taken = new Set(list.map(e => e?.pin).filter(Boolean))
+      let newPin = null
+      const next = list.map(e => {
+        if (String(e?.name || '').toLowerCase() === target) {
+          newPin = genPin(taken)
+          return { ...e, pin: newPin }
+        }
+        return e
+      })
+      if (!newPin) return json({ error: 'Name not found' }, 404)
+      const { error: uErr } = await sb.from('kitchens').update({ staff_names: next }).eq('id', kId)
+      if (uErr) return json({ error: 'Could not save' }, 500)
+      return json({ ok: true, name: body.name, pin: newPin })
+    }
+
+    // ------- KIOSK: unlock with a 4-digit staff code (shared tablet flow) -------
+    // Device is already authed (owner session or chef token). The person taps
+    // in THEIR pin; staff get a scoped chef JWT with their name embedded, the
+    // owner PIN unlocks full owner mode. Login events are NOT activity-logged
+    // (user request — keeps the log clean).
+    if (path === 'staff/pin-login') {
+      const { ctx, error } = await requireOwnerOrChef(request)
+      if (error) return error
+      const body = await request.json()
+      const pin = String(body.pin || '').trim()
+      if (!/^\d{4}$/.test(pin)) return json({ error: 'Enter your 4-digit staff code' }, 400)
+      const kId = ctx.kitchenId
+      const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', kId).maybeSingle()
+      const { list, changed } = ensureStaffPins(k?.staff_names)
+      if (changed) await sb.from('kitchens').update({ staff_names: list }).eq('id', kId)
+      const entry = list.find(e => e?.pin === pin)
+      if (!entry) return json({ error: 'Wrong staff code — check with your manager' }, 401)
+      if (entry.isOwner) {
+        // Owner mode only allowed when the device holds a real owner session.
+        if (ctx.role !== 'owner' && ctx.role !== 'admin') {
+          return json({ error: 'Owner code only works on a device where the owner logged in with email & password' }, 403)
+        }
+        return json({ ok: true, owner: true, personName: entry.name || 'Owner' })
+      }
+      // Update lastSeen (best-effort)
+      const next = list.map(e => e?.pin === pin ? { ...e, lastSeen: new Date().toISOString() } : e)
+      await sb.from('kitchens').update({ staff_names: next }).eq('id', kId)
+      const token = signChefToken(kId, entry.name)
+      return json({
+        ok: true,
+        token,
+        personName: entry.name,
+        personRole: entry.role === 'manager' ? 'manager' : 'staff',
+        perms: Array.isArray(entry.perms) ? entry.perms : [],
+      })
     }
 
 
@@ -2475,6 +2612,42 @@ export async function POST(request, { params }) {
       return json({ ok: true })
     }
 
+    // ------- PERSONAL PHONE: staff login with kitchen name + 4-digit code -------
+    // Public endpoint. Staff on their OWN device enter the kitchen name and
+    // their personal staff code — no owner password, no daily code.
+    if (path === 'auth/staff-pin-login') {
+      const body = await request.json()
+      const name = String(body.kitchenName || '').trim()
+      const pin = String(body.pin || '').trim()
+      const deviceId = String(body.deviceId || '').trim().slice(0, 64)
+      if (!name || !/^\d{4}$/.test(pin)) return json({ error: 'Kitchen name and your 4-digit staff code are required' }, 400)
+
+      const { data: kitchens } = await sb.from('kitchens').select('*').ilike('kitchen_name', name).eq('status', 'approved').limit(5)
+      if (!kitchens || kitchens.length === 0) return json({ error: 'Kitchen not found or not approved' }, 404)
+
+      for (const k of kitchens) {
+        const list = Array.isArray(k.staff_names) ? k.staff_names : []
+        const entry = list.find(e => e?.pin === pin && !e?.isOwner)
+        if (entry) {
+          const next = list.map(e => e?.pin === pin ? { ...e, deviceId: deviceId || e.deviceId, lastSeen: new Date().toISOString() } : e)
+          await sb.from('kitchens').update({ staff_names: next }).eq('id', k.id)
+          const token = signChefToken(k.id, entry.name)
+          return json({
+            ok: true,
+            token,
+            kitchen: kitchenToApi(k),
+            personName: entry.name,
+            personRole: entry.role === 'manager' ? 'manager' : 'staff',
+          })
+        }
+        // Owner PINs never work on personal phones — owners use email login.
+        if (list.find(e => e?.pin === pin && e?.isOwner)) {
+          return json({ error: 'That is the owner code — owners log in with email & password' }, 403)
+        }
+      }
+      return json({ error: 'Wrong staff code — check with your manager, or ask them to set you up in Settings → Staff' }, 401)
+    }
+
     if (path === 'auth/chef-login') {
       // Body: { kitchenName, code, personName?, deviceId? }
       const body = await request.json()
@@ -2514,7 +2687,7 @@ export async function POST(request, { params }) {
             }
             const next = [
               ...list.filter(e => String(e?.name || '').toLowerCase() !== lower),
-              { name: personName, deviceId, role: existing?.role === 'manager' ? 'manager' : 'staff', perms: Array.isArray(existing?.perms) ? existing.perms : [], lastSeen: new Date().toISOString() },
+              { ...(existing || {}), name: personName, deviceId, role: existing?.role === 'manager' ? 'manager' : 'staff', perms: Array.isArray(existing?.perms) ? existing.perms : [], lastSeen: new Date().toISOString() },
             ].slice(-100)
             await sb.from('kitchens').update({ staff_names: next }).eq('id', k.id)
             // (update error = staff_names column missing → uniqueness not enforced; ignore)
@@ -3247,6 +3420,8 @@ Output strictly valid JSON with no other text.`
       if (path === 'products') {
         const body = await request.json()
         let doc = { id: uuidv4(), kitchen_id: kid, ...toDb(body) }
+        // Attribution: stamp WHO added this item (shown on the item card).
+        doc.custom_fields = { ...(doc.custom_fields || {}), _addedBy: personFromRequest(request, ctx) }
         let { data, error } = await sb.from('products').insert(doc).select().single()
         if (error && /column .* does not exist|schema cache/i.test(error.message || '')) {
           const {
@@ -3272,7 +3447,12 @@ Output strictly valid JSON with no other text.`
       if (path === 'products/bulk') {
         const body = await request.json()
         const itemsIn = Array.isArray(body.items) ? body.items : []
-        const docs = itemsIn.filter(i => i.name).map(b => ({ id: uuidv4(), kitchen_id: kid, ...toDb(b) }))
+        const bulkPerson = personFromRequest(request, ctx)
+        const docs = itemsIn.filter(i => i.name).map(b => {
+          const d = { id: uuidv4(), kitchen_id: kid, ...toDb(b) }
+          d.custom_fields = { ...(d.custom_fields || {}), _addedBy: bulkPerson }
+          return d
+        })
         if (!docs.length) return json({ inserted: 0, items: [] }, 201)
         let { data, error } = await sb.from('products').insert(docs).select()
         // Retry gracefully if any newer column (from a not-yet-run migration) is missing.
@@ -3721,6 +3901,8 @@ export async function DELETE(request, { params }) {
       const target = decodeURIComponent(segs[1]).trim().toLowerCase()
       const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', ctx.kitchenId).maybeSingle()
       const list = Array.isArray(k?.staff_names) ? k.staff_names : []
+      const victim = list.find(e => String(e?.name || '').toLowerCase() === target)
+      if (victim?.isOwner) return json({ error: 'The owner entry cannot be removed' }, 400)
       const next = list.filter(e => String(e?.name || '').toLowerCase() !== target)
       const { error: uErr } = await sb.from('kitchens').update({ staff_names: next }).eq('id', ctx.kitchenId)
       if (uErr) throw uErr

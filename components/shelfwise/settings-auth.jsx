@@ -862,7 +862,14 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
 
           {tab === 'login' && (
             <div className="space-y-5">
-              <ChefCodeCard />
+              {/* Old daily chef-code card removed (June 2025) — replaced by the
+                  4-digit Staff Code system (Settings → Staff). */}
+              <div className="rounded-lg border-2 border-indigo-200 bg-indigo-50 p-4">
+                <Label className="text-indigo-900 text-sm font-bold">🔢 Staff Codes</Label>
+                <p className="text-xs text-indigo-700 mt-1">
+                  Staff now log in with their personal <b>4-digit staff code</b> — on the kitchen tablet (after you log in) or on their own phone with the kitchen name. Manage everyone's codes in <b>Settings → Staff</b>.
+                </p>
+              </div>
 
               {/* Alert Email input removed (user request) — every email (daily
                   expiry alerts, weekly digest, password reset) now goes to the
@@ -1797,6 +1804,16 @@ export function StaffActivityCard() {
   const [loading, setLoading] = useState(true)
   const [removing, setRemoving] = useState('')
 
+  // Add-staff form
+  const [addName, setAddName] = useState('')
+  const [adding, setAdding] = useState(false)
+
+  // Activity history (lazy-loaded)
+  const [showActivity, setShowActivity] = useState(false)
+  const [activity, setActivity] = useState([])
+  const [activityLoading, setActivityLoading] = useState(false)
+  const [activityHasMore, setActivityHasMore] = useState(false)
+
   const load = async () => {
     setLoading(true)
     try {
@@ -1807,6 +1824,63 @@ export function StaffActivityCard() {
     } catch {} finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
+
+  const addStaff = async (e) => {
+    e?.preventDefault?.()
+    const name = addName.trim()
+    if (!name) { toast.error('Type the person\'s name first'); return }
+    setAdding(true)
+    try {
+      const res = await fetch('/api/staff/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not add')
+      setAddName('')
+      toast.success(`${name} added — their staff code is ${data.staff?.pin}`)
+      load()
+    } catch (err) { toast.error(err.message || 'Could not add staff member') } finally { setAdding(false) }
+  }
+
+  const regeneratePin = async (s) => {
+    if (!window.confirm(`Generate a NEW staff code for "${s.name}"?\n\nTheir old code stops working immediately — tell them the new one.`)) return
+    setRemoving(s.name)
+    try {
+      const res = await fetch('/api/staff/regenerate-pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: s.name }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || '')
+      toast.success(`New code for ${s.name}: ${data.pin}`)
+      setStaff(prev => prev.map(x => x.name === s.name ? { ...x, pin: data.pin } : x))
+    } catch (err) { toast.error(err.message || 'Could not change the code') } finally { setRemoving('') }
+  }
+
+  const loadActivity = async (offset = 0) => {
+    setActivityLoading(true)
+    try {
+      const res = await fetch(`/api/activity?limit=50&offset=${offset}`)
+      const data = await res.json().catch(() => ({}))
+      const items = Array.isArray(data.items) ? data.items : []
+      setActivity(prev => offset === 0 ? items : [...prev, ...items])
+      setActivityHasMore(!!data.hasMore)
+    } catch {} finally { setActivityLoading(false) }
+  }
+  const toggleActivity = () => {
+    const next = !showActivity
+    setShowActivity(next)
+    if (next && activity.length === 0) loadActivity(0)
+  }
+
+  const ACTION_LABEL = {
+    item_added: '➕ Added item', item_updated: '✏️ Edited item', item_deleted: '🗑️ Deleted item',
+    waste_logged: '♻️ Logged waste', temp_logged: '🌡️ Logged temperature',
+    recipe_saved: '📖 Saved recipe', recipe_updated: '📖 Edited recipe', recipe_deleted: '📖 Deleted recipe',
+  }
 
   const removeStaff = async (name) => {
     if (!window.confirm(`Remove "${name}" from the staff list?\n\nTheir past activity stays in the log — this just frees the name so it can be used again.`)) return
@@ -1881,36 +1955,69 @@ export function StaffActivityCard() {
 
   if (!allowed) return null
 
+  const ownerEntry = staff.find(s => s.isOwner)
+  const staffOnly = staff.filter(s => !s.isOwner)
+
   return (
     <div className="rounded-lg border-2 border-indigo-200 bg-indigo-50/40 p-4">
       <div className="flex items-center justify-between gap-2">
         <div>
-          <Label className="text-indigo-900 text-sm font-bold">👥 Staff</Label>
-          <p className="text-xs text-indigo-700 mt-0.5">People who logged in with the kitchen code, and their access.</p>
+          <Label className="text-indigo-900 text-sm font-bold">👥 Staff & Staff Codes</Label>
+          <p className="text-xs text-indigo-700 mt-0.5">Each person has their own 4-digit staff code. They tap it on the kitchen tablet — or use it with the kitchen name to log in on their own phone.</p>
         </div>
         <Button variant="outline" size="sm" type="button" onClick={load} disabled={loading} className="bg-white shrink-0">
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
         </Button>
       </div>
 
+      {/* Owner's own code */}
+      {ownerEntry && (
+        <div className="mt-3 rounded-lg border-2 border-emerald-300 bg-emerald-50 px-3 py-2.5 flex items-center justify-between gap-2">
+          <div>
+            <p className="text-xs font-bold text-emerald-900">🔑 Your owner code</p>
+            <p className="text-[11px] text-emerald-700">Unlocks full owner mode on the kitchen tablet. Keep it private.</p>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="font-mono text-lg font-bold tracking-[0.25em] bg-white border border-emerald-300 rounded-md px-2.5 py-1 text-emerald-900">{ownerEntry.pin}</span>
+            <Button variant="ghost" size="sm" type="button" onClick={() => regeneratePin(ownerEntry)} disabled={removing === ownerEntry.name} className="h-8 px-2" title="Generate a new owner code">
+              {removing === ownerEntry.name ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Add a staff member */}
+      <form onSubmit={addStaff} className="mt-3 flex gap-1.5">
+        <Input value={addName} onChange={e => setAddName(e.target.value)} placeholder="New staff member's name…" maxLength={40} className="bg-white h-9" />
+        <Button type="submit" size="sm" disabled={adding} className="h-9 bg-indigo-600 hover:bg-indigo-700 shrink-0">
+          {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Plus className="h-4 w-4 mr-1" /> Add</>}
+        </Button>
+      </form>
+
       {/* Staff names */}
       <div className="mt-3">
-        <p className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider mb-1.5">Staff names ({staff.length})</p>
-        {staff.length === 0 ? (
-          <p className="text-xs text-muted-foreground">Nobody has logged in with the code yet. Names appear here after staff log in with today's code + their name.</p>
+        <p className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider mb-1.5">Staff ({staffOnly.length})</p>
+        {staffOnly.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No staff yet. Add your team above — each person gets their own 4-digit staff code.</p>
         ) : (
           <div className="space-y-1.5">
-            {staff.map(s => (
+            {staffOnly.map(s => (
               <div key={s.name} className="bg-white rounded-lg border px-3 py-2.5">
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-sm font-semibold capitalize truncate">{s.name}</p>
                     <p className={`text-[11px] font-medium ${s.role === 'manager' ? 'text-emerald-700' : 'text-muted-foreground'}`}>{accessSummary(s)}</p>
-                    <p className="text-[10px] text-muted-foreground">Last active: {s.lastSeen ? fmtTime(s.lastSeen) : 'unknown'}</p>
+                    <p className="text-[10px] text-muted-foreground">Last active: {s.lastSeen ? fmtTime(s.lastSeen) : 'never logged in'}</p>
                   </div>
-                  <Button variant="ghost" size="sm" type="button" onClick={() => removeStaff(s.name)} disabled={removing === s.name} className="text-red-600 hover:bg-red-50 shrink-0 h-8 px-2" title="Remove person">
-                    {removing === s.name ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                  </Button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <span className="font-mono text-base font-bold tracking-[0.2em] bg-indigo-50 border border-indigo-200 rounded-md px-2 py-0.5 text-indigo-900" title={`${s.name}'s staff code`}>{s.pin || '— — — —'}</span>
+                    <Button variant="ghost" size="sm" type="button" onClick={() => regeneratePin(s)} disabled={removing === s.name} className="h-8 px-1.5" title="Generate a new code">
+                      <RefreshCw className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="sm" type="button" onClick={() => removeStaff(s.name)} disabled={removing === s.name} className="text-red-600 hover:bg-red-50 h-8 px-1.5" title="Remove person">
+                      {removing === s.name ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                    </Button>
+                  </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5 mt-2">
                   {s.role === 'manager' ? (
@@ -1958,7 +2065,42 @@ export function StaffActivityCard() {
         )}
       </div>
 
-      {/* Activity history section removed per user request (June 2025). */}
+      {/* Activity history — who did what (login events are never recorded) */}
+      <div className="mt-4">
+        <Button variant="outline" size="sm" type="button" onClick={toggleActivity} className="bg-white w-full">
+          <FileText className="h-4 w-4 mr-2" />
+          {showActivity ? 'Hide activity history' : 'Show activity history'}
+        </Button>
+        {showActivity && (
+          <div className="mt-2 rounded-lg border bg-white p-2.5 max-h-72 overflow-y-auto">
+            {activityLoading && activity.length === 0 ? (
+              <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin text-indigo-500" /></div>
+            ) : activity.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-3">No activity recorded yet. Actions like adding items, logging waste and temperatures appear here.</p>
+            ) : (
+              <div className="space-y-1">
+                {activity.map(a => (
+                  <div key={a.id} className="flex items-start justify-between gap-2 border-b last:border-0 py-1.5">
+                    <div className="min-w-0">
+                      <p className="text-xs">
+                        <span className="font-semibold capitalize">{a.person || 'Unknown'}</span>{' '}
+                        <span className="text-slate-600">{ACTION_LABEL[a.action] || a.action}</span>
+                      </p>
+                      {a.detail && <p className="text-[11px] text-muted-foreground truncate">{a.detail}</p>}
+                    </div>
+                    <span className="text-[10px] text-muted-foreground shrink-0 mt-0.5">{fmtTime(a.created_at)}</span>
+                  </div>
+                ))}
+                {activityHasMore && (
+                  <Button variant="ghost" size="sm" type="button" onClick={() => loadActivity(activity.length)} disabled={activityLoading} className="w-full h-8 text-xs">
+                    {activityLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Load more'}
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
