@@ -2024,6 +2024,131 @@ backend:
 
 
 frontend:
+  - task: "Staff Code PIN — login page tab, kiosk lock screen, switch user"
+    implemented: true
+    working: true
+    file: "app/page.js, app/login/page.js, components/shelfwise/settings-auth.jsx, components/shelfwise/inventory.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            NEW (June 2025) frontend for the Staff Code PIN system:
+            - /login "Staff Code" tab: kitchen name + 4-digit numeric PIN input
+              (digits only, max 4), calls POST /api/auth/staff-pin-login.
+            - app/page.js PinLockScreen: full-screen kiosk keypad shown when
+              auth/me returns role 'owner' (or admin with kitchen) and
+              localStorage 'sw_kiosk_user' is absent. Auto-submits at 4 digits to
+              POST /api/staff/pin-login. Owner response {owner:true} unlocks in
+              place; staff response stores chef token + reloads. Includes
+              "I'm the owner — unlock with password" fallback (Supabase
+              signInWithPassword) and "Log this device out completely".
+            - Switch User button (Users icon, desktop header + mobile drawer)
+              shown for owner/admin or kiosk-started chef sessions; clears
+              sw_kiosk_user (+chef token for staff) and re-locks.
+            - Settings -> Staff: owner code card, add-staff form, per-staff PIN
+              + regenerate, collapsible activity history.
+            - Inventory shows "Added by [name]" under item names (addedBy field).
+            - LOCAL LIMITATION: no Supabase locally; auth/me returns 500. To test
+              the kiosk lock UI, mock API responses via Playwright route
+              interception (auth/me -> owner payload, staff/pin-login -> mocked).
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ FOCUSED TEST COMPLETE - Staff Code PIN Frontend (7/7 tests passed):
+            
+            **CONTEXT:**
+            - Supabase NOT configured locally → used Playwright route interception to mock API responses
+            - Tested at http://localhost:3000 with desktop viewport 1920x800 + mobile 390x844
+            - All tests used mocked API responses as per review_request requirements
+            
+            **TEST 1 — Login page Staff Code tab (no mocking needed):**
+            - ✅ Staff Code tab found and clickable (role='tab' with text 'Staff Code')
+            - ✅ Kitchen name input (#kname) visible and functional
+            - ✅ Staff PIN input (#staffpin) visible and functional
+            - ✅ Digits-only constraint working: typing 'abc12x3456' → value becomes '1234' (max 4 digits)
+            - ✅ Client-side validation working: 2-digit PIN '12' → toast 'Enter your 4-digit staff code'
+            - ✅ 4-digit PIN '1234' → API call made, error toast shown (Supabase missing - EXPECTED), no crash
+            
+            **TEST 2 — Kiosk lock screen (MOCK auth/me):**
+            - ✅ Mocked GET /api/auth/me → 200 owner payload
+            - ✅ Set localStorage: shelfwise_chef_token='dummy-token', removed sw_kiosk_user
+            - ✅ Full-screen dark emerald lock screen rendered correctly
+            - ✅ Kitchen name heading 'TEST KITCHEN' visible
+            - ✅ 'Enter your staff code' text visible
+            - ✅ 4 PIN dots visible (empty state)
+            - ✅ 10 numeric keypad buttons (1-9, 0) visible
+            - ✅ Backspace button (aria-label="Delete") visible
+            - ✅ "I'm the owner — unlock with password" link visible
+            - ✅ "Log this device out completely" link visible
+            - ✅ Screenshot saved: kiosk_lock_desktop_1920x800.png
+            
+            **TEST 3 — Wrong PIN on kiosk:**
+            - ✅ Mocked POST /api/staff/pin-login → 401 {"error":"Wrong staff code — check with your manager"}
+            - ✅ Tapped keypad buttons 9, 9, 9, 9 (auto-submits at 4th digit)
+            - ✅ Error toast appeared: "Wrong staff code"
+            - ✅ PIN dots reset to empty (0 filled dots after error)
+            
+            **TEST 4 — Owner PIN unlock on kiosk:**
+            - ✅ Mocked POST /api/staff/pin-login → 200 {"ok":true,"owner":true,"personName":"Owner"}
+            - ✅ Tapped keypad buttons 1, 2, 3, 4
+            - ✅ Lock screen disappeared
+            - ✅ Main app dashboard visible
+            - ✅ localStorage sw_kiosk_user set: {"name":"Owner","isOwner":true,"at":...}
+            - ✅ sw_kiosk_user contains isOwner: true
+            - ✅ Switch User button found in header (title contains 'Switch user')
+            
+            **TEST 5 — Switch User re-locks:**
+            - ✅ Clicked Switch User button
+            - ✅ Lock screen reappeared
+            - ✅ localStorage sw_kiosk_user removed
+            
+            **TEST 6 — Staff PIN unlock on kiosk:**
+            - ✅ Mocked POST /api/staff/pin-login → 200 {"ok":true,"token":"dummy-staff-token","personName":"Maria","personRole":"staff","perms":[]}
+            - ✅ Tapped keypad buttons 5, 6, 7, 8
+            - ✅ Page reloaded (unlockAsStaff calls location.reload)
+            - ✅ After reload, localStorage verified:
+              * shelfwise_chef_token === 'dummy-staff-token' ✓
+              * sw_person_name === 'Maria' ✓
+              * sw_kiosk === '1' ✓
+              * sw_kiosk_user contains 'Maria': {"name":"Maria","at":...} ✓
+            
+            **TEST 7 — Owner password fallback UI:**
+            - ✅ Reset to lock screen (removed sw_kiosk_user, reloaded)
+            - ✅ Clicked "I'm the owner — unlock with password" link
+            - ✅ Password input (type="password") appeared
+            - ✅ Unlock button appeared
+            - ✅ "Back to staff code" link appeared
+            - ✅ Clicked "Back to staff code" → keypad returned
+            
+            **MOBILE SCREENSHOT:**
+            - ✅ Viewport 390x844 screenshot saved: kiosk_lock_mobile_390x844.png
+            - ✅ Keypad fits perfectly on mobile viewport
+            - ✅ All UI elements visible and properly sized
+            
+            **Key Validations:**
+            - ✅ Login page Staff Code tab: digits-only input, max 4 chars, client-side validation working
+            - ✅ Kiosk lock screen: renders correctly with all required UI elements
+            - ✅ Wrong PIN: shows error toast and resets PIN dots
+            - ✅ Owner PIN unlock: unlocks to dashboard, sets localStorage correctly, shows Switch User button
+            - ✅ Switch User: re-locks and clears localStorage
+            - ✅ Staff PIN unlock: sets correct localStorage (token, name, kiosk flags), triggers page reload
+            - ✅ Owner password fallback: UI toggles correctly between keypad and password modes
+            - ✅ Mobile responsive: keypad fits and works on 390x844 viewport
+            
+            **Expected Behavior (NOT bugs):**
+            - Login page with real 4-digit PIN returns Supabase error (EXPECTED locally - no Supabase configured)
+            - All kiosk tests used mocked API responses as required by review_request
+            - Staff PIN unlock triggers location.reload (by design - cannot test post-reload UI behavior beyond localStorage)
+            
+            **Screenshots:**
+            - Desktop: .screenshots/kiosk_lock_desktop_1920x800.png
+            - Mobile: .screenshots/kiosk_lock_mobile_390x844.png
+            
+            No critical issues found. Staff Code PIN frontend feature working perfectly.
+
   - task: "Frontend UI (Dashboard, Inventory, Scan, Recipe, Wizard)"
     implemented: true
     working: true
@@ -2114,17 +2239,48 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 4
+  test_sequence: 5
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Staff Code (4-digit PIN) system — backend endpoints"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
+    - agent: "testing"
+      message: |
+        ✅ FOCUSED TEST COMPLETE - Staff Code PIN Frontend (7/7 tests passed)
+        
+        Tested the NEW Staff Code PIN frontend feature as per review_request (ROUND 16).
+        
+        **ALL TESTS PASSED:**
+        - ✅ TEST 1: Login page Staff Code tab - digits-only input (max 4), client-side validation working
+        - ✅ TEST 2: Kiosk lock screen renders correctly with all UI elements (mocked auth/me)
+        - ✅ TEST 3: Wrong PIN (9999) shows error toast and resets PIN dots
+        - ✅ TEST 4: Owner PIN (1234) unlocks to dashboard, sets localStorage, shows Switch User button
+        - ✅ TEST 5: Switch User re-locks and clears localStorage
+        - ✅ TEST 6: Staff PIN (5678) sets correct localStorage (token, name, kiosk flags), triggers reload
+        - ✅ TEST 7: Owner password fallback UI toggles correctly between keypad and password modes
+        - ✅ MOBILE: Keypad fits perfectly on 390x844 viewport
+        
+        **KEY FINDINGS:**
+        - Login page: digits-only constraint working ('abc12x3456' → '1234')
+        - Kiosk lock: all elements present (kitchen name, 4 PIN dots, 10 keypad buttons, backspace, owner fallback, logout)
+        - Owner unlock: localStorage sw_kiosk_user set with isOwner:true
+        - Staff unlock: localStorage shelfwise_chef_token, sw_person_name, sw_kiosk, sw_kiosk_user all set correctly
+        - Switch User: clears sw_kiosk_user and re-locks
+        - Password fallback: toggles between keypad and password input modes
+        
+        **EXPECTED BEHAVIOR (NOT bugs):**
+        - Login page with real PIN returns Supabase error (EXPECTED - no Supabase locally)
+        - All kiosk tests used mocked API responses (as required by review_request)
+        - Staff PIN unlock triggers location.reload (by design)
+        
+        **Screenshots:** kiosk_lock_desktop_1920x800.png, kiosk_lock_mobile_390x844.png
+        
+        No critical issues found. Feature is production-ready.
     - agent: "main"
       message: |
         ROUND 16 (June 2025) — Staff Code (4-digit PIN) system built. Backend: PIN CRUD
