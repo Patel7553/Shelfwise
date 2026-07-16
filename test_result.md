@@ -1854,6 +1854,74 @@ backend:
             **Test file:** /app/test_daily_email_regression.py (can be re-run anytime)
             
             No critical issues found. Daily-email helper integration working perfectly.
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ FOCUSED TEST COMPLETE - GET /api/cron/push-alerts HARDENING (3/3 tests passed)
+            
+            **CONTEXT:**
+            - Testing the HARDENED GET /api/cron/push-alerts endpoint (ROUND 12)
+            - Previous issue: endpoint returned 500 errors, causing cron-job.org to auto-disable after 26 consecutive failures
+            - Fix: entire handler wrapped in try/catch → ALWAYS returns 200 with error details in JSON body
+            - Supabase NOT configured locally → internal push_subscriptions query WILL fail
+            - Previously that produced a 500, now it must produce HTTP 200 with ok:false in the body
+            
+            **WHAT CHANGED THIS SESSION (ROUND 12):**
+            - GET /api/cron/push-alerts entire handler wrapped in try/catch
+            - ALWAYS returns HTTP 200 (NEVER 500)
+            - Errors appear inside JSON body: {ok:false, error:...}
+            - Added 20s time budget to stay under ingress timeouts
+            - subErr no longer thrown (caught and returned in body)
+            
+            **Test Results:**
+            
+            **Test 1: GET /api/cron/push-alerts → expect HTTP 200 with ok:false (NOT 500) - PASS ✓**
+            - Status Code: 200 ✅ (NOT 500)
+            - Response Body:
+              {
+                "ok": false,
+                "error": "Supabase env vars missing: set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or NEXT_PUBLIC_SUPABASE_ANON_KEY).",
+                "tookMs": 0
+              }
+            - ✅ Body contains ok:false (as expected)
+            - ✅ Error message about Supabase failure present (as expected)
+            - ✅ NO ReferenceError/TypeError in response body
+            - ✅ CRITICAL FIX VERIFIED: Endpoint now returns 200 instead of 500 when Supabase fails
+            
+            **Test 2: Same call 3 times in a row → all HTTP 200 - PASS ✓**
+            - Call 1: Status Code = 200 ✅
+            - Call 2: Status Code = 200 ✅
+            - Call 3: Status Code = 200 ✅
+            - ✅ All 3 calls returned HTTP 200 (consistent behavior)
+            - ✅ NO ReferenceError/TypeError in any response body
+            
+            **Test 3: GET /api/auth/me (no auth) → 401 (regression check) - PASS ✓**
+            - Status Code: 401 ✅ (expected)
+            - ✅ Existing endpoint still working correctly
+            
+            **Key Validations:**
+            - ✅ CRITICAL FIX WORKING: GET /api/cron/push-alerts now returns HTTP 200 (NOT 500) when Supabase fails
+            - ✅ Error details correctly returned in JSON body with ok:false
+            - ✅ NO 5xx status codes from the endpoint
+            - ✅ NO 404s (endpoint correctly wired)
+            - ✅ NO ReferenceError/TypeError in response bodies
+            - ✅ Consistent behavior across multiple calls
+            - ✅ No regressions in other endpoints
+            
+            **Expected Behavior (NOT bugs):**
+            - Supabase is NOT configured locally, so the internal query fails - this is EXPECTED
+            - The endpoint now correctly catches this error and returns HTTP 200 with ok:false
+            - In production with Supabase, the endpoint will return HTTP 200 with ok:true and process results
+            - This fix prevents cron-job.org from auto-disabling due to consecutive 500 errors
+            
+            **Production Impact:**
+            - ✅ This fix will prevent the cron-job.org auto-disable issue
+            - ✅ Any underlying errors (e.g., "VAPID keys not configured") will now be visible in cron-job.org execution history response body
+            - ✅ The endpoint will NEVER return 500 again, even if there are internal errors
+            
+            **Test file:** /app/test_push_alerts_hardened.py (can be re-run anytime)
+            
+            No critical issues found. GET /api/cron/push-alerts hardening working perfectly.
 
 
 
@@ -1961,6 +2029,42 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+    - agent: "testing"
+      message: |
+        ✅ HARDENING TEST COMPLETE - GET /api/cron/push-alerts (3/3 tests passed)
+        
+        Tested the HARDENED GET /api/cron/push-alerts endpoint as per review_request (ROUND 12).
+        
+        **CRITICAL FIX VERIFIED:**
+        - ✅ Endpoint now returns HTTP 200 (NOT 500) when Supabase fails
+        - ✅ Error details correctly returned in JSON body: {"ok":false,"error":"Supabase env vars missing...","tookMs":0}
+        - ✅ Consistent behavior across 3 consecutive calls (all returned 200)
+        - ✅ NO ReferenceError/TypeError in response bodies
+        - ✅ NO 5xx status codes detected
+        
+        **Production Impact:**
+        - This fix will prevent cron-job.org from auto-disabling due to consecutive 500 errors
+        - Any underlying errors will now be visible in cron-job.org execution history response body
+        - The endpoint will NEVER return 500 again, even if there are internal errors
+        
+        **Test file:** /app/test_push_alerts_hardened.py
+        
+        No critical issues found. Hardening working perfectly - ready for production deployment.
+
+    - agent: "main"
+      message: |
+        ROUND 12 (July 2026) — cron/push-alerts HARDENED (never 500s again):
+        Context: user's cron-job.org job auto-disabled after 26 consecutive 500s from production
+        /api/cron/push-alerts. Cannot access prod logs (deployment_agent only does static analysis).
+        Fix (route.js): entire handler wrapped in try/catch → ALWAYS returns 200 with error details
+        in the JSON body ({ok:false, error} / per-kitchen errors / notes). subErr no longer thrown.
+        Added 20s time budget (breaks kitchen loops, resumes next run) to stay under ingress timeouts.
+        Diagnosis path: after redeploy + re-enabling the cronjob, the exact underlying error will be
+        visible in cron-job.org execution history response body (e.g. "VAPID keys not configured"
+        would mean VAPID env vars are missing from the Emergent production deployment env).
+        Local test expectation: GET /api/cron/push-alerts now returns 200 (ok:false supabase error)
+        instead of 500.
+
     - agent: "main"
       message: |
         ROUND 11 (June 2025, same session) — Recipe search upgrade, date fixes, qty fix, CSV back:

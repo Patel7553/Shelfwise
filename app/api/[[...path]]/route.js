@@ -1791,37 +1791,51 @@ export async function GET(request, { params }) {
       if (cronSecret && authz !== `Bearer ${cronSecret}`) {
         return json({ error: 'unauthorized' }, 401)
       }
-      // Which kitchens have at least one push subscription?
-      const { data: subRows, error: subErr } = await sb.from('push_subscriptions').select('kitchen_id')
-      if (subErr) {
-        if (/does not exist/i.test(subErr.message || '')) return json({ ok: true, note: 'push_subscriptions table missing — run migration-14', results: [] })
-        throw subErr
-      }
-      const kitchenIds = [...new Set((subRows || []).map(r => r.kitchen_id))]
-      const results = []
-      for (const kid of kitchenIds) {
-        try {
-          // 1) Expiring/expired push — repeats every 2.5h until items are dealt with
-          const exp = await runExpiryPushForKitchen(sb, kid)
-          // 2) HACCP reminder — max once per day
-          const haccp = await runHaccpReminderForKitchen(sb, kid)
-          results.push({ kitchen: kid, ok: true, expiry: exp, haccp })
-        } catch (e) {
-          results.push({ kitchen: kid, ok: false, error: e.message })
+      // HARDENED (July 2026): this endpoint must NEVER 500 — external cron
+      // services auto-disable jobs after repeated failures. Any error is
+      // reported in the 200 body instead (visible in cron execution history).
+      const startedAt = Date.now()
+      const TIME_BUDGET_MS = 20000  // stay well under proxy/ingress timeouts
+      try {
+        // Which kitchens have at least one push subscription?
+        const { data: subRows, error: subErr } = await sb.from('push_subscriptions').select('kitchen_id')
+        if (subErr) {
+          return json({ ok: false, note: 'push_subscriptions query failed', error: subErr.message, results: [] })
         }
-      }
-      // 3) Daily expiry ALERT EMAIL — for ALL approved kitchens (even without
-      //    push subscriptions), max once per day per kitchen.
-      const { data: allK } = await sb.from('kitchens').select('id').eq('status', 'approved')
-      for (const krow of (allK || [])) {
-        try {
-          const email = await runDailyExpiryEmailForKitchen(sb, krow.id)
-          results.push({ kitchen: krow.id, ok: true, email })
-        } catch (e) {
-          results.push({ kitchen: krow.id, ok: false, emailError: e.message })
+        const kitchenIds = [...new Set((subRows || []).map(r => r.kitchen_id))]
+        const results = []
+        for (const kid of kitchenIds) {
+          if (Date.now() - startedAt > TIME_BUDGET_MS) { results.push({ note: 'time budget reached — remaining kitchens next run' }); break }
+          try {
+            // 1) Expiring/expired push — repeats every 2.5h until items are dealt with
+            const exp = await runExpiryPushForKitchen(sb, kid)
+            // 2) HACCP reminder — max once per day
+            const haccp = await runHaccpReminderForKitchen(sb, kid)
+            results.push({ kitchen: kid, ok: true, expiry: exp, haccp })
+          } catch (e) {
+            results.push({ kitchen: kid, ok: false, error: e.message })
+          }
         }
+        // 3) Daily expiry ALERT EMAIL — for ALL approved kitchens (even without
+        //    push subscriptions), max once per day per kitchen.
+        const { data: allK, error: kErr } = await sb.from('kitchens').select('id').eq('status', 'approved')
+        if (kErr) {
+          results.push({ note: 'kitchens query failed for daily email', error: kErr.message })
+        }
+        for (const krow of (allK || [])) {
+          if (Date.now() - startedAt > TIME_BUDGET_MS) { results.push({ note: 'time budget reached — remaining emails next run' }); break }
+          try {
+            const email = await runDailyExpiryEmailForKitchen(sb, krow.id)
+            results.push({ kitchen: krow.id, ok: true, email })
+          } catch (e) {
+            results.push({ kitchen: krow.id, ok: false, emailError: e.message })
+          }
+        }
+        return json({ ok: true, kitchens: kitchenIds.length, tookMs: Date.now() - startedAt, results })
+      } catch (e) {
+        // Absolute last resort — still 200 so the cron job stays enabled
+        return json({ ok: false, error: e.message || String(e), tookMs: Date.now() - startedAt })
       }
-      return json({ ok: true, kitchens: kitchenIds.length, results })
     }
 
     // ---- CRON: weekly digest — Vercel calls this every Monday 8am UTC ----
