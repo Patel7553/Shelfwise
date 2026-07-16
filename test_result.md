@@ -2057,6 +2057,23 @@ frontend:
         - working: true
           agent: "testing"
           comment: |
+            All 7 kiosk/login tests passed (route-interception mocking): Staff Code
+            tab validation, lock screen render (desktop+mobile), wrong PIN toast,
+            owner unlock, switch-user re-lock, staff unlock localStorage state,
+            owner password fallback UI.
+        - working: true
+          agent: "main"
+          comment: |
+            ADDED (user request): prominent Switch User button — purple "Switch"
+            pill always visible in mobile header next to menu; labeled button on
+            desktop. ALSO ADDED: 5-min idle auto-lock with "Are you still there?"
+            prompt (60s countdown; "Yes I'm still here" resets, "Lock now" or
+            timeout returns to staff-code screen). Verified with Playwright
+            clock.install/fast_forward/run_for: prompt at 5min ✓, reset ✓,
+            re-prompt ✓, auto-lock after 60s grace ✓.
+        - working: true
+          agent: "testing"
+          comment: |
             ✅ FOCUSED TEST COMPLETE - Staff Code PIN Frontend (7/7 tests passed):
             
             **CONTEXT:**

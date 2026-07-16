@@ -1793,6 +1793,71 @@ function App() {
   }
   const showSwitchUser = me?.role === 'owner' || me?.role === 'admin' || (me?.role === 'chef' && isKioskDevice)
 
+  // ---- AUTO-LOCK after 5 min of inactivity (kiosk) -------------------------
+  // After 5 idle minutes an "Are you still there?" prompt appears; if nobody
+  // answers within 60s the device returns to the staff-code screen.
+  const [stillThereOpen, setStillThereOpen] = useState(false)
+  const [stillThereCountdown, setStillThereCountdown] = useState(60)
+  const [idleResetNonce, setIdleResetNonce] = useState(0)
+  const idleTimerRef = useRef(null)
+  const graceIntervalRef = useRef(null)
+  const stillThereOpenRef = useRef(false)
+  useEffect(() => { stillThereOpenRef.current = stillThereOpen }, [stillThereOpen])
+
+  const kioskAutoLockActive = authed === true && !kioskLocked && showSwitchUser
+
+  const stillHere = () => {
+    setStillThereOpen(false)
+    if (graceIntervalRef.current) clearInterval(graceIntervalRef.current)
+    setIdleResetNonce(n => n + 1)   // restarts the 5-minute idle timer
+  }
+  const lockFromPrompt = () => {
+    setStillThereOpen(false)
+    if (graceIntervalRef.current) clearInterval(graceIntervalRef.current)
+    switchUser()
+  }
+
+  useEffect(() => {
+    if (!kioskAutoLockActive) return
+    const IDLE_MS = 5 * 60 * 1000
+    const GRACE_S = 60
+
+    const lockNow = () => {
+      setStillThereOpen(false)
+      if (graceIntervalRef.current) clearInterval(graceIntervalRef.current)
+      switchUser()
+    }
+    const openPrompt = () => {
+      setStillThereOpen(true)
+      setStillThereCountdown(GRACE_S)
+      let left = GRACE_S
+      if (graceIntervalRef.current) clearInterval(graceIntervalRef.current)
+      graceIntervalRef.current = setInterval(() => {
+        left -= 1
+        setStillThereCountdown(left)
+        if (left <= 0) lockNow()
+      }, 1000)
+    }
+    const startIdle = () => {
+      clearTimeout(idleTimerRef.current)
+      idleTimerRef.current = setTimeout(openPrompt, IDLE_MS)
+    }
+    const onActivity = () => {
+      if (stillThereOpenRef.current) return   // prompt open → only its buttons decide
+      startIdle()
+    }
+    const events = ['pointerdown', 'keydown', 'touchstart', 'mousemove', 'scroll']
+    events.forEach(ev => window.addEventListener(ev, onActivity, { passive: true }))
+    startIdle()
+    return () => {
+      events.forEach(ev => window.removeEventListener(ev, onActivity))
+      clearTimeout(idleTimerRef.current)
+      if (graceIntervalRef.current) clearInterval(graceIntervalRef.current)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kioskAutoLockActive, idleResetNonce])
+
+
   // ---- AUTH GATE ----------------------------------------------------------
   if (authed === null) {
     return (
@@ -2024,6 +2089,25 @@ function App() {
 
       {/* PWA install prompt (compact strip below header on all app pages) */}
       <InstallAppPrompt compact />
+
+      {/* "Are you still there?" — 5 min idle prompt before auto-locking the kiosk */}
+      {stillThereOpen && (
+        <div className="fixed inset-0 z-[95] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-sm w-full text-center">
+            <p className="text-4xl mb-2">👋</p>
+            <h2 className="font-bold text-lg">Are you still there?</h2>
+            <p className="text-sm text-slate-600 mt-1">
+              No activity for 5 minutes. Locking in <b className="text-red-600">{stillThereCountdown}s</b> so the next person can enter their staff code.
+            </p>
+            <Button onClick={stillHere} className="w-full mt-4 h-12 text-base bg-emerald-600 hover:bg-emerald-700 font-bold">
+              Yes, I'm still here
+            </Button>
+            <Button variant="outline" onClick={lockFromPrompt} className="w-full mt-2">
+              <Lock className="h-4 w-4 mr-2" /> Lock now
+            </Button>
+          </div>
+        </div>
+      )}
 
 
       <main className="container mx-auto px-4 py-8">
