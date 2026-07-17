@@ -386,7 +386,10 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
 
       <UseTodayPanel products={products} goToInventory={goToInventory} formatDate={(d) => new Date(d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} />
 
-      {show('expiry_alerts') && <ExpiryAlertBanner stats={stats} goToInventory={goToInventory} />}
+      {/* Expiry alerts show on EVERY device (user request, June 2025) — the
+          banner self-hides when nothing is expiring or the device is muted. */}
+      <EnablePushBanner />
+      <ExpiryAlertBanner stats={stats} goToInventory={goToInventory} />
 
       {show('search') && (
       <>
@@ -600,6 +603,90 @@ export function RecentItemsToday({ products, goToInventory, openEdit }) {
         )}
       </CardContent>
     </Card>
+  )
+}
+
+// ============================================================================
+// ENABLE-PUSH NUDGE (June 2025, user request) — staff phones weren't getting
+// the "expiring in 7 days" alerts because push was never enabled on their
+// device. This slim one-tap banner shows on ANY device that isn't subscribed
+// yet (and hasn't dismissed it). One tap = permission prompt + subscribe.
+// ============================================================================
+export function EnablePushBanner() {
+  const [visible, setVisible] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    (async () => {
+      try {
+        if (localStorage.getItem('sw_push_nudge_done')) return
+        if (localStorage.getItem('sw_notify_mode') === 'mute') return
+        if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) return
+        if (Notification.permission === 'denied') return
+        const reg = await navigator.serviceWorker.getRegistration()
+        const sub = reg ? await reg.pushManager.getSubscription() : null
+        if (!sub) setVisible(true)
+      } catch {}
+    })()
+  }, [])
+
+  const b64ToU8 = (s) => {
+    const pad = '='.repeat((4 - (s.length % 4)) % 4)
+    const raw = window.atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'))
+    const out = new Uint8Array(raw.length)
+    for (let i = 0; i < raw.length; ++i) out[i] = raw.charCodeAt(i)
+    return out
+  }
+
+  const enable = async () => {
+    setBusy(true)
+    try {
+      const perm = await Notification.requestPermission()
+      if (perm !== 'granted') { toast.error('Permission denied — you can enable it later in Settings'); dismiss(); return }
+      const reg = await navigator.serviceWorker.register('/sw.js')
+      await navigator.serviceWorker.ready
+      const keyRes = await fetch('/api/push/public-key')
+      const keyData = await keyRes.json().catch(() => ({}))
+      if (!keyRes.ok || !keyData.key) throw new Error(keyData.error || 'Push not configured')
+      let sub = await reg.pushManager.getSubscription()
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(keyData.key) })
+      const saveRes = await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscription: sub.toJSON() }),
+      })
+      if (!saveRes.ok) throw new Error('Could not save subscription')
+      try {
+        localStorage.setItem('sw_notify_mode', 'push')
+        localStorage.setItem('sw_notify_last_on', 'push')
+        localStorage.setItem('sw_push_nudge_done', '1')
+      } catch {}
+      setVisible(false)
+      toast.success('Expiry alerts ON for this device 🔔')
+    } catch (e) {
+      toast.error(e.message || 'Could not enable alerts')
+    } finally { setBusy(false) }
+  }
+
+  const dismiss = () => {
+    try { localStorage.setItem('sw_push_nudge_done', '1') } catch {}
+    setVisible(false)
+  }
+
+  if (!visible) return null
+  return (
+    <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 px-3 py-2.5 flex items-center gap-2.5">
+      <Bell className="h-5 w-5 text-emerald-600 shrink-0" />
+      <p className="text-xs text-emerald-900 flex-1 min-w-0">
+        <b>Get expiry alerts on this device</b> — items expiring in 7 days, even when the app is closed.
+      </p>
+      <Button size="sm" onClick={enable} disabled={busy} className="h-8 bg-emerald-600 hover:bg-emerald-700 shrink-0">
+        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Enable'}
+      </Button>
+      <button type="button" onClick={dismiss} className="text-emerald-700/60 shrink-0 p-1" aria-label="Dismiss">
+        <X className="h-4 w-4" />
+      </button>
+    </div>
   )
 }
 
