@@ -1720,6 +1720,13 @@ export async function GET(request, { params }) {
     // ----- PUBLIC endpoints -----
     if (path === '' || path === 'health') return json({ ok: true, service: 'ShelfWise API (Supabase / multi-tenant)' })
 
+    // ------- Deployment version (public) — used by clients to auto-refresh
+    // stale PWA installs when a new build goes live (fixes the recurring
+    // "old version on staff phones" problem). Vercel injects the commit SHA.
+    if (path === 'version') {
+      return json({ version: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || 'dev' })
+    }
+
     // ---- Commercial barcode lookup fallback ----
     // Queries paid barcode databases IF their API keys are set as env vars.
     // Called from the frontend AFTER free public DBs (OFF, OpenProductsFacts,

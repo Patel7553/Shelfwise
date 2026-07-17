@@ -1762,6 +1762,36 @@ function App() {
 
   const formatDate = (d) => d ? new Date(d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—'
 
+  // ---- AUTO-UPDATE (June 2025): force stale PWA installs to refresh --------
+  // Staff phones kept running week-old cached bundles (missing new features
+  // like the expiry banners). We poll /api/version (Vercel commit SHA) on
+  // launch, on app re-focus and every 15 min — when a new deployment is
+  // detected the app reloads itself once to pull fresh code.
+  useEffect(() => {
+    let base = null
+    const check = async () => {
+      try {
+        const r = await window.fetch('/api/version', { cache: 'no-store' })
+        const d = await r.json().catch(() => ({}))
+        if (!d?.version || d.version === 'dev') return
+        if (base === null) { base = d.version; return }
+        if (d.version !== base) {
+          const key = 'sw_reloaded_' + d.version
+          if (!sessionStorage.getItem(key)) {
+            sessionStorage.setItem(key, '1')
+            toast.info('New version available — updating…')
+            setTimeout(() => window.location.reload(), 1200)
+          }
+        }
+      } catch {}
+    }
+    check()
+    const onVis = () => { if (document.visibilityState === 'visible') check() }
+    document.addEventListener('visibilitychange', onVis)
+    const t = setInterval(check, 15 * 60 * 1000)
+    return () => { document.removeEventListener('visibilitychange', onVis); clearInterval(t) }
+  }, [])
+
   // ---- KIOSK unlock / switch-user handlers --------------------------------
   const unlockAsOwner = (name) => {
     try {
