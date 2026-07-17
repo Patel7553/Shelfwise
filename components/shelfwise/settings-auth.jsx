@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe, Users } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe, Users, Eye, EyeOff } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
@@ -862,6 +862,9 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
 
           {tab === 'login' && (
             <div className="space-y-5">
+              {/* Everyone (owner + staff) sees THEIR OWN staff code here */}
+              <MyStaffCodeCard />
+
               {/* Old daily chef-code card removed (June 2025) — replaced by the
                   4-digit Staff Code system (Settings → Staff). */}
               <div className="rounded-lg border-2 border-indigo-200 bg-indigo-50 p-4">
@@ -1394,6 +1397,51 @@ export function LoginGate({ settings, onAuth, saveSettings }) {
 // ============================================================================
 // Notification settings card — browser Notification API opt-in.
 // ============================================================================
+// ============================================================================
+// MY STAFF CODE — any logged-in person can see THEIR OWN 4-digit code here
+// (e.g. to log in on their personal phone). Owner sees the owner code.
+// ============================================================================
+export function MyStaffCodeCard() {
+  const [data, setData] = useState(null)
+  const [show, setShow] = useState(false)
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/staff/my-pin')
+        if (res.ok) setData(await res.json())
+      } catch {}
+    })()
+  }, [])
+
+  if (!data?.pin) return null
+
+  return (
+    <div className="rounded-lg border-2 border-indigo-300 bg-indigo-50 p-4">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <Label className="text-indigo-900 text-sm font-bold">
+            🔢 Your staff code{data.name && data.name !== 'Owner' ? ` — ${data.name}` : data.isOwner ? ' (Owner)' : ''}
+          </Label>
+          <p className="text-xs text-indigo-700 mt-0.5">
+            {data.isOwner
+              ? 'Unlocks full owner mode on the kitchen tablet. Keep it private.'
+              : 'Tap it on the kitchen tablet — or use it with the kitchen name to log in on your own phone. Keep it private.'}
+          </p>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <span className="font-mono text-lg font-bold tracking-[0.25em] bg-white border border-indigo-300 rounded-md px-2.5 py-1 text-indigo-900">
+            {show ? data.pin : '••••'}
+          </span>
+          <Button variant="ghost" size="sm" type="button" onClick={() => setShow(v => !v)} className="h-8 px-2" title={show ? 'Hide code' : 'Show code'}>
+            {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function NotificationSettingsCard() {
   // Notification mode per device (user request, June 2025):
   //  'mute'  — nothing: no in-app expiry banner, no home-screen push
@@ -1498,7 +1546,10 @@ export function NotificationSettingsCard() {
         toast.success(next === 'mute' ? 'Notifications muted on this device 🔕' : 'Notifications will show inside the app only 📱')
       }
       setMode(next)
-      try { localStorage.setItem('sw_notify_mode', next) } catch {}
+      try {
+        localStorage.setItem('sw_notify_mode', next)
+        if (next !== 'mute') localStorage.setItem('sw_notify_last_on', next)
+      } catch {}
     } catch (e) {
       toast.error(e.message || 'Could not change notification setting')
     } finally { setBusy(false) }
@@ -1517,16 +1568,45 @@ export function NotificationSettingsCard() {
   }
 
   const OPTIONS = [
-    { key: 'mute',  emoji: '🔕', label: 'Mute', desc: 'No alerts on this device — not in the app, not on the home screen.' },
     { key: 'inapp', emoji: '📱', label: 'In app only', desc: 'Expiry alerts show inside the app (dashboard banner). Nothing pops up on the home screen.' },
     { key: 'push',  emoji: '🔔', label: 'App + home screen', desc: 'In-app alerts PLUS push notifications on this device — expiring items & HACCP reminders, even when the app is closed.', disabled: !supported },
   ]
+  const notifOn = mode !== 'mute'
+  const toggleNotifications = (checked) => {
+    if (checked) {
+      // Restore the last ON mode (defaults to in-app; never auto-triggers the push permission prompt)
+      let last = 'inapp'
+      try { const l = localStorage.getItem('sw_notify_last_on'); if (l === 'push' || l === 'inapp') last = l } catch {}
+      chooseMode(last === 'push' && supported ? 'push' : 'inapp')
+    } else {
+      try { if (mode !== 'mute') localStorage.setItem('sw_notify_last_on', mode) } catch {}
+      chooseMode('mute')
+    }
+  }
 
   return (
     <div className={`rounded-lg border-2 p-4 ${mode === 'push' ? 'border-emerald-300 bg-emerald-50' : mode === 'mute' ? 'border-slate-300 bg-slate-50' : 'border-sky-200 bg-sky-50/50'}`}>
-      <Label className="text-sm font-bold">🔔 Notifications on this device</Label>
-      <p className="text-xs text-muted-foreground mt-1 mb-3">Choose how alerts reach you. This setting is per device — the kitchen tablet and each phone can be different.</p>
-      <div className="space-y-1.5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <Label className="text-sm font-bold">🔔 Notifications on this device</Label>
+          <p className="text-xs text-muted-foreground mt-1">Per device — the kitchen tablet and each phone can be different.</p>
+        </div>
+        {/* Master ON/OFF switch */}
+        <label className="inline-flex items-center gap-2 shrink-0 cursor-pointer" title="Notifications on/off">
+          <input
+            type="checkbox"
+            checked={notifOn}
+            disabled={busy}
+            onChange={e => toggleNotifications(e.target.checked)}
+            className="h-5 w-5 accent-emerald-600"
+          />
+          <span className={`text-xs font-semibold ${notifOn ? 'text-emerald-700' : 'text-slate-500'}`}>{notifOn ? 'ON' : 'OFF'}</span>
+        </label>
+      </div>
+      {!notifOn ? (
+        <p className="text-xs text-slate-500 mt-3">🔕 Muted — no alerts on this device (not in the app, not on the home screen). Flip the switch to turn them back on.</p>
+      ) : (
+      <div className="space-y-1.5 mt-3">
         {OPTIONS.map(o => (
           <button
             key={o.key}
@@ -1542,13 +1622,13 @@ export function NotificationSettingsCard() {
               <span className="text-sm font-semibold flex items-center gap-1.5">
                 {o.label}
                 {mode === o.key && <Check className="h-4 w-4 text-emerald-600" />}
-                {busy && mode !== o.key && <span />}
               </span>
               <span className="block text-[11px] text-muted-foreground">{o.desc}</span>
             </span>
           </button>
         ))}
       </div>
+      )}
       {busy && <p className="text-[11px] text-muted-foreground mt-2 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Updating…</p>}
       {mode === 'push' && subscribed && (
         <Button variant="outline" size="sm" onClick={test} disabled={busy} className="mt-2 bg-white">

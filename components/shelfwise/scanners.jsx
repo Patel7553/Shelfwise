@@ -25,6 +25,25 @@ import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
 const fetch = apiFetch
 
+// ---------------------------------------------------------------------------
+// ANDROID CAMERA FIX (June 2025): many Android phones (Samsung / Pixel with
+// multiple lenses) open the camera ZOOMED-IN by default. If the video track
+// supports zoom, force it back to 1x (clamped to the supported range) so
+// iPhone and Android behave the same.
+// ---------------------------------------------------------------------------
+async function resetCameraZoom(stream) {
+  try {
+    const track = stream?.getVideoTracks?.()[0]
+    if (!track || typeof track.getCapabilities !== 'function') return
+    const caps = track.getCapabilities()
+    if (!caps || !('zoom' in caps)) return
+    const min = caps.zoom?.min ?? 1
+    const max = caps.zoom?.max ?? 1
+    const target = Math.min(Math.max(1, min), max)
+    await track.applyConstraints({ advanced: [{ zoom: target }] })
+  } catch { /* zoom not adjustable — ignore */ }
+}
+
 export function ReceiptScanDialog({ open, onClose, onImport, settings }) {
   const [image, setImage] = useState(null)   // data URL
   const [rotation, setRotation] = useState(0) // 0, 90, 180, 270 — user-controlled
@@ -437,6 +456,7 @@ export function ExpiryScanDialog({ open, onClose, onDateFound }) {
           stream.getTracks().forEach(t => t.stop())
           return
         }
+        await resetCameraZoom(stream)   // Android: undo default zoom-in
         streamRef.current = stream
         if (videoRef.current) {
           videoRef.current.srcObject = stream
@@ -629,6 +649,11 @@ export function BarcodeScanDialog({ open, onClose, onFound, loading, onManual })
           () => {}
         )
         setScanning(true)
+        // Android: undo the default zoomed-in camera (multi-lens phones)
+        try {
+          const vid = document.getElementById('barcode-reader-region')?.querySelector('video')
+          if (vid?.srcObject) await resetCameraZoom(vid.srcObject)
+        } catch {}
         // Detect torch support
         try {
           const stream = scanner.getRunningTrackCameraCapabilities?.()
@@ -783,6 +808,7 @@ export function LensCameraView({ active, busy, frozenImage, onCapture, onGallery
           audio: false,
         })
         if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
+        await resetCameraZoom(stream)   // Android: undo default zoom-in
         streamRef.current = stream
         const v = videoRef.current
         if (v) {

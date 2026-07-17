@@ -2312,6 +2312,27 @@ export async function GET(request, { params }) {
       return json({ items: data || [], hasMore: (data || []).length === limit })
     }
 
+    // ------- Staff: a person's OWN staff code (any logged-in kitchen member) -------
+    // Staff can view their own 4-digit code in Settings (e.g. to log in on
+    // their personal phone). Identity comes from the JWT-embedded person
+    // (PIN logins) or the x-person-name header (legacy logins).
+    if (path === 'staff/my-pin') {
+      const { ctx, error } = await requireOwnerOrChef(request)
+      if (error) return error
+      const kId = ctx.kitchenId
+      const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', kId).maybeSingle()
+      const list = Array.isArray(k?.staff_names) ? k.staff_names : []
+      if (ctx.role === 'owner' || ctx.role === 'admin') {
+        const ownerEntry = list.find(e => e?.isOwner)
+        if (!ownerEntry?.pin) return json({ error: 'No code yet — open Settings → Staff once to generate codes' }, 404)
+        return json({ name: ownerEntry.name || 'Owner', pin: ownerEntry.pin, isOwner: true })
+      }
+      const person = personFromRequest(request, ctx)
+      const entry = list.find(e => !e?.isOwner && String(e?.name || '').toLowerCase() === String(person || '').toLowerCase())
+      if (!entry?.pin) return json({ error: 'No staff code found for you — ask the owner to add you in Settings → Staff' }, 404)
+      return json({ name: entry.name, pin: entry.pin, isOwner: false })
+    }
+
     // Chef code viewing (owner only)
     if (path === 'owner/chef-code') {
       const { ctx, error } = await requireAuth(request)
