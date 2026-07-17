@@ -1568,8 +1568,8 @@ export function NotificationSettingsCard() {
   }
 
   const OPTIONS = [
-    { key: 'inapp', emoji: '📱', label: 'In app only', desc: 'Expiry alerts show inside the app (dashboard banner). Nothing pops up on the home screen.' },
-    { key: 'push',  emoji: '🔔', label: 'App + home screen', desc: 'In-app alerts PLUS push notifications on this device — expiring items & HACCP reminders, even when the app is closed.', disabled: !supported },
+    { key: 'inapp', emoji: '📱', label: 'In app only', desc: 'Expiry alerts show inside the app (dashboard banners). No pop-ups on the home screen.' },
+    { key: 'push',  emoji: '🔔', label: 'App + home screen', desc: 'Dashboard banners PLUS push notifications on this device — expiring items & HACCP reminders, even when the app is closed.', disabled: !supported },
   ]
   const notifOn = mode !== 'mute'
   const toggleNotifications = (checked) => {
@@ -1604,7 +1604,7 @@ export function NotificationSettingsCard() {
         </label>
       </div>
       {!notifOn ? (
-        <p className="text-xs text-slate-500 mt-3">🔕 Muted — no alerts on this device (not in the app, not on the home screen). Flip the switch to turn them back on.</p>
+        <p className="text-xs text-slate-500 mt-3">🔕 Muted — no notification pop-ups on this device. (Dashboard expiry banners always stay visible.) Flip the switch to turn notifications back on.</p>
       ) : (
       <div className="space-y-1.5 mt-3">
         {OPTIONS.map(o => (
