@@ -104,8 +104,8 @@ export function InventoryView({ products, loading, statusFilter, setStatusFilter
           {/* Voice / Snap Label / Add Product buttons removed —
               all adding happens via the dashboard "Add Products" tile (user request) */}
           <Button variant="outline" onClick={exportCSV}><Download className="h-4 w-4 mr-2" /> Export CSV</Button>
-          {printLogbook && <Button variant="outline" onClick={openScan} className="border-emerald-200 text-emerald-700 hover:bg-emerald-50"><ScanLine className="h-4 w-4 mr-2" /> Scan Logbook</Button>}
-          {printLogbook && <Button variant="outline" onClick={printLogbook} className="border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100">📒 Print Logbook</Button>}
+          {/* Scan Logbook / Print Logbook buttons removed from Inventory
+              (user request, June 2025) — printing lives in the dashboard tile. */}
         </div>
       </div>
 
