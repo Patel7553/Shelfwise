@@ -20,7 +20,7 @@ import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
 import { useT } from '@/lib/i18n'
-import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText } from '@/components/shelfwise/shared'
+import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText, safeJson } from '@/components/shelfwise/shared'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
 const fetch = apiFetch
@@ -896,7 +896,7 @@ export function HaccpView({ currentUser, haccpLocations = [], isStaff }) {
             signal: controller.signal,
           })
           if (!res.ok) return { readings: [], _half: half, _failed: true }
-          const data = await res.json()
+          const data = await safeJson(res)
           return { ...data, _half: half }
         } catch { return { readings: [], _half: half, _failed: true } }
         finally { clearTimeout(timeoutId) }
@@ -1039,7 +1039,7 @@ export function HaccpView({ currentUser, haccpLocations = [], isStaff }) {
     try {
       const res = await fetch('/api/haccp/export?days=30')
       if (!res.ok) throw new Error('Export failed')
-      const data = await res.json()
+      const data = await safeJson(res)
       const w = window.open('', '_blank', 'width=900,height=700')
       if (!w) { toast.error('Popup blocked — allow popups to print report'); return }
       const fmt = (iso) => new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -1228,7 +1228,7 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ haccpLocations: merged }),
               })
-              const data = await res.json()
+              const data = await safeJson(res)
               if (!res.ok) throw new Error(data?.error || 'Save failed')
               if (data._warning) {
                 toast.error(data._warning, { duration: 8000 })

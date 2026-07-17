@@ -20,7 +20,7 @@ import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
 import { useT } from '@/lib/i18n'
-import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText } from '@/components/shelfwise/shared'
+import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText, safeJson } from '@/components/shelfwise/shared'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
 const fetch = apiFetch
@@ -492,7 +492,7 @@ export function ChefCodeCard() {
         // Chef users can't see this; hide the card content.
         setCode('—')
       } else {
-        const data = await res.json()
+        const data = await safeJson(res)
         setCode(data.code || '—')
         setKitchenName(data.kitchenName || '')
         setTimezone(data.timezone || '')
@@ -645,7 +645,7 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
     setTesting(true)
     try {
       const res = await fetch('/api/email/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
-      const data = await res.json()
+      const data = await safeJson(res)
       if (!res.ok) throw new Error(data.error || 'Failed')
       toast.success('Test email sent to your login email! Check your inbox.')
     } catch (e) {
@@ -715,7 +715,7 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
       // Save current toggle first so backend knows the intent
       await saveSettings({ weeklyDigestEnabled: weeklyDigest })
       const res = await fetch('/api/digest/send-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
-      const data = await res.json()
+      const data = await safeJson(res)
       if (!res.ok) throw new Error(data.error || 'Failed')
       toast.success(`✅ Digest sent to ${data.to} — check your inbox`)
     } catch (e) {

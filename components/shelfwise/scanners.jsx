@@ -20,7 +20,7 @@ import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
 import { useT } from '@/lib/i18n'
-import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText } from '@/components/shelfwise/shared'
+import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText, safeJson } from '@/components/shelfwise/shared'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
 const fetch = apiFetch
@@ -504,7 +504,7 @@ export function ExpiryScanDialog({ open, onClose, onDateFound }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image: dataUrl }),
       })
-      const data = await res.json()
+      const data = await safeJson(res)
       if (!res.ok) throw new Error(data.error || 'Scan failed')
       const item = (data.items || []).find(it => it.expiryDate) || (data.items || [])[0]
       if (item?.expiryDate) {

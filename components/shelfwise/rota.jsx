@@ -20,7 +20,7 @@ import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
 import { useT } from '@/lib/i18n'
-import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText } from '@/components/shelfwise/shared'
+import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText, safeJson } from '@/components/shelfwise/shared'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
 const fetch = apiFetch
@@ -58,7 +58,7 @@ export function RotaView() {
     try {
       const res = await fetch(`/api/rota?from=${fromISO}&to=${toISO}`)
       if (!res.ok) throw new Error('Load failed')
-      const data = await res.json()
+      const data = await safeJson(res)
       setShifts(Array.isArray(data) ? data : [])
     } catch (e) {
       toast.error('Could not load rota — did you run migration-7?')

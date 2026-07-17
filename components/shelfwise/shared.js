@@ -98,6 +98,21 @@ export function suggestExpiryDate(category = '', storageType = '', baseDate = ''
 }
 
 // Escape text for use inside generated print-window HTML
+// ---------------------------------------------------------------------------
+// SAFARI-SAFE response parsing (June 2025). On iOS, res.json() on a non-JSON
+// body (proxy error pages, 413 upload-too-large, gateway timeouts) throws the
+// cryptic "The string did not match the expected pattern." — parse the text
+// manually and return a friendly error object instead.
+// ---------------------------------------------------------------------------
+export async function safeJson(res) {
+  const text = await res.text().catch(() => '')
+  try {
+    return text ? JSON.parse(text) : {}
+  } catch {
+    return { error: `Server error (${res?.status || '?'}) — please try again` }
+  }
+}
+
 export function escapeText(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }

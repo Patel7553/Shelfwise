@@ -23,7 +23,7 @@ import { useT } from '@/lib/i18n'
 const fetch = apiFetch
 
 // ---- Refactored (June 2025): views/dialogs now live in /components/shelfwise/ ----
-import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText } from '@/components/shelfwise/shared'
+import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText, safeJson } from '@/components/shelfwise/shared'
 import { ReceiptScanDialog, ExpiryScanDialog, BarcodeScanDialog, LensCameraView } from '@/components/shelfwise/scanners'
 import { PrintLogbookDialog } from '@/components/shelfwise/logbook-print'
 import { DashboardView, UseTodayPanel, RecentItemsToday, ExpiryAlertBanner, UrgentList } from '@/components/shelfwise/dashboard'
@@ -449,7 +449,7 @@ function App() {
             return
           }
           if (!res.ok) throw new Error(`auth/me ${res.status}`)
-          const data = await res.json()
+          const data = await safeJson(res)
           if (cancelled) return
           setMe(data)
           setAuthed(true)
@@ -542,7 +542,7 @@ function App() {
       if (search) params.set('search', search)
       if (sort) params.set('sort', sort)
       const res = await fetch(`/api/products?${params.toString()}`)
-      const data = await res.json()
+      const data = await safeJson(res)
       setProducts(Array.isArray(data) ? data : [])
     } catch (e) {
       toast.error('Failed to load inventory')
@@ -554,7 +554,7 @@ function App() {
   const fetchFacets = async () => {
     try {
       const res = await fetch('/api/facets')
-      const data = await res.json()
+      const data = await safeJson(res)
       setFacets({ categories: data.categories || [], storages: data.storages || [] })
     } catch {}
   }
@@ -563,7 +563,7 @@ function App() {
     try {
       const res = await fetch('/api/settings')
       if (!res.ok) return
-      const data = await res.json()
+      const data = await safeJson(res)
       setSettings(data)
     } catch {}
   }
@@ -598,7 +598,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(guarded)
       })
-      const data = await res.json()
+      const data = await safeJson(res)
       if (!res.ok) {
         toast.error(data?.error || 'Failed to save settings')
         return
@@ -619,7 +619,7 @@ function App() {
   const fetchStats = async () => {
     try {
       const res = await fetch('/api/stats')
-      const data = await res.json()
+      const data = await safeJson(res)
       setStats(data)
     } catch {} finally {
       setStatsLoading(false)
@@ -726,7 +726,7 @@ function App() {
       const params = new URLSearchParams()
       if (recipesSearch) params.set('search', recipesSearch)
       const res = await fetch(`/api/recipes?${params.toString()}`)
-      const data = await res.json()
+      const data = await safeJson(res)
       setSavedRecipes(Array.isArray(data) ? data : [])
     } catch {}
   }
@@ -884,7 +884,7 @@ function App() {
       if (!res.ok) {
         let msg = `Save failed (${res.status})`
         try {
-          const errBody = await res.json()
+          const errBody = await safeJson(res)
           if (errBody?.error) msg = errBody.error
         } catch {}
         throw new Error(msg)
@@ -1097,7 +1097,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
       })
-      const data = await res.json()
+      const data = await safeJson(res)
       if (!res.ok) throw new Error(data.error || 'Parse failed')
       if (!data.items?.length) {
         toast.warning('Could not extract any items. Try rephrasing.')
@@ -1210,7 +1210,7 @@ function App() {
       if (!found) {
         try {
           const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(code)}.json`)
-          const data = await res.json()
+          const data = await safeJson(res)
           if (data?.status === 1 && data?.product) {
             const p = data.product
             const nm = p.product_name || p.product_name_en || p.generic_name || p.abbreviated_product_name || ''
@@ -1242,7 +1242,7 @@ function App() {
       if (!found) {
         try {
           const res = await fetch(`https://world.openproductsfacts.org/api/v0/product/${encodeURIComponent(code)}.json`)
-          const data = await res.json()
+          const data = await safeJson(res)
           if (data?.status === 1 && data?.product) {
             const p = data.product
             const nm = p.product_name || p.product_name_en || p.generic_name || ''
@@ -1270,7 +1270,7 @@ function App() {
         try {
           const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(code)}`)
           if (res.ok) {
-            const data = await res.json()
+            const data = await safeJson(res)
             const item = data?.items?.[0]
             if (item?.title && item.title.trim()) {
               detected.name = item.title
@@ -1287,7 +1287,7 @@ function App() {
       if (!found) {
         try {
           const res = await fetch(`https://world.openbeautyfacts.org/api/v0/product/${encodeURIComponent(code)}.json`)
-          const data = await res.json()
+          const data = await safeJson(res)
           if (data?.status === 1 && data?.product?.product_name && data.product.product_name.trim()) {
             detected.name = data.product.product_name
             detected.category = 'Cleaning/Beauty'
@@ -1306,7 +1306,7 @@ function App() {
         try {
           const res = await fetch(`/api/barcode-lookup?code=${encodeURIComponent(code)}`)
           if (res.ok) {
-            const data = await res.json()
+            const data = await safeJson(res)
             if (data?.found && data.name) {
               detected.name = data.name
               detected.category = data.category || (data.brand ? data.brand : '')
@@ -1350,7 +1350,7 @@ function App() {
         body: JSON.stringify({ image: dataUrl, barcode: aiFallback?.barcode || '' }),
       })
       if (!res.ok) throw new Error('AI identification failed')
-      const p = await res.json()
+      const p = await safeJson(res)
       if (!p?.name) throw new Error('Could not identify — please fill manually')
       const detected = {
         name: p.name,
@@ -1412,7 +1412,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image: dataUrl })
       })
-      const data = await res.json()
+      const data = await safeJson(res)
       if (!res.ok) throw new Error(data.error || 'Scan failed')
       const first = (data.items || [])[0]
       if (!first) {
@@ -1464,7 +1464,7 @@ function App() {
       if (!res.ok) {
         let msg = `Save failed (${res.status})`
         try {
-          const errBody = await res.json()
+          const errBody = await safeJson(res)
           if (errBody?.error) msg = errBody.error
         } catch {}
         throw new Error(msg)
@@ -1526,7 +1526,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ image: scanImage })
       })
-      const data = await res.json()
+      const data = await safeJson(res)
       if (!res.ok) throw new Error(data.error || 'Scan failed')
       const items = (data.items || []).map(it => ({ ...it, _keep: true }))
       setScanItems(items)
@@ -1695,7 +1695,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
-      const data = await res.json()
+      const data = await safeJson(res)
       if (!res.ok) throw new Error(data.error || 'Recipe scan failed')
       setRecipeResult(data)
       toast.success(`Analyzed: ${data.matched?.length || 0} ingredients · ${data.allergens?.length || 0} allergen${(data.allergens?.length || 0) !== 1 ? 's' : ''}`)
@@ -1912,7 +1912,7 @@ function App() {
               body: JSON.stringify({ ...payload, onboarded: true }),
             })
             if (res.ok) {
-              const updated = await res.json()
+              const updated = await safeJson(res)
               setSettings(updated)
               setMe({ ...me, kitchen: updated })
               toast.success('All set! Welcome to ShelfWise 🎉')
