@@ -845,6 +845,8 @@ Return ONLY a valid JSON object of the form: {"items":[ ... ]}. Each item must h
 CRITICAL DATE RULES (UK kitchen):
 - Printed dates are UK format, DAY FIRST: "03/09/2026" or "3.9.26" = 3 September 2026 — NEVER March 9.
 - "BB", "BBE", "Best Before", "Use By", "EXP", "E" all mark the expiry date.
+- Dates are often dot-matrix / laser printed in tiny text on pack EDGES, film seams, lid rims or the bottom — inspect corners and edges of the photo carefully before giving up.
+- Accept compact formats too: "030926", "03SEP26", "03 SEP", "3-9-26" (all day-first). "03 SEP" with no year = the next occurrence of that date.
 - If only month+year is printed (e.g. "09/2026" or "SEP 2026"), use the LAST day of that month.
 - If several dates are printed (packed/production + expiry), the expiry is the LATEST date.
 - Copy the date EXACTLY as printed — never guess or invent one. If unreadable, return null.
@@ -856,7 +858,7 @@ Output strictly valid JSON.`
       { role: 'system', content: systemPrompt },
       { role: 'user', content: [
         { type: 'text', text: 'Extract every inventory item visible in this image as JSON.' },
-        { type: 'image_url', image_url: { url: base64DataUrl } }
+        { type: 'image_url', image_url: { url: base64DataUrl, detail: 'high' } }
       ]}
     ],
     temperature: 0.1,
@@ -942,7 +944,7 @@ Output STRICT JSON. No comments. No trailing commas.`
       { role: 'system', content: systemPrompt },
       { role: 'user', content: [
         { type: 'text', text: 'Read this catering/restaurant delivery note carefully. Rotate the image mentally if it appears sideways. Expand ALL abbreviations to full readable names. Return the JSON described.' },
-        { type: 'image_url', image_url: { url: base64DataUrl } }
+        { type: 'image_url', image_url: { url: base64DataUrl, detail: 'high' } }
       ]}
     ],
     temperature: 0.1,
@@ -998,7 +1000,7 @@ Rules:
       { role: 'system', content: systemPrompt },
       { role: 'user', content: [
         { type: 'text', text: 'Identify this product from the photo.' },
-        { type: 'image_url', image_url: { url: base64DataUrl } }
+        { type: 'image_url', image_url: { url: base64DataUrl, detail: 'high' } }
       ]}
     ],
     temperature: 0.1,

@@ -457,6 +457,9 @@ export function ExpiryScanDialog({ open, onClose, onDateFound }) {
           return
         }
         await resetCameraZoom(stream)   // Android: undo default zoom-in
+        // Some Androids only expose zoom AFTER playback starts — retry.
+        setTimeout(() => { if (!cancelled) resetCameraZoom(stream) }, 800)
+        setTimeout(() => { if (!cancelled) resetCameraZoom(stream) }, 2000)
         streamRef.current = stream
         if (videoRef.current) {
           videoRef.current.srcObject = stream
@@ -649,11 +652,17 @@ export function BarcodeScanDialog({ open, onClose, onFound, loading, onManual })
           () => {}
         )
         setScanning(true)
-        // Android: undo the default zoomed-in camera (multi-lens phones)
-        try {
-          const vid = document.getElementById('barcode-reader-region')?.querySelector('video')
-          if (vid?.srcObject) await resetCameraZoom(vid.srcObject)
-        } catch {}
+        // Android: undo the default zoomed-in camera (multi-lens phones).
+        // Retry a few times — the video track appears asynchronously.
+        const fixBarcodeZoom = () => {
+          try {
+            const vid = document.getElementById('barcode-reader-region')?.querySelector('video')
+            if (vid?.srcObject) resetCameraZoom(vid.srcObject)
+          } catch {}
+        }
+        fixBarcodeZoom()
+        setTimeout(fixBarcodeZoom, 700)
+        setTimeout(fixBarcodeZoom, 2000)
         // Detect torch support
         try {
           const stream = scanner.getRunningTrackCameraCapabilities?.()
@@ -809,6 +818,9 @@ export function LensCameraView({ active, busy, frozenImage, onCapture, onGallery
         })
         if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
         await resetCameraZoom(stream)   // Android: undo default zoom-in
+        // Some Androids only expose zoom AFTER playback starts — retry.
+        setTimeout(() => { if (!cancelled) resetCameraZoom(stream) }, 800)
+        setTimeout(() => { if (!cancelled) resetCameraZoom(stream) }, 2000)
         streamRef.current = stream
         const v = videoRef.current
         if (v) {
@@ -835,8 +847,8 @@ export function LensCameraView({ active, busy, frozenImage, onCapture, onGallery
     firedRef.current = true
     try { navigator.vibrate?.(auto ? [30, 40, 30] : 40) } catch {}
     setFlash(true); setTimeout(() => setFlash(false), 250)
-    // Full-quality frame → JPEG data URL
-    const maxDim = 1400
+    // Full-quality frame → JPEG data URL (1800px keeps tiny printed dates readable for the AI)
+    const maxDim = 1800
     let w = video.videoWidth, h = video.videoHeight
     if (w > maxDim || h > maxDim) {
       const s = Math.min(maxDim / w, maxDim / h)

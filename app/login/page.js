@@ -91,8 +91,13 @@ export default function LoginPage() {
         toast.warning(`Account status: ${me.kitchen.status}. Awaiting admin approval.`)
         // Still route them to a page — the home page will show a friendly waiting screen.
       }
-      // Remember the owner's display name — stamped on items they add + activity log
-      if (ownerName.trim()) { try { localStorage.setItem('sw_person_name', ownerName.trim()) } catch {} }
+      // Remember the owner's display name — stamped on items they add + activity log.
+      // If the field is left empty, CLEAR any stale name from a previous person
+      // who used this phone (fixes "why is it my colleague's name by default?").
+      try {
+        if (ownerName.trim()) localStorage.setItem('sw_person_name', ownerName.trim())
+        else localStorage.removeItem('sw_person_name')
+      } catch {}
       // Fresh owner login → engage the staff-code lock screen on this device
       try { localStorage.removeItem('sw_kiosk_user'); localStorage.removeItem('sw_kiosk') } catch {}
       toast.success('Welcome back!')
