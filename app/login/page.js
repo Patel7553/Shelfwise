@@ -91,13 +91,9 @@ export default function LoginPage() {
         toast.warning(`Account status: ${me.kitchen.status}. Awaiting admin approval.`)
         // Still route them to a page — the home page will show a friendly waiting screen.
       }
-      // Remember the owner's display name — stamped on items they add + activity log.
-      // If the field is left empty, CLEAR any stale name from a previous person
-      // who used this phone (fixes "why is it my colleague's name by default?").
-      try {
-        if (ownerName.trim()) localStorage.setItem('sw_person_name', ownerName.trim())
-        else localStorage.removeItem('sw_person_name')
-      } catch {}
+      // Identity comes ONLY from staff codes (user request, July 2025):
+      // clear any remembered name so it can't leak onto other users' items.
+      try { localStorage.removeItem('sw_person_name') } catch {}
       // Fresh owner login → engage the staff-code lock screen on this device
       try { localStorage.removeItem('sw_kiosk_user'); localStorage.removeItem('sw_kiosk') } catch {}
       toast.success('Welcome back!')
@@ -193,11 +189,8 @@ export default function LoginPage() {
                       <button type="button" onClick={forgotPassword} className="text-xs text-emerald-700 font-medium hover:underline">Forgot password?</button>
                     </div>
                   </div>
-                  <div>
-                    <Label htmlFor="oname">Your name</Label>
-                    <Input id="oname" value={ownerName} onChange={e => setOwnerName(e.target.value)} placeholder="e.g. John" maxLength={40} />
-                    <p className="text-[11px] text-slate-500 mt-1">Shows on everything you add (optional).</p>
-                  </div>
+                  {/* "Your name" field removed (user request, July 2025) —
+                      identity now comes ONLY from staff codes, never a typed default. */}
                   <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700" disabled={ownerBusy}>
                     {ownerBusy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <LogIn className="h-4 w-4 mr-2" />}
                     {T('login_signin')}

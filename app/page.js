@@ -453,10 +453,19 @@ function App() {
           if (cancelled) return
           setMe(data)
           setAuthed(true)
-          // Existing code-login users from before the names feature: ask for their name once.
-          if (data?.role === 'chef') {
-            try { if (!localStorage.getItem('sw_person_name')) setNamePromptOpen(true) } catch {}
-          }
+          // NAME = CODE IDENTITY ONLY (user request, July 2025): the device's
+          // remembered name is always synced to whoever entered their staff
+          // code — stale typed names (e.g. the owner's) can never leak onto
+          // other users' items. The old "type your name" popup is gone.
+          try {
+            if (data?.role === 'chef') {
+              if (data?.personName) localStorage.setItem('sw_person_name', data.personName)
+            } else if (data?.role === 'owner' || data?.role === 'admin') {
+              const ku = JSON.parse(localStorage.getItem('sw_kiosk_user') || 'null')
+              if (ku?.name) localStorage.setItem('sw_person_name', ku.name)
+              else localStorage.removeItem('sw_person_name')
+            }
+          } catch {}
           // KIOSK: owner-authed devices lock to the staff-code screen until
           // someone identifies themselves with their 4-digit code.
           if (data?.role === 'owner' || (data?.role === 'admin' && data?.kitchen)) {
@@ -1796,7 +1805,8 @@ function App() {
   const unlockAsOwner = (name) => {
     try {
       localStorage.setItem('sw_kiosk_user', JSON.stringify({ name: name || 'Owner', isOwner: true, at: Date.now() }))
-      if (name && name !== 'Owner' && !localStorage.getItem('sw_person_name')) localStorage.setItem('sw_person_name', name)
+      // Identity = code identity: owner code stamps "Owner" on items/activity.
+      localStorage.setItem('sw_person_name', name || 'Owner')
     } catch {}
     setKioskLocked(false)
   }
