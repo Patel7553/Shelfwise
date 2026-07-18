@@ -1977,39 +1977,42 @@ function App() {
             </div>
           </div>
 
-          {/* Desktop nav */}
-          <nav className="hidden md:flex items-center gap-1">
-            <Button variant={view === 'dashboard' ? 'default' : 'ghost'} size="sm" onClick={goToDashboard}>
-              <LayoutDashboard className="h-4 w-4 mr-2" /> {T('nav_dashboard')}
+          {/* Desktop / tablet nav — ADAPTIVE (user request, July 2025):
+              md–lg (tablets/iPad): compact icon-only buttons with tooltips so
+              nothing overflows or gets cut off; xl+ (laptop/PC): full labels.
+              overflow-x-auto is a safety net for very narrow landscape modes. */}
+          <nav className="hidden md:flex items-center gap-0.5 lg:gap-1 min-w-0 max-w-full overflow-x-auto">
+            <Button variant={view === 'dashboard' ? 'default' : 'ghost'} size="sm" onClick={goToDashboard} title={T('nav_dashboard')} className="shrink-0">
+              <LayoutDashboard className="h-4 w-4 xl:mr-2" /> <span className="hidden xl:inline">{T('nav_dashboard')}</span>
             </Button>
             {hasStock && (
-              <Button variant={view === 'inventory' ? 'default' : 'ghost'} size="sm" onClick={() => { setStatusFilter('All'); setView('inventory') }}>
-                <Package className="h-4 w-4 mr-2" /> {T('nav_inventory')}
+              <Button variant={view === 'inventory' ? 'default' : 'ghost'} size="sm" onClick={() => { setStatusFilter('All'); setView('inventory') }} title={T('nav_inventory')} className="shrink-0">
+                <Package className="h-4 w-4 xl:mr-2" /> <span className="hidden xl:inline">{T('nav_inventory')}</span>
               </Button>
             )}
             {hasRecipes && (
-              <Button variant={view === 'recipes' ? 'default' : 'ghost'} size="sm" onClick={() => setView('recipes')}>
-                <BookOpen className="h-4 w-4 mr-2" /> {T('nav_recipes')}
+              <Button variant={view === 'recipes' ? 'default' : 'ghost'} size="sm" onClick={() => setView('recipes')} title={T('nav_recipes')} className="shrink-0">
+                <BookOpen className="h-4 w-4 xl:mr-2" /> <span className="hidden xl:inline">{T('nav_recipes')}</span>
               </Button>
             )}
             {hasStock && can('orders') && (
-              <Button variant={view === 'orders' ? 'default' : 'ghost'} size="sm" onClick={() => setView('orders')}>
-                <Truck className="h-4 w-4 mr-2" /> Orders
+              <Button variant={view === 'orders' ? 'default' : 'ghost'} size="sm" onClick={() => setView('orders')} title="Orders" className="shrink-0">
+                <Truck className="h-4 w-4 xl:mr-2" /> <span className="hidden xl:inline">Orders</span>
               </Button>
             )}
             {hasRota && (
-              <Button variant={view === 'rota' ? 'default' : 'ghost'} size="sm" onClick={() => setView('rota')}>
-                <ChefHat className="h-4 w-4 mr-2" /> {T('nav_rota')}
+              <Button variant={view === 'rota' ? 'default' : 'ghost'} size="sm" onClick={() => setView('rota')} title={T('nav_rota')} className="shrink-0">
+                <ChefHat className="h-4 w-4 xl:mr-2" /> <span className="hidden xl:inline">{T('nav_rota')}</span>
               </Button>
             )}
             {hasAnalytics && (
-              <Button variant={view === 'analytics' ? 'default' : 'ghost'} size="sm" onClick={() => setView('analytics')}>
-                <BarChart3 className="h-4 w-4 mr-2" /> {T('nav_waste')}
+              <Button variant={view === 'analytics' ? 'default' : 'ghost'} size="sm" onClick={() => setView('analytics')} title={T('nav_waste')} className="shrink-0">
+                <BarChart3 className="h-4 w-4 xl:mr-2" /> <span className="hidden xl:inline">{T('nav_waste')}</span>
               </Button>
             )}
             {hasHaccp && (
-              <Button variant={view === 'haccp' ? 'default' : 'ghost'} size="sm" onClick={() => setView('haccp')}>
-                <ShieldCheck className="h-4 w-4 mr-2" /> {T('nav_compliance')}
+              <Button variant={view === 'haccp' ? 'default' : 'ghost'} size="sm" onClick={() => setView('haccp')} title={T('nav_compliance')} className="shrink-0">
+                <ShieldCheck className="h-4 w-4 xl:mr-2" /> <span className="hidden xl:inline">{T('nav_compliance')}</span>
               </Button>
             )}
             {me?.isAdmin && (
@@ -2017,21 +2020,21 @@ function App() {
                 variant="outline"
                 size="sm"
                 onClick={() => router.push('/admin')}
-                className="border-emerald-500 text-emerald-700 hover:bg-emerald-50 font-semibold"
+                className="border-emerald-500 text-emerald-700 hover:bg-emerald-50 font-semibold shrink-0"
                 title="Open admin panel"
               >
-                <ShieldCheck className="h-4 w-4 mr-1" /> {T('nav_admin')}
+                <ShieldCheck className="h-4 w-4 xl:mr-1" /> <span className="hidden xl:inline">{T('nav_admin')}</span>
               </Button>
             )}
             {showSwitchUser && (
-              <Button size="sm" onClick={switchUser} title="Switch user — back to staff code screen" className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold">
-                <Users className="h-4 w-4 mr-1.5" /> Switch user
+              <Button size="sm" onClick={switchUser} title="Switch user — back to staff code screen" className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold shrink-0">
+                <Users className="h-4 w-4 xl:mr-1.5" /> <span className="hidden xl:inline">Switch user</span>
               </Button>
             )}
-            <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title={T('nav_settings')}>
+            <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title={T('nav_settings')} className="shrink-0">
               <Settings className="h-4 w-4" />
             </Button>
-            <Button variant="ghost" size="icon" onClick={async () => { await signOutAll(); router.replace('/login') }} title={T('nav_signout')} className="text-red-600 hover:text-red-700 hover:bg-red-50">
+            <Button variant="ghost" size="icon" onClick={async () => { await signOutAll(); router.replace('/login') }} title={T('nav_signout')} className="text-red-600 hover:text-red-700 hover:bg-red-50 shrink-0">
               <LogOut className="h-4 w-4" />
             </Button>
           </nav>
