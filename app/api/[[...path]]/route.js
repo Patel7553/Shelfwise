@@ -1663,6 +1663,16 @@ function personFromRequest(request, ctx) {
   return ctx?.userEmail || (ctx?.role === 'chef' ? 'Chef (code login)' : ctx?.role || 'Unknown')
 }
 
+// DPDP: record a person's consent ONCE (first code login) — a timestamped
+// row in activity_logs acts as the compliance register.
+async function logConsentOnce(sb, kitchenId, person, detail) {
+  try {
+    const { data } = await sb.from('activity_logs').select('id')
+      .eq('kitchen_id', kitchenId).eq('action', 'consent').eq('person', person).limit(1)
+    if (!data || data.length === 0) await logActivity(sb, kitchenId, person, 'consent', detail)
+  } catch {}
+}
+
 // ---- Staff PIN helpers ----
 // 4-digit staff codes, unique per kitchen. Stored inside kitchens.staff_names
 // jsonb entries as { pin: "4829" } — no schema migration required.
@@ -2279,6 +2289,56 @@ export async function GET(request, { params }) {
       }
     }
 
+    // ------- DPDP Data & Privacy: consent register (owner only) -------
+    if (path === 'privacy/consents') {
+      const { ctx, error } = await requireAuth(request)
+      if (error) return error
+      if (ctx.role !== 'owner' && ctx.role !== 'admin') return json({ error: 'Owner only' }, 403)
+      const kId = ctx.kitchenId || ctx.kitchen?.id
+      const { data } = await sb.from('activity_logs').select('id, person, detail, created_at')
+        .eq('kitchen_id', kId).eq('action', 'consent')
+        .order('created_at', { ascending: false }).limit(200)
+      return json({ items: data || [] })
+    }
+
+    // ------- DPDP Data & Privacy: full data export (owner only) -------
+    if (path === 'privacy/export') {
+      const { ctx, error } = await requireAuth(request)
+      if (error) return error
+      if (ctx.role !== 'owner' && ctx.role !== 'admin') return json({ error: 'Owner only' }, 403)
+      const kId = ctx.kitchenId || ctx.kitchen?.id
+      const grab = async (table, cols = '*') => {
+        try {
+          const { data } = await sb.from(table).select(cols).eq('kitchen_id', kId).limit(10000)
+          return data || []
+        } catch { return [] }
+      }
+      let kitchenRow = null
+      try {
+        const { data: k } = await sb.from('kitchens').select('*').eq('id', kId).maybeSingle()
+        if (k) { const { code_seed, ...rest } = k; kitchenRow = rest }
+      } catch {}
+      const exportData = {
+        exportedAt: new Date().toISOString(),
+        exportedBy: ctx.userEmail || 'owner',
+        dpdpNote: 'Full personal & operational data export for this kitchen (DPDP Act data-portability request).',
+        kitchen: kitchenRow,
+        products: await grab('products'),
+        recipes: await grab('recipes'),
+        suppliers: await grab('suppliers'),
+        wasteLog: await grab('waste_log'),
+        rotaShifts: await grab('rota_shifts'),
+        haccpTemperatureLogs: await grab('haccp_temperature_logs'),
+        haccpCleaningTasks: await grab('haccp_cleaning_tasks'),
+        haccpCleaningLog: await grab('haccp_cleaning_log'),
+        haccpDeliveryChecks: await grab('haccp_delivery_checks'),
+        activityLogs: await grab('activity_logs'),
+        pushSubscriptions: (await grab('push_subscriptions', 'id, endpoint, user_label, created_at')),
+      }
+      try { await logActivity(sb, kId, personFromRequest(request, ctx), 'data_exported', 'DPDP data export downloaded') } catch {}
+      return json(exportData)
+    }
+
     // ------- Staff list (owner only) — includes each person's 4-digit PIN -------
     if (path === 'staff') {
       const { ctx, error } = await requireAuth(request)
@@ -2413,6 +2473,34 @@ export async function POST(request, { params }) {
       return json({ ok: true, personName, personRole: existing?.role === 'manager' ? 'manager' : 'staff' })
     }
 
+    // ------- DPDP Data & Privacy: deletion request (owner only) -------
+    if (path === 'privacy/delete-request') {
+      const { ctx, error } = await requireAuth(request)
+      if (error) return error
+      if (ctx.role !== 'owner' && ctx.role !== 'admin') return json({ error: 'Owner only' }, 403)
+      const kId = ctx.kitchenId || ctx.kitchen?.id
+      const who = ctx.userEmail || personFromRequest(request, ctx)
+      await logActivity(sb, kId, who, 'deletion_requested', 'DPDP account & data deletion requested — to be processed within 30 days')
+      // Notify the platform admin (best-effort)
+      const adminEmail = process.env.SHELFWISE_ADMIN_EMAIL
+      const resendKey = process.env.RESEND_API_KEY
+      if (adminEmail && resendKey) {
+        try {
+          await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              from: process.env.RESEND_FROM || 'ShelfWise <onboarding@resend.dev>',
+              to: [adminEmail],
+              subject: `⚠️ DPDP DELETION REQUEST — ${who}`,
+              html: `<p><b>${who}</b> (kitchen ${kId}) has requested deletion of their account and all data under the DPDP Act.</p><p>Process within 30 days: delete the kitchen row, products, logs, photos and the Supabase auth user.</p>`,
+            }),
+          })
+        } catch {}
+      }
+      return json({ ok: true, message: 'Deletion request recorded. Your account and all data will be deleted within 30 days. You will receive a confirmation email.' })
+    }
+
     // ------- Staff: owner adds a new staff member (PIN auto-generated) -------
     if (path === 'staff/add') {
       const { ctx, error } = await requireAuth(request)
@@ -2489,6 +2577,8 @@ export async function POST(request, { params }) {
       // Update lastSeen (best-effort)
       const next = list.map(e => e?.pin === pin ? { ...e, lastSeen: new Date().toISOString() } : e)
       await sb.from('kitchens').update({ staff_names: next }).eq('id', kId)
+      // DPDP: consent register (once per person; notice shown on the lock screen)
+      await logConsentOnce(sb, kId, entry.name, 'DPDP consent v1 — staff code entered on shared kitchen device (consent notice displayed)')
       const token = signChefToken(kId, entry.name)
       return json({
         ok: true,
@@ -2515,6 +2605,10 @@ export async function POST(request, { params }) {
         return json({ error: 'email and password are required' }, 400)
       }
       if (password.length < 8) return json({ error: 'Password must be at least 8 characters' }, 400)
+      // DPDP: explicit opt-in consent is REQUIRED (checkbox, never pre-ticked).
+      if (body.consent !== true) {
+        return json({ error: 'Please review and accept the data consent to create your account' }, 400)
+      }
 
       // 1) Create Supabase auth user (email confirmed = true so they can log in immediately;
       //    the manual approval step is what actually gates access to the app).
@@ -2549,6 +2643,12 @@ export async function POST(request, { params }) {
         try { await sb.auth.admin.deleteUser(created.user.id) } catch (e) { console.warn('Failed to rollback auth user:', e) }
         return json({ error: kErr.message }, 500)
       }
+
+      // DPDP compliance record: log the consent with a timestamp (best-effort).
+      try {
+        await logActivity(sb, kitchenId, email, 'consent',
+          'DPDP consent v1 accepted at signup (owner) — data collected: owner account details, staff names & staff codes, scan/label photos, temperature & HACCP logs')
+      } catch {}
 
       // 3) Notify admin by email (best-effort — don't fail signup if email fails).
       const adminEmail = process.env.SHELFWISE_ADMIN_EMAIL
@@ -2661,6 +2761,10 @@ export async function POST(request, { params }) {
         if (entry) {
           const next = list.map(e => e?.pin === pin ? { ...e, deviceId: deviceId || e.deviceId, lastSeen: new Date().toISOString() } : e)
           await sb.from('kitchens').update({ staff_names: next }).eq('id', k.id)
+          // DPDP: consent register (once per person; explicit checkbox on the login form)
+          await logConsentOnce(sb, k.id, entry.name, body.consent === true
+            ? 'DPDP consent v1 — explicit opt-in at staff code login (personal device)'
+            : 'DPDP consent v1 — staff code login (consent notice displayed)')
           const token = signChefToken(k.id, entry.name)
           return json({
             ok: true,

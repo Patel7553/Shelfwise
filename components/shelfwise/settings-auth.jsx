@@ -865,6 +865,9 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
               {/* Everyone (owner + staff) sees THEIR OWN staff code here */}
               <MyStaffCodeCard />
 
+              {/* DPDP Data & Privacy — owner only */}
+              {isOwner && <DataPrivacyCard />}
+
               {/* Old daily chef-code card removed (June 2025) — replaced by the
                   4-digit Staff Code system (Settings → Staff). */}
               <div className="rounded-lg border-2 border-indigo-200 bg-indigo-50 p-4">
@@ -1442,6 +1445,105 @@ export function MyStaffCodeCard() {
   )
 }
 
+// ============================================================================
+// DPDP DATA & PRIVACY (owner only, July 2025) — consent register, full data
+// export (portability) and deletion request, per the DPDP Act.
+// ============================================================================
+export function DataPrivacyCard() {
+  const [showConsents, setShowConsents] = useState(false)
+  const [consents, setConsents] = useState([])
+  const [consentsLoading, setConsentsLoading] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+
+  const fmtT = (d) => { try { return new Date(d).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) } catch { return d } }
+
+  const toggleConsents = async () => {
+    const next = !showConsents
+    setShowConsents(next)
+    if (next && consents.length === 0) {
+      setConsentsLoading(true)
+      try {
+        const res = await fetch('/api/privacy/consents')
+        const data = await safeJson(res)
+        setConsents(Array.isArray(data.items) ? data.items : [])
+      } catch {} finally { setConsentsLoading(false) }
+    }
+  }
+
+  const exportData = async () => {
+    setExporting(true)
+    try {
+      const res = await fetch('/api/privacy/export')
+      const data = await safeJson(res)
+      if (!res.ok) throw new Error(data.error || 'Export failed')
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `shelfwise-data-export-${new Date().toISOString().slice(0, 10)}.json`
+      document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(url)
+      toast.success('Data export downloaded 📦')
+    } catch (e) { toast.error(e.message || 'Export failed') } finally { setExporting(false) }
+  }
+
+  const requestDeletion = async () => {
+    if (!window.confirm('Request deletion of your ENTIRE account and all kitchen data?\n\nThis includes products, staff records, photos, temperature logs and history. Processing takes up to 30 days and cannot be undone.')) return
+    const typed = window.prompt('Type DELETE to confirm your deletion request:')
+    if (typed !== 'DELETE') { toast.info('Deletion request cancelled'); return }
+    setDeleting(true)
+    try {
+      const res = await fetch('/api/privacy/delete-request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      const data = await safeJson(res)
+      if (!res.ok) throw new Error(data.error || 'Request failed')
+      toast.success(data.message || 'Deletion request recorded — processed within 30 days')
+    } catch (e) { toast.error(e.message || 'Request failed') } finally { setDeleting(false) }
+  }
+
+  return (
+    <div className="rounded-lg border-2 border-slate-300 bg-slate-50 p-4">
+      <Label className="text-sm font-bold">🔐 Data &amp; Privacy (DPDP)</Label>
+      <p className="text-xs text-muted-foreground mt-1">
+        We collect: owner account details, staff names &amp; staff codes, scan/label photos (processed by AI then discarded), and temperature/HACCP records — used only to run your kitchen&apos;s inventory and food-safety compliance.
+      </p>
+      <div className="flex flex-wrap gap-2 mt-3">
+        <Button variant="outline" size="sm" onClick={exportData} disabled={exporting} className="bg-white">
+          {exporting ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Download className="h-4 w-4 mr-1.5" />} Export all my data
+        </Button>
+        <Button variant="outline" size="sm" onClick={toggleConsents} className="bg-white">
+          <FileText className="h-4 w-4 mr-1.5" /> {showConsents ? 'Hide consent records' : 'Consent records'}
+        </Button>
+        <Button variant="outline" size="sm" onClick={requestDeletion} disabled={deleting} className="bg-white text-red-600 border-red-200 hover:bg-red-50">
+          {deleting ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Trash2 className="h-4 w-4 mr-1.5" />} Request data deletion
+        </Button>
+      </div>
+      {showConsents && (
+        <div className="mt-3 rounded-lg border bg-white p-2.5 max-h-56 overflow-y-auto">
+          {consentsLoading ? (
+            <div className="flex justify-center py-3"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></div>
+          ) : consents.length === 0 ? (
+            <p className="text-xs text-muted-foreground text-center py-2">No consent records yet — they are logged when people sign up or first log in with their staff code.</p>
+          ) : (
+            <div className="space-y-1">
+              {consents.map(c => (
+                <div key={c.id} className="flex items-start justify-between gap-2 border-b last:border-0 py-1.5">
+                  <div className="min-w-0">
+                    <p className="text-xs font-semibold capitalize">{c.person || 'Unknown'}</p>
+                    <p className="text-[11px] text-muted-foreground">{c.detail}</p>
+                  </div>
+                  <span className="text-[10px] text-muted-foreground shrink-0 mt-0.5">{fmtT(c.created_at)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      <p className="text-[10px] text-muted-foreground mt-2">Deletion requests are processed within 30 days as required by the DPDP Act.</p>
+    </div>
+  )
+}
+
 export function NotificationSettingsCard() {
   // Notification mode per device (user request, June 2025):
   //  'mute'  — nothing: no in-app expiry banner, no home-screen push
@@ -1984,6 +2086,7 @@ export function StaffActivityCard() {
     item_added: '➕ Added item', item_updated: '✏️ Edited item', item_deleted: '🗑️ Deleted item',
     waste_logged: '♻️ Logged waste', temp_logged: '🌡️ Logged temperature',
     recipe_saved: '📖 Saved recipe', recipe_updated: '📖 Edited recipe', recipe_deleted: '📖 Deleted recipe',
+    consent: '🔐 Gave data consent', data_exported: '📦 Exported data', deletion_requested: '⚠️ Requested data deletion',
   }
 
   const removeStaff = async (name) => {

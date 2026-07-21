@@ -172,6 +172,9 @@ function PinLockScreen({ kitchenName, ownerEmail, onOwnerUnlock, onStaffUnlock }
           <p className="text-emerald-400/70 text-[11px] mt-2 text-center max-w-[280px]">
             No code yet? Ask the owner — codes are in Settings → Staff.
           </p>
+          <p className="text-emerald-500/60 text-[10px] mt-2 text-center max-w-[280px]">
+            By entering your code you agree that your name and kitchen activity are recorded for food-safety compliance.
+          </p>
         </>
       ) : (
         <form onSubmit={submitPassword} className="w-full max-w-[300px] mt-5 space-y-3">

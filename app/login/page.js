@@ -32,6 +32,7 @@ export default function LoginPage() {
   const [staffPin, setStaffPin] = useState('')
   const [ownerName, setOwnerName] = useState('')
   const [chefBusy, setChefBusy] = useState(false)
+  const [staffConsent, setStaffConsent] = useState(false)   // DPDP opt-in (never pre-ticked)
 
   // Prefill from previous logins on this phone
   useEffect(() => {
@@ -136,6 +137,7 @@ export default function LoginPage() {
           kitchenName: kitchenName.trim(),
           pin: staffPin.trim(),
           deviceId: getDeviceId(),
+          consent: staffConsent === true,   // DPDP explicit opt-in
         }),
       })
       setChefToken(res.token)
@@ -222,7 +224,19 @@ export default function LoginPage() {
                     />
                     <p className="text-[11px] text-slate-500 mt-1">Your personal 4-digit code — ask your manager if you don't have one yet.</p>
                   </div>
-                  <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700" disabled={chefBusy}>
+                  {/* DPDP consent — explicit opt-in, never pre-ticked */}
+                  <label className="flex items-start gap-2 cursor-pointer rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+                    <input
+                      type="checkbox"
+                      checked={staffConsent}
+                      onChange={e => setStaffConsent(e.target.checked)}
+                      className="h-4 w-4 mt-0.5 accent-emerald-600 shrink-0"
+                    />
+                    <span className="text-[11px] text-slate-600">
+                      I agree that my name and my kitchen activity (items added, waste &amp; temperature logs) are recorded for food-safety compliance. <span className="text-red-500">*</span>
+                    </span>
+                  </label>
+                  <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700" disabled={chefBusy || !staffConsent}>
                     {chefBusy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ChefHat className="h-4 w-4 mr-2" />}
                     Enter Kitchen
                   </Button>

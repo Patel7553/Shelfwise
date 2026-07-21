@@ -20,6 +20,8 @@ export default function SignupPage() {
   // stage: 'form' → 'otp' (verify email code) → 'done'
   const [stage, setStage] = useState('form')
   const [emailVerified, setEmailVerified] = useState(false)
+  // DPDP consent — must be explicitly ticked (never pre-ticked)
+  const [consentChecked, setConsentChecked] = useState(false)
 
   // --- OTP state ---
   const [code, setCode] = useState('')
@@ -37,6 +39,7 @@ export default function SignupPage() {
     e.preventDefault()
     if (!email || !password) return
     if (password.length < 8) { toast.error('Password must be at least 8 characters'); return }
+    if (!consentChecked) { toast.error('Please review and accept the data consent to continue'); return }
     setBusy(true)
     try {
       const res = await apiJson('/api/auth/signup', {
@@ -44,6 +47,7 @@ export default function SignupPage() {
         body: JSON.stringify({
           email: email.trim().toLowerCase(),
           password,
+          consent: true,   // DPDP explicit opt-in (checkbox above)
           // kitchen name / type / timezone are collected in the setup wizard AFTER approval
         }),
       })
@@ -206,7 +210,33 @@ export default function SignupPage() {
                 </div>
                 <p className="text-[11px] text-slate-500 mt-1">Choose a strong password — you'll use this every day.</p>
               </div>
-              <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 mt-2" disabled={busy}>
+
+              {/* DPDP consent — explicit opt-in, never pre-ticked */}
+              <div className="rounded-lg border-2 border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-bold text-slate-800 mb-1.5">🔐 Your data — what we collect &amp; why</p>
+                <ul className="text-[11px] text-slate-600 space-y-1 list-disc pl-4">
+                  <li><b>Owner account details</b> (email, kitchen name) — to run your account &amp; send alerts</li>
+                  <li><b>Staff names &amp; staff codes</b> — to attribute kitchen actions for food-safety records</li>
+                  <li><b>Scan-sheet &amp; label photos</b> — processed by AI to read products &amp; dates, then discarded</li>
+                  <li><b>Temperature &amp; HACCP data</b> — to keep your legal compliance records</li>
+                </ul>
+                <p className="text-[11px] text-slate-500 mt-1.5">
+                  You can export or request deletion of all your data anytime in Settings → Data &amp; Privacy.
+                </p>
+                <label className="flex items-start gap-2 mt-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={consentChecked}
+                    onChange={e => setConsentChecked(e.target.checked)}
+                    className="h-4 w-4 mt-0.5 accent-emerald-600 shrink-0"
+                  />
+                  <span className="text-xs text-slate-700">
+                    I agree to the collection and use of this data as described above <span className="text-red-500">*</span>
+                  </span>
+                </label>
+              </div>
+
+              <Button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 mt-2" disabled={busy || !consentChecked}>
                 {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <UserPlus className="h-4 w-4 mr-2" />}
                 Request Access
               </Button>
