@@ -1663,6 +1663,39 @@ function personFromRequest(request, ctx) {
   return ctx?.userEmail || (ctx?.role === 'chef' ? 'Chef (code login)' : ctx?.role || 'Unknown')
 }
 
+// HARDENED attribution (July 2026, user request): the x-person-name header can
+// hold a STALE name on devices running old app versions (e.g. the owner's name
+// typed long ago) — so header names are only trusted if they match a REAL
+// staff member of this kitchen (or "Owner"). Anything else is rejected and
+// replaced with the code-verified identity. JWT-embedded names (staff-code
+// logins) are always authoritative.
+async function validatedPersonFromRequest(sb, request, ctx) {
+  // 1) Name embedded in the staff-code JWT — verified at login, always trusted.
+  if (ctx?.person) return String(ctx.person).slice(0, 40)
+  // 2) Header name — must match a real staff member or "Owner".
+  let header = null
+  try {
+    const h = request.headers.get('x-person-name')
+    if (h) header = decodeURIComponent(h).trim().slice(0, 40) || null
+  } catch {}
+  if (header) {
+    if (/^owner$/i.test(header)) return 'Owner'
+    try {
+      const kId = ctx?.kitchenId || ctx?.kitchen?.id
+      let list = Array.isArray(ctx?.kitchen?.staff_names) ? ctx.kitchen.staff_names : null
+      if (!list && kId) {
+        const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', kId).maybeSingle()
+        list = Array.isArray(k?.staff_names) ? k.staff_names : []
+      }
+      const match = (list || []).find(e => String(e?.name || '').toLowerCase() === header.toLowerCase())
+      if (match) return match.name
+    } catch {}
+    // Unknown / stale name → fall through and use the verified identity instead.
+  }
+  if (ctx?.role === 'owner' || ctx?.role === 'admin') return 'Owner'
+  return ctx?.userEmail || (ctx?.role === 'chef' ? 'Chef (code login)' : 'Unknown')
+}
+
 // DPDP: record a person's consent ONCE (first code login) — a timestamped
 // row in activity_logs acts as the compliance register.
 async function logConsentOnce(sb, kitchenId, person, detail) {
@@ -2335,7 +2368,7 @@ export async function GET(request, { params }) {
         activityLogs: await grab('activity_logs'),
         pushSubscriptions: (await grab('push_subscriptions', 'id, endpoint, user_label, created_at')),
       }
-      try { await logActivity(sb, kId, personFromRequest(request, ctx), 'data_exported', 'DPDP data export downloaded') } catch {}
+      try { await logActivity(sb, kId, await validatedPersonFromRequest(sb, request, ctx), 'data_exported', 'DPDP data export downloaded') } catch {}
       return json(exportData)
     }
 
@@ -2396,7 +2429,7 @@ export async function GET(request, { params }) {
         if (!ownerEntry?.pin) return json({ error: 'No code yet — open Settings → Staff once to generate codes' }, 404)
         return json({ name: ownerEntry.name || 'Owner', pin: ownerEntry.pin, isOwner: true })
       }
-      const person = personFromRequest(request, ctx)
+      const person = await validatedPersonFromRequest(sb, request, ctx)
       const entry = list.find(e => !e?.isOwner && String(e?.name || '').toLowerCase() === String(person || '').toLowerCase())
       if (!entry?.pin) return json({ error: 'No staff code found for you — ask the owner to add you in Settings → Staff' }, 404)
       return json({ name: entry.name, pin: entry.pin, isOwner: false })
@@ -2479,7 +2512,7 @@ export async function POST(request, { params }) {
       if (error) return error
       if (ctx.role !== 'owner' && ctx.role !== 'admin') return json({ error: 'Owner only' }, 403)
       const kId = ctx.kitchenId || ctx.kitchen?.id
-      const who = ctx.userEmail || personFromRequest(request, ctx)
+      const who = ctx.userEmail || await validatedPersonFromRequest(sb, request, ctx)
       await logActivity(sb, kId, who, 'deletion_requested', 'DPDP account & data deletion requested — to be processed within 30 days')
       // Notify the platform admin (best-effort)
       const adminEmail = process.env.SHELFWISE_ADMIN_EMAIL
@@ -3454,7 +3487,7 @@ Output strictly valid JSON with no other text.`
         if (!row.product_name) return json({ error: 'productName required' }, 400)
         const { data, error: e2 } = await sb.from('waste_log').insert(row).select().single()
         if (e2) throw e2
-        await logActivity(sb, kid, personFromRequest(request, ctx), 'waste_logged', `${row.product_name} (${row.quantity} ${row.unit}) — ${row.reason}`)
+        await logActivity(sb, kid, await validatedPersonFromRequest(sb, request, ctx), 'waste_logged', `${row.product_name} (${row.quantity} ${row.unit}) — ${row.reason}`)
         return json(wasteFromDb(data), 201)
       }
 
@@ -3484,7 +3517,7 @@ Output strictly valid JSON with no other text.`
           ;({ data, error: e2 } = await sb.from('haccp_temperature_logs').insert(row).select().single())
         }
         if (e2) throw e2
-        await logActivity(sb, kid, personFromRequest(request, ctx), 'temp_logged', `${location}: ${temp}°C ${row.is_pass ? 'PASS' : 'FAIL'}`)
+        await logActivity(sb, kid, await validatedPersonFromRequest(sb, request, ctx), 'temp_logged', `${location}: ${temp}°C ${row.is_pass ? 'PASS' : 'FAIL'}`)
         return json(haccpTempFromDb(data), 201)
       }
 
@@ -3555,7 +3588,7 @@ Output strictly valid JSON with no other text.`
         const body = await request.json()
         let doc = { id: uuidv4(), kitchen_id: kid, ...toDb(body) }
         // Attribution: stamp WHO added this item (shown on the item card).
-        doc.custom_fields = { ...(doc.custom_fields || {}), _addedBy: personFromRequest(request, ctx) }
+        doc.custom_fields = { ...(doc.custom_fields || {}), _addedBy: await validatedPersonFromRequest(sb, request, ctx) }
         let { data, error } = await sb.from('products').insert(doc).select().single()
         if (error && /column .* does not exist|schema cache/i.test(error.message || '')) {
           const {
@@ -3574,14 +3607,14 @@ Output strictly valid JSON with no other text.`
             : ''
           return json({ error: (error.message || 'Insert failed') + hint }, 500)
         }
-        await logActivity(sb, kid, personFromRequest(request, ctx), 'item_added', data.name)
+        await logActivity(sb, kid, await validatedPersonFromRequest(sb, request, ctx), 'item_added', data.name)
         return json(enrich(fromDb(data)), 201)
       }
 
       if (path === 'products/bulk') {
         const body = await request.json()
         const itemsIn = Array.isArray(body.items) ? body.items : []
-        const bulkPerson = personFromRequest(request, ctx)
+        const bulkPerson = await validatedPersonFromRequest(sb, request, ctx)
         const docs = itemsIn.filter(i => i.name).map(b => {
           const d = { id: uuidv4(), kitchen_id: kid, ...toDb(b) }
           d.custom_fields = { ...(d.custom_fields || {}), _addedBy: bulkPerson }
@@ -3609,7 +3642,7 @@ Output strictly valid JSON with no other text.`
             : ''
           return json({ error: (error.message || 'Insert failed') + hint }, 500)
         }
-        await logActivity(sb, kid, personFromRequest(request, ctx), 'item_added', `${data.length} items: ${data.slice(0, 5).map(d => d.name).join(', ')}${data.length > 5 ? '…' : ''}`)
+        await logActivity(sb, kid, await validatedPersonFromRequest(sb, request, ctx), 'item_added', `${data.length} items: ${data.slice(0, 5).map(d => d.name).join(', ')}${data.length > 5 ? '…' : ''}`)
         return json({ inserted: data.length, items: data.map(fromDb).map(enrich) }, 201)
       }
 
@@ -3677,7 +3710,7 @@ Output strictly valid JSON with no other text.`
             error = retry.error
           }
           if (error) throw error
-          await logActivity(sb, kid, personFromRequest(request, ctx), 'recipe_updated', data?.title || row.title)
+          await logActivity(sb, kid, await validatedPersonFromRequest(sb, request, ctx), 'recipe_updated', data?.title || row.title)
           return json(data, 200)
         }
 
@@ -3708,7 +3741,7 @@ Output strictly valid JSON with no other text.`
           error = retry.error
         }
         if (error) throw error
-        await logActivity(sb, kid, personFromRequest(request, ctx), 'recipe_saved', data?.title || row.title)
+        await logActivity(sb, kid, await validatedPersonFromRequest(sb, request, ctx), 'recipe_saved', data?.title || row.title)
         return json(data, 201)
       }
 
@@ -3852,7 +3885,7 @@ export async function PUT(request, { params }) {
       }
       if (e2) return json({ error: e2.message }, 500)
       if (!data) return json({ error: 'Not found' }, 404)
-      await logActivity(sb, ctx.kitchenId, personFromRequest(request, ctx), 'recipe_updated', data?.title || segs[1])
+      await logActivity(sb, ctx.kitchenId, await validatedPersonFromRequest(sb, request, ctx), 'recipe_updated', data?.title || segs[1])
       return json(data)
     }
 
@@ -3963,7 +3996,7 @@ export async function PUT(request, { params }) {
           : ''
         return json({ error: (e2.message || 'Update failed') + hint }, 500)
       }
-      await logActivity(sb, ctx.kitchenId, personFromRequest(request, ctx), 'item_updated', data?.name || segs[1])
+      await logActivity(sb, ctx.kitchenId, await validatedPersonFromRequest(sb, request, ctx), 'item_updated', data?.name || segs[1])
       return json(enrich(fromDb(data)))
     }
 
@@ -4019,14 +4052,14 @@ export async function DELETE(request, { params }) {
       const { data: prod } = await sb.from('products').select('name').eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
       const { error } = await sb.from('products').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
-      await logActivity(sb, ctx.kitchenId, personFromRequest(request, ctx), 'item_deleted', prod?.name || segs[1])
+      await logActivity(sb, ctx.kitchenId, await validatedPersonFromRequest(sb, request, ctx), 'item_deleted', prod?.name || segs[1])
       return json({ ok: true })
     }
     if (segs[0] === 'recipes' && segs[1]) {
       const { data: rec } = await sb.from('recipes').select('title').eq('id', segs[1]).maybeSingle()
       const { error } = await sb.from('recipes').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
-      await logActivity(sb, ctx.kitchenId, personFromRequest(request, ctx), 'recipe_deleted', rec?.title || segs[1])
+      await logActivity(sb, ctx.kitchenId, await validatedPersonFromRequest(sb, request, ctx), 'recipe_deleted', rec?.title || segs[1])
       return json({ ok: true })
     }
     // ------- Staff: owner removes a person's name (frees it for reuse) -------
