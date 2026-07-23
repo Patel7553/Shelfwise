@@ -234,7 +234,7 @@ function toDb(body) {
   return row
 }
 
-function computeStatus(p) {
+function computeStatus(p, alertDays = 7) {
   const now = new Date()
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   const expiry = p.expiryDate ? new Date(p.expiryDate) : null
@@ -242,13 +242,29 @@ function computeStatus(p) {
   if (expiry && expiry < today) return 'Expired'
   if (expiry) {
     const diffDays = Math.ceil((expiry - today) / (1000 * 60 * 60 * 24))
-    if (diffDays >= 0 && diffDays <= 7) return 'Expiring'
+    if (diffDays >= 0 && diffDays <= alertDays) return 'Expiring'
   }
   if (qty <= 2) return 'Critical'
   return 'Ok'
 }
 
+// Per-kitchen expiry alert window (July 2026, data-level override — NOT a
+// user-facing setting). Default 7 days; a kitchen can be overridden via SQL:
+//   update kitchens set expiry_alert_days = 3 where lower(kitchen_name) = 'kevii';
+function kitchenAlertDays(k) {
+  const n = Number(k?.expiry_alert_days)
+  return Number.isFinite(n) && n >= 1 && n <= 60 ? Math.round(n) : 7
+}
+async function fetchAlertDays(sb, kitchenId, ctxKitchen = null) {
+  if (ctxKitchen && ctxKitchen.expiry_alert_days !== undefined) return kitchenAlertDays(ctxKitchen)
+  try {
+    const { data } = await sb.from('kitchens').select('expiry_alert_days').eq('id', kitchenId).maybeSingle()
+    return kitchenAlertDays(data)
+  } catch { return 7 }   // column not added yet → default for everyone
+}
+
 const enrich = (p) => ({ ...p, _status: computeStatus(p) })
+const enrichWith = (days) => (p) => ({ ...p, _status: computeStatus(p, days) })
 
 function addDays(n) {
   const d = new Date()
@@ -586,7 +602,8 @@ async function computeWeeklyDigest(sb, kitchen) {
 
   // Compute status client-side (same rule as computeStatus)
   const today = new Date(); today.setHours(0,0,0,0)
-  const in7 = new Date(today); in7.setDate(today.getDate() + 7)
+  const alertDays = kitchenAlertDays(kitchen)   // per-kitchen window (default 7)
+  const in7 = new Date(today); in7.setDate(today.getDate() + alertDays)
 
   let expired = [], expiring = [], reorder = []
   let inventoryValue = 0
@@ -630,6 +647,7 @@ async function computeWeeklyDigest(sb, kitchen) {
   return {
     generatedAt: nowISO,
     kitchen: { name: kitchen.kitchen_name || 'Your kitchen', currency: kitchen.currency || 'GBP', timezone: kitchen.timezone },
+    alertDays,
     totalItems: products.length,
     inventoryValue,
     expired: expired.slice(0, 10).map(p => ({ name: p.name, qty: p.quantity, unit: p.unit, expiryDate: p.expiry_date })),
@@ -716,7 +734,7 @@ function buildDigestHtml(digest) {
 
   <!-- Expiring soon -->
   <div style="padding:0 24px 20px 24px">
-    <h3 style="margin:0 0 8px 0;font-size:16px;color:#0f172a">⏰ Expiring in the next 7 days</h3>
+    <h3 style="margin:0 0 8px 0;font-size:16px;color:#0f172a">⏰ Expiring in the next ${digest.alertDays || 7} days</h3>
     <table role="presentation" style="width:100%;border-collapse:collapse">${listRow(digest.expiring, 'Nothing expiring soon — beautiful.')}</table>
   </div>
 
@@ -2113,7 +2131,8 @@ export async function GET(request, { params }) {
         if (search) q = q.ilike('name', `%${escapeLike(search)}%`)
         const { data, error } = await q
         if (error) throw error
-        let docs = (data || []).map(fromDb).map(enrich)
+        const alertDaysK = await fetchAlertDays(sb, kid, ctx.kitchen)   // per-kitchen "Expiring" window
+        let docs = (data || []).map(fromDb).map(enrichWith(alertDaysK))
         if (status && status !== 'All') docs = docs.filter(d => d._status === status)
         if (sort === 'asc' || sort === 'desc') {
           docs.sort((a, b) => {
@@ -2143,7 +2162,9 @@ export async function GET(request, { params }) {
       if (path === 'stats') {
         const today = new Date()
         const start = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-        const in7 = new Date(start.getTime() + 7 * 86400000)
+        // Per-kitchen expiry alert window (data-level override, default 7 days)
+        const alertDaysK = await fetchAlertDays(sb, kid, ctx.kitchen)
+        const in7 = new Date(start.getTime() + alertDaysK * 86400000)
         const todayISO = start.toISOString().slice(0, 10)
         const in7ISO = in7.toISOString().slice(0, 10)
         const [{ count: total }, { count: expired }, { count: expiring }, { count: critical }, { count: inDate }, valueRes] = await Promise.all([
@@ -2171,6 +2192,7 @@ export async function GET(request, { params }) {
           inDate: inDate || 0,
           totalValue,
           belowReorder,
+          expiryAlertDays: alertDaysK,
         })
       }
 
@@ -3608,7 +3630,7 @@ Output strictly valid JSON with no other text.`
           return json({ error: (error.message || 'Insert failed') + hint }, 500)
         }
         await logActivity(sb, kid, await validatedPersonFromRequest(sb, request, ctx), 'item_added', data.name)
-        return json(enrich(fromDb(data)), 201)
+        return json(enrichWith(await fetchAlertDays(sb, kid, ctx.kitchen))(fromDb(data)), 201)
       }
 
       if (path === 'products/bulk') {
@@ -3997,7 +4019,7 @@ export async function PUT(request, { params }) {
         return json({ error: (e2.message || 'Update failed') + hint }, 500)
       }
       await logActivity(sb, ctx.kitchenId, await validatedPersonFromRequest(sb, request, ctx), 'item_updated', data?.name || segs[1])
-      return json(enrich(fromDb(data)))
+      return json(enrichWith(await fetchAlertDays(sb, ctx.kitchenId, ctx.kitchen))(fromDb(data)))
     }
 
     // ------- HACCP: edit a temperature reading -------

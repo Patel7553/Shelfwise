@@ -494,7 +494,7 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
           <div className="flex items-center justify-between">
             <div>
               <CardTitle className="text-xl">Urgent Items</CardTitle>
-              <CardDescription>Products that are expired or expiring within 7 days</CardDescription>
+              <CardDescription>Products that are expired or expiring within {stats?.expiryAlertDays || 7} days</CardDescription>
             </div>
             <Button variant="ghost" size="sm" onClick={() => goToInventory('Expiring')}>View all</Button>
           </div>
@@ -697,7 +697,7 @@ export function ExpiryAlertBanner({ stats, goToInventory }) {
   if (!stats.expired && !stats.expiring) return null
   const messages = []
   if (stats.expired > 0) messages.push({ key: 'Expired', text: `${stats.expired} item${stats.expired !== 1 ? 's' : ''} already expired`, color: 'bg-red-50 border-red-200 text-red-800', dot: 'bg-red-500' })
-  if (stats.expiring > 0) messages.push({ key: 'Expiring', text: `${stats.expiring} item${stats.expiring !== 1 ? 's' : ''} expiring within 7 days`, color: 'bg-amber-50 border-amber-200 text-amber-800', dot: 'bg-amber-500' })
+  if (stats.expiring > 0) messages.push({ key: 'Expiring', text: `${stats.expiring} item${stats.expiring !== 1 ? 's' : ''} expiring within ${stats.expiryAlertDays || 7} days`, color: 'bg-amber-50 border-amber-200 text-amber-800', dot: 'bg-amber-500' })
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
       {messages.map(m => (
