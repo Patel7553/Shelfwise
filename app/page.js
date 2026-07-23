@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe, Users, Lock, Delete, Eye, EyeOff } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, ArrowLeft, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe, Users, Lock, Delete, Eye, EyeOff } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken, setChefToken, clearChefToken } from '@/lib/apiClient'
 import { getBrowserSupabase } from '@/lib/supabaseBrowser'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
@@ -1804,6 +1804,27 @@ function App() {
     return () => { document.removeEventListener('visibilitychange', onVis); clearInterval(t) }
   }, [])
 
+  // ---- UNIVERSAL BACK NAVIGATION (user request, July 2026) -----------------
+  // Tracks the exact path of screens the user visited; the Back button on
+  // every non-dashboard screen returns to the PREVIOUS screen in the path
+  // (standard behavior), not always to the dashboard.
+  const viewHistoryRef = useRef([])
+  const prevViewRef = useRef(null)
+  const skipHistoryRef = useRef(false)
+  useEffect(() => {
+    if (skipHistoryRef.current) { skipHistoryRef.current = false; prevViewRef.current = view; return }
+    if (prevViewRef.current !== null && prevViewRef.current !== view) {
+      viewHistoryRef.current.push(prevViewRef.current)
+      if (viewHistoryRef.current.length > 50) viewHistoryRef.current.shift()
+    }
+    prevViewRef.current = view
+  }, [view])
+  const goBack = () => {
+    const prev = viewHistoryRef.current.pop()
+    skipHistoryRef.current = true
+    setView(prev || 'dashboard')
+  }
+
   // ---- KIOSK unlock / switch-user handlers --------------------------------
   const unlockAsOwner = (name) => {
     try {
@@ -2157,6 +2178,19 @@ function App() {
 
 
       <main className="container mx-auto px-4 py-8">
+        {/* Universal Back button — every screen except the dashboard (top-left,
+            standard placement); returns to the exact previous screen. */}
+        {view !== 'dashboard' && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={goBack}
+            aria-label="Go back to the previous screen"
+            className="mb-3 -ml-2 text-slate-600 hover:text-slate-900 hover:bg-slate-100 font-semibold"
+          >
+            <ArrowLeft className="h-4 w-4 mr-1.5" /> Back
+          </Button>
+        )}
         {view === 'dashboard' && (
           <DashboardView stats={stats} statsLoading={statsLoading} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} isStaff={!can('logbook')} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} openEdit={openEdit} refreshAll={() => { fetchProducts(); fetchStats() }} />
         )}

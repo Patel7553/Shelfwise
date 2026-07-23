@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe, Users, Eye, EyeOff } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, ArrowLeft, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe, Users, Eye, EyeOff } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
@@ -781,7 +781,13 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
       <DialogContent className="sm:max-w-[680px] max-h-[92vh] overflow-hidden flex flex-col p-0">
         <DialogHeader className="px-4 sm:px-6 pt-5 pb-3 border-b">
-          <DialogTitle className="flex items-center gap-2"><Settings className="h-5 w-5" /> Kitchen Settings</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            {/* Universal Back button (user request, July 2026) — top-left, returns to the screen you came from */}
+            <button type="button" onClick={onClose} aria-label="Go back" className="flex items-center gap-1 text-sm font-semibold text-slate-500 hover:text-slate-900 -ml-1 mr-1">
+              <ArrowLeft className="h-4 w-4" /> Back
+            </button>
+            <Settings className="h-5 w-5" /> Kitchen Settings
+          </DialogTitle>
         </DialogHeader>
 
         {/* Tabs — horizontally scrollable on mobile, equal-width on desktop */}

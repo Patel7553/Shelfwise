@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { toast, Toaster } from 'sonner'
-import { Loader2, ShieldCheck, LogOut, RefreshCw, Mail } from 'lucide-react'
+import { Loader2, ShieldCheck, LogOut, RefreshCw, Mail, ArrowLeft } from 'lucide-react'
 
 export default function AdminPage() {
   const router = useRouter()
@@ -144,6 +144,10 @@ export default function AdminPage() {
       <header className="bg-white border-b sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
+            {/* Universal Back button (user request, July 2026) */}
+            <Button variant="ghost" size="sm" onClick={() => router.push('/')} aria-label="Back to the app" className="-ml-2 text-slate-600">
+              <ArrowLeft className="h-4 w-4 mr-1" /> Back
+            </Button>
             <ShieldCheck className="h-6 w-6 text-emerald-600" />
             <div>
               <h1 className="font-bold text-lg">ShelfWise Admin</h1>
