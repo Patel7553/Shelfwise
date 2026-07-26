@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent } from '@/components/ui/card'
 import { toast, Toaster } from 'sonner'
-import { Loader2, UserPlus, CheckCircle2, MailCheck, Eye, EyeOff } from 'lucide-react'
+import { Loader2, UserPlus, CheckCircle2, MailCheck, Eye, EyeOff, ChefHat, Truck } from 'lucide-react'
 
 export default function SignupPage() {
   const router = useRouter()
@@ -17,6 +17,8 @@ export default function SignupPage() {
   const [password, setPassword] = useState('')
   const [showPw, setShowPw] = useState(false)
   const [busy, setBusy] = useState(false)
+  // Account type: 'kitchen' (default) or 'supplier' (sells to kitchens)
+  const [accountType, setAccountType] = useState('kitchen')
   // stage: 'form' → 'otp' (verify email code) → 'done'
   const [stage, setStage] = useState('form')
   const [emailVerified, setEmailVerified] = useState(false)
@@ -48,6 +50,7 @@ export default function SignupPage() {
           email: email.trim().toLowerCase(),
           password,
           consent: true,   // DPDP explicit opt-in (checkbox above)
+          accountType,     // 'kitchen' | 'supplier'
           // kitchen name / type / timezone are collected in the setup wizard AFTER approval
         }),
       })
@@ -117,7 +120,7 @@ export default function SignupPage() {
               </p>
             )}
             <p className="text-sm text-slate-600 mb-6">
-              Your access request for <b>{email}</b> has been received. Once approved by the admin, you'll be able to log in and set up your kitchen.
+              Your access request for <b>{email}</b> has been received. Once approved by the admin, you'll be able to log in and {accountType === 'supplier' ? 'set up your supplier profile & catalog' : 'set up your kitchen'}.
             </p>
             <Button onClick={() => router.push('/login')} className="w-full bg-emerald-600 hover:bg-emerald-700">
               Go to login
@@ -195,6 +198,36 @@ export default function SignupPage() {
         <Card className="shadow-lg border-emerald-100">
           <CardContent className="p-6">
             <form onSubmit={submit} className="space-y-3">
+              {/* Account type — Kitchen (default) or Supplier */}
+              <div>
+                <Label>I am signing up as… *</Label>
+                <div className="grid grid-cols-2 gap-2 mt-1">
+                  <button type="button" onClick={() => setAccountType('kitchen')}
+                    className={`text-left rounded-xl border-2 p-3 transition ${accountType === 'kitchen' ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-emerald-300 bg-white'}`}>
+                    <div className="flex items-center gap-2">
+                      <div className={`h-9 w-9 rounded-lg flex items-center justify-center shrink-0 ${accountType === 'kitchen' ? 'bg-emerald-600 text-white' : 'bg-emerald-100 text-emerald-600'}`}>
+                        <ChefHat className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="font-semibold text-sm">Kitchen</p>
+                        <p className="text-[10px] text-slate-500 leading-tight">Inventory, HACCP, recipes &amp; more</p>
+                      </div>
+                    </div>
+                  </button>
+                  <button type="button" onClick={() => setAccountType('supplier')}
+                    className={`text-left rounded-xl border-2 p-3 transition ${accountType === 'supplier' ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-indigo-300 bg-white'}`}>
+                    <div className="flex items-center gap-2">
+                      <div className={`h-9 w-9 rounded-lg flex items-center justify-center shrink-0 ${accountType === 'supplier' ? 'bg-indigo-600 text-white' : 'bg-indigo-100 text-indigo-600'}`}>
+                        <Truck className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="font-semibold text-sm">Supplier</p>
+                        <p className="text-[10px] text-slate-500 leading-tight">Orders, catalog &amp; invoicing</p>
+                      </div>
+                    </div>
+                  </button>
+                </div>
+              </div>
               <div>
                 <Label htmlFor="email">Email *</Label>
                 <Input id="email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@kitchen.com" required autoFocus />

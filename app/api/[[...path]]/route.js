@@ -408,9 +408,64 @@ function kitchenToApi(k) {
     // false only when the column exists AND is explicitly false — old kitchens
     // (pre-migration-19) show as verified so the admin panel doesn't panic.
     emailVerified: k.email_verified === false ? false : true,
+    // Supplier role (migration-20): 'kitchen' (default) or 'supplier'
+    accountType: k.account_type === 'supplier' ? 'supplier' : 'kitchen',
+    supplierProfile: (k.supplier_profile && typeof k.supplier_profile === 'object') ? k.supplier_profile : {},
     createdAt: k.created_at,
     approvedAt: k.approved_at,
   }
+}
+
+// ============================================================================
+// Supplier account helpers (migration-20)
+// ============================================================================
+function supplierProductToApi(p) {
+  return {
+    id: p.id,
+    name: p.name || '',
+    category: p.category || '',
+    unit: p.unit || '',
+    packSize: p.pack_size || '',
+    price: Number(p.price) || 0,
+    sku: p.sku || '',
+    available: p.available !== false,
+    notes: p.notes || '',
+    createdAt: p.created_at,
+  }
+}
+
+function supplierOrderToApi(o) {
+  return {
+    id: o.id,
+    customerName: o.customer_name || '',
+    customerEmail: o.customer_email || '',
+    status: o.status || 'pending',
+    items: Array.isArray(o.items) ? o.items : [],
+    subtotal: Number(o.subtotal) || 0,
+    vatRate: Number(o.vat_rate) || 0,
+    total: Number(o.total) || 0,
+    notes: o.notes || '',
+    invoiceNumber: o.invoice_number || '',
+    createdAt: o.created_at,
+    updatedAt: o.updated_at,
+    fulfilledAt: o.fulfilled_at,
+  }
+}
+
+/** Friendly error when migration-20 hasn't been run on the production DB yet. */
+function supplierTablesMissing(error) {
+  if (/relation .*supplier_(products|orders).* does not exist/i.test(error?.message || '')) {
+    return json({ error: 'Supplier tables not found — run supabase/migration-20-supplier.sql in the Supabase SQL editor first.' }, 500)
+  }
+  return null
+}
+
+/** Compute order money fields server-side (never trust client totals). */
+function computeOrderTotals(items, vatRate) {
+  const subtotal = (items || []).reduce((s, i) => s + (Number(i.quantity) || 0) * (Number(i.price) || 0), 0)
+  const vr = Math.max(0, Math.min(100, Number(vatRate) || 0))
+  const total = subtotal + subtotal * (vr / 100)
+  return { subtotal: Math.round(subtotal * 100) / 100, vatRate: vr, total: Math.round(total * 100) / 100 }
 }
 
 // ============================================================================
@@ -1768,6 +1823,28 @@ async function requireOwnerOrChef(request) {
   return { ctx, error: null }
 }
 
+/**
+ * Supplier-account gate (migration-20). Suppliers log in with email/password
+ * only (no staff PINs) so the role must be 'owner' (or admin for support).
+ */
+async function requireSupplier(request) {
+  const { ctx, error } = await requireAuth(request)
+  if (error) return { ctx: null, error }
+  if (ctx.role !== 'owner' && ctx.role !== 'admin') {
+    return { ctx: null, error: json({ error: 'Supplier login required (email & password)' }, 403) }
+  }
+  if (!ctx.kitchen) {
+    return { ctx: null, error: json({ error: 'No account found' }, 404) }
+  }
+  if ((ctx.kitchen.account_type || 'kitchen') !== 'supplier') {
+    return { ctx: null, error: json({ error: 'Not a supplier account' }, 403) }
+  }
+  if (ctx.kitchen.status !== 'approved') {
+    return { ctx: null, error: json({ error: 'Supplier account not yet approved by admin', status: ctx.kitchen.status }, 403) }
+  }
+  return { ctx, error: null }
+}
+
 async function requireAdmin(request) {
   const { ctx, error } = await requireAuth(request)
   if (error) return { ctx: null, error }
@@ -2171,11 +2248,72 @@ export async function GET(request, { params }) {
       })
     }
 
+    // ----- SUPPLIER endpoints (supplier accounts only, migration-20) -----
+    if (path === 'supplier/profile' || path === 'supplier/products' || path === 'supplier/orders' || path === 'supplier/stats' || path.startsWith('supplier/orders/')) {
+      const { ctx, error } = await requireSupplier(request)
+      if (error) return error
+      const sid = ctx.kitchen.id
+
+      if (path === 'supplier/profile') {
+        return json({
+          profile: (ctx.kitchen.supplier_profile && typeof ctx.kitchen.supplier_profile === 'object') ? ctx.kitchen.supplier_profile : {},
+          businessName: ctx.kitchen.kitchen_name || '',
+          ownerEmail: ctx.kitchen.owner_email || '',
+        })
+      }
+
+      if (path === 'supplier/products') {
+        const { data, error: e2 } = await sb.from('supplier_products').select('*').eq('supplier_id', sid).order('name', { ascending: true }).limit(2000)
+        if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
+        return json((data || []).map(supplierProductToApi))
+      }
+
+      if (path === 'supplier/orders') {
+        const url = new URL(request.url)
+        const status = url.searchParams.get('status')
+        let q = sb.from('supplier_orders').select('*').eq('supplier_id', sid).order('created_at', { ascending: false }).limit(2000)
+        if (status) q = q.eq('status', status)
+        const { data, error: e2 } = await q
+        if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
+        return json((data || []).map(supplierOrderToApi))
+      }
+
+      if (path.startsWith('supplier/orders/')) {
+        const id = path.split('/')[2]
+        const { data, error: e2 } = await sb.from('supplier_orders').select('*').eq('id', id).eq('supplier_id', sid).maybeSingle()
+        if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
+        if (!data) return json({ error: 'Order not found' }, 404)
+        return json(supplierOrderToApi(data))
+      }
+
+      if (path === 'supplier/stats') {
+        const { data: orders, error: e2 } = await sb.from('supplier_orders').select('status,total,created_at,invoice_number').eq('supplier_id', sid).limit(5000)
+        if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
+        const { count: productCount } = await sb.from('supplier_products').select('id', { count: 'exact', head: true }).eq('supplier_id', sid)
+        const now = new Date()
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+        const list = orders || []
+        const thisMonth = list.filter(o => o.created_at && new Date(o.created_at) >= monthStart)
+        return json({
+          pendingOrders: list.filter(o => o.status === 'pending').length,
+          confirmedOrders: list.filter(o => o.status === 'confirmed').length,
+          ordersThisMonth: thisMonth.length,
+          revenueThisMonth: Math.round(thisMonth.filter(o => o.status === 'fulfilled').reduce((s, o) => s + (Number(o.total) || 0), 0) * 100) / 100,
+          invoices: list.filter(o => o.invoice_number).length,
+          products: productCount || 0,
+        })
+      }
+    }
+
     // ----- OWNER / CHEF endpoints (kitchen-scoped) -----
     const ownerOrChef = ['products','settings','facets','stats','recipes','rota','waste','haccp','suppliers','sensors'].some(p => path === p || path.startsWith(p + '/'))
     if (ownerOrChef) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
+      // Supplier accounts are BLOCKED from kitchen tools (inventory, HACCP, recipes...)
+      if (ctx.kitchen && ctx.kitchen.account_type === 'supplier') {
+        return json({ error: 'Supplier accounts cannot access kitchen tools' }, 403)
+      }
       const kid = ctx.kitchenId
 
       // ------- Sensor integration: vendor catalog + connection status -------
@@ -2766,6 +2904,8 @@ export async function POST(request, { params }) {
       const kitchenName = String(body.kitchenName || '').trim()
       const kitchenType = String(body.kitchenType || '').trim()
       const timezone = String(body.timezone || 'UTC').trim()
+      // Supplier role (migration-20): 'kitchen' (default) or 'supplier'
+      const accountType = body.accountType === 'supplier' ? 'supplier' : 'kitchen'
       if (!email || !password) {
         return json({ error: 'email and password are required' }, 400)
       }
@@ -2785,9 +2925,9 @@ export async function POST(request, { params }) {
       })
       if (authErr) return json({ error: authErr.message || 'Sign-up failed' }, 400)
 
-      // 2) Create the kitchen row (status = pending).
+      // 2) Create the kitchen/supplier account row (status = pending).
       const kitchenId = uuidv4()
-      const { error: kErr } = await sb.from('kitchens').insert({
+      const baseRow = {
         id: kitchenId,
         owner_id: created.user.id,
         owner_email: email,
@@ -2801,8 +2941,17 @@ export async function POST(request, { params }) {
         categories: [],
         locations: [],
         units: [],
-        onboarded: false,
-      })
+        // Suppliers skip the kitchen setup wizard entirely.
+        onboarded: accountType === 'supplier',
+      }
+      let { error: kErr } = await sb.from('kitchens').insert({ ...baseRow, account_type: accountType })
+      // Legacy DBs without migration-20: retry without account_type so KITCHEN
+      // signups never break. (Supplier signups on legacy DBs become kitchen
+      // accounts — run migration-20 to enable the supplier role.)
+      if (kErr && /column .* does not exist|could not find .*column/i.test(kErr.message || '')) {
+        const retry = await sb.from('kitchens').insert(baseRow)
+        kErr = retry.error
+      }
       if (kErr) {
         // Roll back auth user if kitchen creation fails — prevents orphaned accounts.
         try { await sb.auth.admin.deleteUser(created.user.id) } catch (e) { console.warn('Failed to rollback auth user:', e) }
@@ -3343,12 +3492,72 @@ Output strictly valid JSON with no other text.`
       }
     }
 
+    // -------- SUPPLIER mutations (supplier accounts only) --------
+    if (path === 'supplier/products' || path === 'supplier/orders') {
+      const { ctx, error } = await requireSupplier(request)
+      if (error) return error
+      const sid = ctx.kitchen.id
+      const body = await request.json()
+
+      if (path === 'supplier/products') {
+        const name = String(body.name || '').trim().slice(0, 160)
+        if (!name) return json({ error: 'Product name required' }, 400)
+        const row = {
+          id: uuidv4(),
+          supplier_id: sid,
+          name,
+          category: String(body.category || '').slice(0, 80),
+          unit: String(body.unit || '').slice(0, 30),
+          pack_size: String(body.packSize || '').slice(0, 60),
+          price: Math.max(0, Number(body.price) || 0),
+          sku: String(body.sku || '').slice(0, 60),
+          available: body.available !== false,
+          notes: String(body.notes || '').slice(0, 500),
+        }
+        const { data, error: e2 } = await sb.from('supplier_products').insert(row).select().single()
+        if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
+        return json(supplierProductToApi(data), 201)
+      }
+
+      if (path === 'supplier/orders') {
+        const customerName = String(body.customerName || '').trim().slice(0, 160)
+        if (!customerName) return json({ error: 'Customer name required' }, 400)
+        const items = Array.isArray(body.items) ? body.items.slice(0, 100).map(i => ({
+          name: String(i?.name || '').slice(0, 160),
+          quantity: Math.max(0, Number(i?.quantity) || 0),
+          unit: String(i?.unit || '').slice(0, 30),
+          price: Math.max(0, Number(i?.price) || 0),
+        })).filter(i => i.name && i.quantity > 0) : []
+        if (items.length === 0) return json({ error: 'At least one order item required' }, 400)
+        const { subtotal, vatRate, total } = computeOrderTotals(items, body.vatRate)
+        const row = {
+          id: uuidv4(),
+          supplier_id: sid,
+          customer_name: customerName,
+          customer_email: String(body.customerEmail || '').trim().slice(0, 160),
+          status: 'pending',
+          items,
+          subtotal,
+          vat_rate: vatRate,
+          total,
+          notes: String(body.notes || '').slice(0, 1000),
+        }
+        const { data, error: e2 } = await sb.from('supplier_orders').insert(row).select().single()
+        if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
+        return json(supplierOrderToApi(data), 201)
+      }
+    }
+
     // -------- Kitchen-scoped mutations --------
     const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect'].some(p => path === p)
       || (path.startsWith('recipes/') && path.endsWith('/favorite'))
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
+      // Supplier accounts are BLOCKED from kitchen tools
+      if (ctx.kitchen && ctx.kitchen.account_type === 'supplier') {
+        return json({ error: 'Supplier accounts cannot access kitchen tools' }, 403)
+      }
       const kid = ctx.kitchenId
 
       // ------- Push heartbeat: app pings this while in use → repeat expiry
@@ -3995,6 +4204,83 @@ export async function PUT(request, { params }) {
     const path = segs.join('/')
     const sb = supabaseAdmin
 
+    // ------- SUPPLIER: update product / order status / business profile -------
+    if (segs[0] === 'supplier') {
+      const { ctx, error } = await requireSupplier(request)
+      if (error) return error
+      const sid = ctx.kitchen.id
+      const body = await request.json()
+
+      // PUT /api/supplier/products/:id — edit a catalog product
+      if (segs[1] === 'products' && segs[2]) {
+        const patch = { updated_at: new Date().toISOString() }
+        if (body.name !== undefined) {
+          const n = String(body.name).trim().slice(0, 160)
+          if (!n) return json({ error: 'Product name cannot be empty' }, 400)
+          patch.name = n
+        }
+        if (body.category !== undefined) patch.category = String(body.category).slice(0, 80)
+        if (body.unit !== undefined) patch.unit = String(body.unit).slice(0, 30)
+        if (body.packSize !== undefined) patch.pack_size = String(body.packSize).slice(0, 60)
+        if (body.price !== undefined) patch.price = Math.max(0, Number(body.price) || 0)
+        if (body.sku !== undefined) patch.sku = String(body.sku).slice(0, 60)
+        if (body.available !== undefined) patch.available = body.available !== false
+        if (body.notes !== undefined) patch.notes = String(body.notes).slice(0, 500)
+        const { data, error: e2 } = await sb.from('supplier_products').update(patch).eq('id', segs[2]).eq('supplier_id', sid).select().maybeSingle()
+        if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
+        if (!data) return json({ error: 'Product not found' }, 404)
+        return json(supplierProductToApi(data))
+      }
+
+      // PUT /api/supplier/orders/:id — change status (pending→confirmed→fulfilled / cancelled)
+      // Fulfilling an order assigns the next invoice number (INV-YYYY-0001).
+      if (segs[1] === 'orders' && segs[2]) {
+        const VALID = ['pending', 'confirmed', 'fulfilled', 'cancelled']
+        const status = String(body.status || '').toLowerCase()
+        if (!VALID.includes(status)) return json({ error: `status must be one of: ${VALID.join(', ')}` }, 400)
+        const { data: existing, error: rErr } = await sb.from('supplier_orders').select('*').eq('id', segs[2]).eq('supplier_id', sid).maybeSingle()
+        if (rErr) { const miss = supplierTablesMissing(rErr); if (miss) return miss; throw rErr }
+        if (!existing) return json({ error: 'Order not found' }, 404)
+        const patch = { status, updated_at: new Date().toISOString() }
+        if (body.notes !== undefined) patch.notes = String(body.notes).slice(0, 1000)
+        if (status === 'fulfilled') {
+          patch.fulfilled_at = existing.fulfilled_at || new Date().toISOString()
+          if (!existing.invoice_number) {
+            const { count } = await sb.from('supplier_orders').select('id', { count: 'exact', head: true }).eq('supplier_id', sid).not('invoice_number', 'is', null)
+            patch.invoice_number = `INV-${new Date().getFullYear()}-${String((count || 0) + 1).padStart(4, '0')}`
+          }
+        }
+        const { data, error: e2 } = await sb.from('supplier_orders').update(patch).eq('id', segs[2]).eq('supplier_id', sid).select().single()
+        if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
+        return json(supplierOrderToApi(data))
+      }
+
+      // PUT /api/supplier/profile — business details for invoices
+      if (segs[1] === 'profile') {
+        const current = (ctx.kitchen.supplier_profile && typeof ctx.kitchen.supplier_profile === 'object') ? ctx.kitchen.supplier_profile : {}
+        const profile = {
+          ...current,
+          businessName: String(body.businessName ?? current.businessName ?? '').slice(0, 160),
+          contactName: String(body.contactName ?? current.contactName ?? '').slice(0, 120),
+          phone: String(body.phone ?? current.phone ?? '').slice(0, 40),
+          address: String(body.address ?? current.address ?? '').slice(0, 400),
+          vatNumber: String(body.vatNumber ?? current.vatNumber ?? '').slice(0, 60),
+          defaultVatRate: Math.max(0, Math.min(100, Number(body.defaultVatRate ?? current.defaultVatRate) || 0)),
+          paymentTerms: String(body.paymentTerms ?? current.paymentTerms ?? '').slice(0, 200),
+          currencySymbol: String(body.currencySymbol ?? current.currencySymbol ?? '£').slice(0, 4),
+          invoiceFooter: String(body.invoiceFooter ?? current.invoiceFooter ?? '').slice(0, 400),
+        }
+        const patch = { supplier_profile: profile }
+        // Business name doubles as the account display name.
+        if (profile.businessName) patch.kitchen_name = profile.businessName
+        const { error: e2 } = await sb.from('kitchens').update(patch).eq('id', sid)
+        if (e2) throw e2
+        return json({ ok: true, profile })
+      }
+
+      return json({ error: 'Unknown supplier route' }, 404)
+    }
+
     // ------- Staff: owner sets a person's access -------
     // {role:'manager'} = full access. {perms:['orders','waste',...]} = granular
     // extras on top of standard staff access (items, recipes, temps).
@@ -4197,6 +4483,19 @@ export async function DELETE(request, { params }) {
   try {
     const segs = params?.path || []
     const sb = supabaseAdmin
+
+    // ------- SUPPLIER: remove a catalog product -------
+    if (segs[0] === 'supplier') {
+      const { ctx, error } = await requireSupplier(request)
+      if (error) return error
+      if (segs[1] === 'products' && segs[2]) {
+        const { error: e2 } = await sb.from('supplier_products').delete().eq('id', segs[2]).eq('supplier_id', ctx.kitchen.id)
+        if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
+        return json({ ok: true })
+      }
+      return json({ error: 'Unknown supplier route' }, 404)
+    }
+
     const { ctx, error } = await requireOwnerOrChef(request)
     if (error) return error
 

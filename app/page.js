@@ -33,6 +33,7 @@ import { SetupWizardV2, SetupWizard, ChefCodeCard, SettingsDialog, LoginGate, No
 import { RotaView, RotaShiftDialog } from '@/components/shelfwise/rota'
 import { AnalyticsView } from '@/components/shelfwise/analytics'
 import { OrdersView } from '@/components/shelfwise/orders'
+import SupplierDashboard from '@/components/shelfwise/supplier'
 import { QuickCheckDialog, TempLogbookView, HaccpView } from '@/components/shelfwise/haccp'
 
 function getInitialFromURL() {
@@ -471,7 +472,8 @@ function App() {
           } catch {}
           // KIOSK: owner-authed devices lock to the staff-code screen until
           // someone identifies themselves with their 4-digit code.
-          if (data?.role === 'owner' || (data?.role === 'admin' && data?.kitchen)) {
+          // SUPPLIER accounts never lock — they have no staff PINs (email/password only).
+          if ((data?.role === 'owner' || (data?.role === 'admin' && data?.kitchen)) && data?.kitchen?.accountType !== 'supplier') {
             try { if (!localStorage.getItem('sw_kiosk_user')) setKioskLocked(true) } catch {}
           }
           try { setIsKioskDevice(localStorage.getItem('sw_kiosk') === '1') } catch {}
@@ -501,6 +503,8 @@ function App() {
   // "Full access" or granular perms (orders/waste/logbook/settings) chosen in
   // Settings → Staff. Owner always has everything.
   const isStaff = me?.role === 'chef' && me?.personRole !== 'manager'
+  // SUPPLIER accounts get their own lightweight dashboard — no kitchen tools.
+  const isSupplier = me?.kitchen?.accountType === 'supplier'
   const can = (perm) => {
     if (me?.role !== 'chef') return true                       // owner / admin
     if (me?.personRole === 'manager') return true              // full access
@@ -641,8 +645,8 @@ function App() {
   // DATA LOADING — gated on `authed` so requests never fire before login is
   // verified (they used to 401 silently and the dashboard stayed at 0 until
   // the user navigated somewhere).
-  useEffect(() => { if (authed) fetchProducts() }, [authed, statusFilter, search, sort, categoryFilter, storageFilter])
-  useEffect(() => { if (authed) { fetchStats(); fetchFacets() } }, [authed, products.length, view])
+  useEffect(() => { if (authed && !isSupplier) fetchProducts() }, [authed, isSupplier, statusFilter, search, sort, categoryFilter, storageFilter])
+  useEffect(() => { if (authed && !isSupplier) { fetchStats(); fetchFacets() } }, [authed, isSupplier, products.length, view])
   // Global refresh trigger — any child component can dispatch this event to force a full reload
   useEffect(() => {
     const onRefresh = () => { fetchProducts(); fetchStats(); fetchFacets() }
@@ -650,11 +654,11 @@ function App() {
     return () => window.removeEventListener('shelfwise-inventory-refresh', onRefresh)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter, search, sort, categoryFilter, storageFilter])
-  useEffect(() => { if (authed) fetchSettings() }, [authed])
+  useEffect(() => { if (authed && !isSupplier) fetchSettings() }, [authed, isSupplier])
   // LIVE SYNC — items added on other phones show up fast:
   // refresh whenever the app regains focus/visibility + silent poll every 30s.
   useEffect(() => {
-    if (!authed) return
+    if (!authed || isSupplier) return
     const refresh = () => { fetchProducts({ silent: true }); fetchStats() }
     const onVis = () => { if (document.visibilityState === 'visible') refresh() }
     // CACHE FIX (Aug 2026): iOS Safari restores PWAs from the back/forward
@@ -674,19 +678,19 @@ function App() {
   }, [authed, statusFilter, search, sort, categoryFilter, storageFilter])
   // Recipes: fetch once at login (so the dashboard Recipes count is correct),
   // then again whenever the Recipes tab is opened/searched.
-  useEffect(() => { if (authed) fetchRecipes() }, [authed])
+  useEffect(() => { if (authed && !isSupplier) fetchRecipes() }, [authed, isSupplier])
 
   // PUSH HEARTBEAT — while anyone uses the app, ping the backend so expiry
   // push alerts repeat every 2.5h until items are dealt with (backend
   // throttles; calling often is safe). Runs on login + every 30 min.
   useEffect(() => {
-    if (!authed) return
+    if (!authed || isSupplier) return
     const ping = () => { fetch('/api/push/heartbeat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {}) }
     ping()
     const t = setInterval(ping, 30 * 60 * 1000)
     return () => clearInterval(t)
-  }, [authed])
-  useEffect(() => { if (authed && view === 'recipes') fetchRecipes() }, [authed, view, recipesSearch])
+  }, [authed, isSupplier])
+  useEffect(() => { if (authed && !isSupplier && view === 'recipes') fetchRecipes() }, [authed, isSupplier, view, recipesSearch])
 
   // Browser expiry notifications — fires once per day when app is opened.
   // Requires user to opt-in via Settings → Login & Alerts → Enable notifications.
@@ -1948,6 +1952,13 @@ function App() {
         </Card>
       </div>
     )
+  }
+
+  // ---- SUPPLIER PORTAL — supplier accounts get their own dashboard --------
+  // (orders, catalog, invoices, profile). Kitchen tools are hidden AND
+  // blocked server-side for these accounts.
+  if (authed && isSupplier) {
+    return <SupplierDashboard me={me} />
   }
 
   const modulesEnabled = Array.isArray(settings.modulesEnabled) ? settings.modulesEnabled : []
