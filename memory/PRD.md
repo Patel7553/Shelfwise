@@ -16,13 +16,16 @@ Next.js App Router PWA (Supabase Postgres) for professional kitchen management: 
 2. **Label fix**: "Chef name" → "Name" (add-item form, rota dialog).
 3. **Recipe overhaul**: generate = 4 parallel gpt-4o-mini calls (~5s, 4 styled recipes); dietary chips on web search; favourites (summary.favorite JSONB, POST /api/recipes/:id/favorite); AI substitutions (POST /api/recipe/substitutions); 1x-5x scaling kept. Tested (backend+frontend).
 4. **Supplier account role (supplier-side)**: migration-20; signup account-type toggle; requireSupplier gate; endpoints /api/supplier/{profile,products,orders,stats} (GET/POST/PUT/DELETE); auto invoice numbers (INV-YYYY-NNNN) on fulfilment; printable invoices; SupplierDashboard (orders queue, catalog CRUD, invoices, business profile); suppliers blocked from kitchen tools server-side; no kiosk/PINs for suppliers. Backend tested (29/29).
+5. **Two-way B2B ordering (migration-21)**: supplier_connections table + kitchens.supplier_code (SUP-XXXXXX auto-generated) + supplier_orders.requested_delivery_date. AUTOMATIC connection (no approval) via code/email/name search. Kitchen endpoints /api/kitchen/suppliers{,/search,/:id/catalog}, /api/kitchen/orders (server re-prices from catalog, enforces min order), connect/disconnect. Supplier endpoints: /api/supplier/clients; profile adds deliveryDays+minOrderValue+code. Frontend: kitchen-ordering.jsx MarketplaceView (connect panel, 3-step wizard: catalog+cart → review+delivery date+notes → confirmation w/ ORD-ref; history w/ reorder) as "Order from Suppliers" tab in OrdersView; supplier.jsx Clients tab + code display + via-ShelfWise badges. Backend tested (24/24). Orders placed by kitchens set kitchen_id → land in supplier queue (fixes "order not appearing on supplier side").
+6. **PWA auto-update fix**: /api/version now uses .next/BUILD_ID (works on any host); client reloads stale installs at launch via persisted last-seen version.
 
 ## Backlog
-- Two-way ordering: kitchens browse supplier catalogs & place orders in-app (user confirmed wanted next)
+- Order notifications (email/push to supplier on new order; to kitchen on confirm/fulfil)
+- Invoice emailing to customer
 - AI stock deduction from cooked recipes (P2)
 - Stripe subscriptions (P2)
 - Refactor monolithic route.js / page.js
 
 ## Ops notes
-- Prod admin: patel.parth1966@gmail.com. Migration-20 must be run in Supabase SQL editor before supplier features work in prod.
+- Prod admin: patel.parth1966@gmail.com. Migrations 20 AND 21 must be run in Supabase SQL editor; then redeploy.
 - Never modify .env URLs; all APIs under /api.
