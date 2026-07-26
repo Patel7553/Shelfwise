@@ -3736,3 +3736,10 @@ All indexed by `(kitchen_id, timestamp desc)`. All FK to `kitchens` with `on del
         **Local env notes:** Supabase NOT configured locally. Use chef JWT minting per /app/memory/test_credentials.md.
         Recipe LLM endpoints (generate/web-search/substitutions) work locally with chef JWT since they only call the LLM.
         DB-backed endpoints (recipes CRUD/favorite) will 500 with supabase error locally — verify routing (not 404) only.
+
+    - agent: "main"
+      message: |
+        FRONTEND TESTING REQUEST (Phases 1-3, Aug 2026 round):
+        - Fixed favorite endpoint routing (kitchenScoped now matches recipes/<id>/favorite): 401 no-auth, 500 supabase-missing locally (verified via curl).
+        - Frontend changes to test: recipes.jsx (dietary chips in web search, favourites star+filter in saved tab, SubstitutionsPanel in WebRecipeCard + ViewRecipeDialog), page.js placeholder "Name" (add-item form), rota.jsx label "Name", apiClient cache no-store, page.js pageshow listener.
+        - LOCAL LIMITS: Supabase NOT configured — owner login impossible; use chef JWT in localStorage key 'shelfwise_chef_token'. DB endpoints (products/recipes list/favorite) 500 locally — saved recipes list will be empty/error; that is EXPECTED not a bug. LLM endpoints (web search, generate, substitutions) WORK locally.
