@@ -20,9 +20,10 @@ import { toast } from 'sonner'
 import {
   Truck, Plus, Minus, Trash2, Loader2, Check, X, Search, ShoppingCart,
   ArrowLeft, ArrowRight, CalendarDays, ClipboardCheck, Store, Link2,
-  History, RotateCcw, PackageX, CheckCircle2, Unlink,
+  History, RotateCcw, PackageX, CheckCircle2, Unlink, Pencil, Ban, Download, Info,
 } from 'lucide-react'
 import { apiFetch, apiJson } from '@/lib/apiClient'
+import { downloadOrderSummaryCsv } from '@/components/shelfwise/supplier'
 
 const money = (n, sym = '£') => `${sym}${(Number(n) || 0).toFixed(2)}`
 
@@ -31,6 +32,51 @@ const STATUS_STYLE = {
   confirmed: { label: 'Confirmed', cls: 'bg-sky-100 text-sky-800 border-sky-300' },
   fulfilled: { label: 'Fulfilled', cls: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
   cancelled: { label: 'Cancelled', cls: 'bg-slate-100 text-slate-500 border-slate-300' },
+}
+
+// ---------------------------------------------------------------------------
+// Amazon-style order progress tracker:
+//   Order Placed → Confirmed by Supplier → Delivered
+// ---------------------------------------------------------------------------
+function OrderStatusTracker({ status }) {
+  if (status === 'cancelled') {
+    return (
+      <div className="flex items-center gap-2 rounded-lg bg-slate-100 border border-slate-200 px-3 py-2 text-sm text-slate-600">
+        <Ban className="h-4 w-4 shrink-0" /> This order was cancelled.
+      </div>
+    )
+  }
+  const stage = status === 'fulfilled' ? 2 : status === 'confirmed' ? 1 : 0
+  const steps = [
+    { label: 'Order Placed', sub: 'Sent to supplier' },
+    { label: 'Confirmed', sub: 'Accepted by supplier' },
+    { label: 'Delivered', sub: 'Order fulfilled' },
+  ]
+  return (
+    <div className="flex items-start w-full py-1" aria-label={`Order progress: step ${stage + 1} of 3`}>
+      {steps.map((s, i) => {
+        const done = i < stage
+        const current = i === stage
+        return (
+          <React.Fragment key={i}>
+            <div className="flex flex-col items-center text-center" style={{ minWidth: 76 }}>
+              <div className={`h-8 w-8 rounded-full flex items-center justify-center border-2 transition
+                ${done || (current && stage === 2) ? 'bg-emerald-500 border-emerald-500 text-white'
+                  : current ? 'bg-indigo-600 border-indigo-600 text-white animate-pulse'
+                  : 'bg-white border-slate-300 text-slate-300'}`}>
+                {done || (current && stage === 2) ? <Check className="h-4 w-4" /> : <span className="text-xs font-bold">{i + 1}</span>}
+              </div>
+              <p className={`text-[11px] font-semibold mt-1 leading-tight ${done || current ? 'text-slate-800' : 'text-slate-400'}`}>{s.label}</p>
+              <p className={`text-[9px] leading-tight ${done || current ? 'text-muted-foreground' : 'text-slate-300'}`}>{s.sub}</p>
+            </div>
+            {i < steps.length - 1 && (
+              <div className={`flex-1 h-0.5 mt-4 rounded ${i < stage ? 'bg-emerald-400' : 'bg-slate-200'}`} />
+            )}
+          </React.Fragment>
+        )
+      })}
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -116,15 +162,16 @@ function ConnectSupplierPanel({ onConnected }) {
 // ---------------------------------------------------------------------------
 // ORDER WIZARD — browse catalog → review → confirmation
 // ---------------------------------------------------------------------------
-function OrderWizard({ supplier, initialCart = {}, onBack, onPlaced }) {
-  const [step, setStep] = useState('browse') // browse | review | done
+function OrderWizard({ supplier, initialCart = {}, editOrder = null, onBack, onPlaced }) {
+  const isEdit = !!editOrder
+  const [step, setStep] = useState(isEdit ? 'review' : 'browse') // browse | review | done
   const [loading, setLoading] = useState(true)
   const [catalog, setCatalog] = useState([])
   const [supInfo, setSupInfo] = useState(supplier)
   const [cart, setCart] = useState(initialCart)       // productId -> qty
   const [filter, setFilter] = useState('')
-  const [deliveryDate, setDeliveryDate] = useState('')
-  const [notes, setNotes] = useState('')
+  const [deliveryDate, setDeliveryDate] = useState(editOrder?.requestedDeliveryDate || '')
+  const [notes, setNotes] = useState(editOrder?.notes || '')
   const [placing, setPlacing] = useState(false)
   const [placedOrder, setPlacedOrder] = useState(null)
 
@@ -172,20 +219,20 @@ function OrderWizard({ supplier, initialCart = {}, onBack, onPlaced }) {
     if (belowMin) { toast.error(`Minimum order is ${money(minOrder, sym)}`); return }
     setPlacing(true)
     try {
-      const order = await apiJson('/api/kitchen/orders', {
-        method: 'POST',
-        body: JSON.stringify({
-          supplierId: supplier.supplierId,
-          items: cartItems.map(i => ({ productId: i.id, quantity: i.qty })),
-          requestedDeliveryDate: deliveryDate || undefined,
-          notes,
-        }),
-      })
+      const payload = {
+        supplierId: supplier.supplierId,
+        items: cartItems.map(i => ({ productId: i.id, quantity: i.qty })),
+        requestedDeliveryDate: deliveryDate || undefined,
+        notes,
+      }
+      const order = isEdit
+        ? await apiJson(`/api/kitchen/orders/${editOrder.id}`, { method: 'PUT', body: JSON.stringify(payload) })
+        : await apiJson('/api/kitchen/orders', { method: 'POST', body: JSON.stringify(payload) })
       setPlacedOrder(order)
       setStep('done')
       onPlaced && onPlaced()
     } catch (e) {
-      toast.error(e.message || 'Order failed — try again')
+      toast.error(e.message || (isEdit ? 'Update failed — try again' : 'Order failed — try again'))
     } finally { setPlacing(false) }
   }
 
@@ -214,10 +261,11 @@ function OrderWizard({ supplier, initialCart = {}, onBack, onPlaced }) {
           <div className="w-16 h-16 mx-auto bg-emerald-100 rounded-full flex items-center justify-center">
             <CheckCircle2 className="h-9 w-9 text-emerald-600" />
           </div>
-          <h3 className="text-xl font-bold text-emerald-900">Order placed! 🎉</h3>
+          <h3 className="text-xl font-bold text-emerald-900">{isEdit ? 'Order updated ✅' : 'Order placed! 🎉'}</h3>
           <p className="text-sm text-muted-foreground">
-            Your order <b className="text-slate-800">{placedOrder.orderRef}</b> has been sent to <b className="text-slate-800">{supInfo.businessName}</b>.
-            They'll see it instantly in their orders queue.
+            {isEdit ? <>Your changes to order <b className="text-slate-800">{placedOrder.orderRef}</b> were sent to <b className="text-slate-800">{supInfo.businessName}</b>.</>
+              : <>Your order <b className="text-slate-800">{placedOrder.orderRef}</b> has been sent to <b className="text-slate-800">{supInfo.businessName}</b>.
+            They'll see it instantly in their orders queue.</>}
           </p>
           <div className="border rounded-lg divide-y text-left max-w-sm mx-auto">
             {(placedOrder.items || []).map((i, idx) => (
@@ -386,7 +434,7 @@ function OrderWizard({ supplier, initialCart = {}, onBack, onPlaced }) {
               )}
               <Button onClick={placeOrder} disabled={placing || cartItems.length === 0 || belowMin} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-11">
                 {placing ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <ClipboardCheck className="h-4 w-4 mr-1.5" />}
-                Place order · {money(total, sym)}
+                {isEdit ? 'Save changes' : 'Place order'} · {money(total, sym)}
               </Button>
             </CardContent>
           </Card>
@@ -441,8 +489,29 @@ export function MarketplaceView() {
     setWizard({ supplier: sup, initialCart })
   }
 
+  // Edit a PENDING order — reopens the wizard prefilled, saves via PUT
+  const editOrder = (o) => {
+    const sup = suppliers.find(s => s.supplierId === o.supplierId)
+    if (!sup) { toast.error('You are no longer connected to this supplier'); return }
+    const initialCart = {}
+    for (const i of (o.items || [])) if (i.productId) initialCart[i.productId] = Number(i.quantity) || 1
+    setWizard({ supplier: sup, initialCart, editOrder: o })
+  }
+
+  // Cancel a PENDING order (with confirmation prompt)
+  const [cancelBusy, setCancelBusy] = useState(null)
+  const cancelOrder = async (o) => {
+    if (!window.confirm(`Are you sure you want to cancel order ${o.orderRef}? This cannot be undone.`)) return
+    setCancelBusy(o.id)
+    try {
+      await apiJson(`/api/kitchen/orders/${o.id}`, { method: 'DELETE' })
+      toast.success(`Order ${o.orderRef} cancelled — your supplier has been notified`)
+      load()
+    } catch (e) { toast.error(e.message || 'Could not cancel order') } finally { setCancelBusy(null) }
+  }
+
   if (wizard) {
-    return <OrderWizard supplier={wizard.supplier} initialCart={wizard.initialCart} onBack={() => { setWizard(null); load() }} onPlaced={load} />
+    return <OrderWizard supplier={wizard.supplier} initialCart={wizard.initialCart} editOrder={wizard.editOrder || null} onBack={() => { setWizard(null); load() }} onPlaced={load} />
   }
 
   return (
@@ -530,20 +599,44 @@ export function MarketplaceView() {
                       <Badge variant="outline" className={`${st.cls} text-[10px] shrink-0`}>{st.label}</Badge>
                     </button>
                     {isOpen && (
-                      <div className="border-t bg-slate-50/60 px-3.5 py-2.5 space-y-2">
+                      <div className="border-t bg-slate-50/60 px-3.5 py-3 space-y-3">
+                        {/* Amazon-style progress tracker */}
+                        <div className="bg-white border rounded-lg px-4 py-2.5">
+                          <OrderStatusTracker status={o.status} />
+                        </div>
                         <div className="border rounded-lg divide-y bg-white">
                           {(o.items || []).map((i, idx) => (
                             <div key={idx} className="px-3 py-1.5 flex justify-between text-sm">
-                              <span>{i.name}</span>
+                              <span>{i.name}{i.sku ? <span className="text-[10px] text-muted-foreground font-mono ml-1.5">{i.sku}</span> : null}</span>
                               <span className="text-muted-foreground">{i.quantity} {i.unit || ''} × {money(i.price)}</span>
                             </div>
                           ))}
                         </div>
                         {o.notes && <p className="text-xs text-muted-foreground italic">📝 {o.notes}</p>}
-                        <div className="flex justify-end">
-                          <Button size="sm" variant="outline" onClick={() => reorder(o)}>
-                            <RotateCcw className="h-3.5 w-3.5 mr-1.5" /> Reorder these items
+                        {o.status === 'confirmed' && (
+                          <p className="text-xs flex items-center gap-1.5 text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-2.5 py-1.5">
+                            <Info className="h-3.5 w-3.5 shrink-0" /> This order is confirmed — contact your supplier directly to change a confirmed order.
+                          </p>
+                        )}
+                        <div className="flex justify-end flex-wrap gap-2">
+                          {o.status === 'pending' && (
+                            <>
+                              <Button size="sm" variant="outline" onClick={() => editOrder(o)}>
+                                <Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit order
+                              </Button>
+                              <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50" disabled={cancelBusy === o.id} onClick={() => cancelOrder(o)}>
+                                {cancelBusy === o.id ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Ban className="h-3.5 w-3.5 mr-1.5" />} Cancel order
+                              </Button>
+                            </>
+                          )}
+                          <Button size="sm" variant="outline" onClick={() => downloadOrderSummaryCsv(o)}>
+                            <Download className="h-3.5 w-3.5 mr-1.5" /> CSV
                           </Button>
+                          {o.status !== 'cancelled' && (
+                            <Button size="sm" variant="outline" onClick={() => reorder(o)}>
+                              <RotateCcw className="h-3.5 w-3.5 mr-1.5" /> Reorder these items
+                            </Button>
+                          )}
                         </div>
                       </div>
                     )}

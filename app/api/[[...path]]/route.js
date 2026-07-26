@@ -712,6 +712,133 @@ const CURRENCY_SYMBOL_SERVER = {
   GBP: '£', USD: '$', EUR: '€', INR: '₹', AED: 'د.إ', AUD: 'A$', CAD: 'C$', SGD: 'S$',
 }
 
+// ============================================================================
+// ORDER LIFECYCLE NOTIFICATIONS (Aug 2026) — email (Resend) + web-push on
+// place / confirm / fulfil / edit / cancel. All best-effort: failures are
+// logged but NEVER block the order operation itself.
+// ============================================================================
+function orderEmailHtml({ order, supplierName, clientCode, heading, intro, sym = '£' }) {
+  const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const o = supplierOrderToApi(order.orderRef ? { ...order, id: order.id } : order)
+  const ref = order.orderRef || o.orderRef
+  const items = Array.isArray(order.items) ? order.items : []
+  const rows = items.map(i => `
+    <tr>
+      <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px">${esc(i.sku || '—')}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px">${esc(i.name)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;text-align:right">${Number(i.quantity) || 0} ${esc(i.unit || '')}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;text-align:right">${sym}${(Number(i.price) || 0).toFixed(2)}</td>
+      <td style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;text-align:right">${sym}${((Number(i.quantity) || 0) * (Number(i.price) || 0)).toFixed(2)}</td>
+    </tr>`).join('')
+  const subtotal = Number(order.subtotal) || 0
+  const total = Number(order.total) || 0
+  const vatRate = Number(order.vat_rate ?? order.vatRate) || 0
+  const delivery = order.requested_delivery_date || order.requestedDeliveryDate
+  return `
+  <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;margin:0 auto;color:#111">
+    <div style="background:#4f46e5;color:#fff;border-radius:12px 12px 0 0;padding:18px 22px">
+      <div style="font-size:18px;font-weight:800">${esc(heading)}</div>
+      <div style="font-size:13px;opacity:.9">${esc(ref)} · ${esc(supplierName)}</div>
+    </div>
+    <div style="border:1px solid #e5e7eb;border-top:0;border-radius:0 0 12px 12px;padding:20px 22px">
+      <p style="font-size:14px;margin:0 0 12px">${intro}</p>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:10px">
+        Customer: <b style="color:#111">${esc(order.customer_name || order.customerName || '')}</b>
+        ${clientCode ? ` · Client code: <b style="color:#111">${esc(clientCode)}</b>` : ''}
+        ${delivery ? ` · Requested delivery: <b style="color:#111">${new Date(String(delivery) + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</b>` : ''}
+      </div>
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr>
+          <th style="text-align:left;padding:6px 8px;background:#eef2ff;color:#312e81;font-size:11px;text-transform:uppercase">Code</th>
+          <th style="text-align:left;padding:6px 8px;background:#eef2ff;color:#312e81;font-size:11px;text-transform:uppercase">Item</th>
+          <th style="text-align:right;padding:6px 8px;background:#eef2ff;color:#312e81;font-size:11px;text-transform:uppercase">Qty</th>
+          <th style="text-align:right;padding:6px 8px;background:#eef2ff;color:#312e81;font-size:11px;text-transform:uppercase">Price</th>
+          <th style="text-align:right;padding:6px 8px;background:#eef2ff;color:#312e81;font-size:11px;text-transform:uppercase">Total</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div style="text-align:right;margin-top:12px;font-size:13px">
+        Subtotal ${sym}${subtotal.toFixed(2)}${vatRate ? ` · VAT ${vatRate}% ${sym}${(total - subtotal).toFixed(2)}` : ''}
+        <div style="font-size:17px;font-weight:800;color:#312e81;margin-top:4px">Total ${sym}${total.toFixed(2)}</div>
+      </div>
+      ${order.notes ? `<p style="font-size:12px;color:#6b7280;border-left:3px solid #c7d2fe;padding-left:10px;margin-top:12px">${esc(order.notes)}</p>` : ''}
+      <p style="font-size:11px;color:#9ca3af;margin-top:16px">This order summary is a record for reference only — it is not a tax invoice. Sent by ShelfWise.</p>
+    </div>
+  </div>`
+}
+
+/**
+ * event: 'placed' | 'confirmed' | 'fulfilled' | 'updated' | 'cancelled'
+ * Best-effort — never throws.
+ */
+async function notifyOrderEvent(sb, event, { order, supplierName, supplierEmail, restaurantEmail, restaurantName, clientCode, sym }) {
+  try {
+    const api = supplierOrderToApi(order)
+    const ref = api.orderRef
+    const delivery = api.requestedDeliveryDate
+      ? new Date(api.requestedDeliveryDate + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })
+      : null
+    const html = (heading, intro) => orderEmailHtml({ order, supplierName, clientCode, heading, intro, sym })
+    const jobs = []
+
+    if (event === 'placed') {
+      if (restaurantEmail) jobs.push(resendSend({
+        to: restaurantEmail,
+        subject: `Order ${ref} submitted to ${supplierName}`,
+        html: html('Order submitted ✅', `Your order has been sent to <b>${supplierName}</b>. They'll confirm it shortly — you'll get another email when they do.`),
+      }))
+      if (supplierEmail) jobs.push(resendSend({
+        to: supplierEmail,
+        subject: `New order ${ref} from ${restaurantName || 'a customer'}`,
+        html: html('New incoming order 📦', `<b>${restaurantName || 'A customer'}</b> has placed a new order via ShelfWise. Open your Orders queue to confirm it.`),
+      }))
+      if (order.kitchen_id) jobs.push(sendPushToKitchen(sb, order.kitchen_id, { title: `Order ${ref} submitted`, body: `Sent to ${supplierName} — awaiting confirmation` }))
+      if (order.supplier_id) jobs.push(sendPushToKitchen(sb, order.supplier_id, { title: `New order ${ref}`, body: `${restaurantName || 'A customer'} placed an order — tap to review` }))
+    }
+
+    if (event === 'confirmed') {
+      const when = delivery ? ` and is expected to be delivered on ${delivery}` : ''
+      if (restaurantEmail) jobs.push(resendSend({
+        to: restaurantEmail,
+        subject: `Order ${ref} confirmed by ${supplierName}`,
+        html: html('Order confirmed 🎉', `Good news — your order has been accepted by <b>${supplierName}</b>${when}.`),
+      }))
+      if (order.kitchen_id) jobs.push(sendPushToKitchen(sb, order.kitchen_id, { title: `Order ${ref} confirmed`, body: delivery ? `Expected delivery: ${delivery}` : `Confirmed by ${supplierName}` }))
+    }
+
+    if (event === 'fulfilled') {
+      if (restaurantEmail) jobs.push(resendSend({
+        to: restaurantEmail,
+        subject: `Order ${ref} delivered — ${supplierName}`,
+        html: html('Order delivered ✅', `Your order from <b>${supplierName}</b> has been marked as delivered/fulfilled. The order summary below is for your records.`),
+      }))
+      if (order.kitchen_id) jobs.push(sendPushToKitchen(sb, order.kitchen_id, { title: `Order ${ref} delivered`, body: `${supplierName} marked your order as fulfilled` }))
+    }
+
+    if (event === 'updated') {
+      if (supplierEmail) jobs.push(resendSend({
+        to: supplierEmail,
+        subject: `Order ${ref} updated by ${restaurantName || 'customer'}`,
+        html: html('Order updated ✏️', `<b>${restaurantName || 'The customer'}</b> edited this pending order. The latest version is below.`),
+      }))
+      if (order.supplier_id) jobs.push(sendPushToKitchen(sb, order.supplier_id, { title: `Order ${ref} updated`, body: `${restaurantName || 'A customer'} changed their pending order` }))
+    }
+
+    if (event === 'cancelled') {
+      if (supplierEmail) jobs.push(resendSend({
+        to: supplierEmail,
+        subject: `Order ${ref} cancelled by ${restaurantName || 'customer'}`,
+        html: html('Order cancelled ❌', `<b>${restaurantName || 'The customer'}</b> cancelled this order while it was still pending. No action needed.`),
+      }))
+      if (order.supplier_id) jobs.push(sendPushToKitchen(sb, order.supplier_id, { title: `Order ${ref} cancelled`, body: `${restaurantName || 'A customer'} cancelled their pending order` }))
+    }
+
+    await Promise.allSettled(jobs)
+  } catch (e) {
+    console.warn('notifyOrderEvent failed (non-fatal):', e.message)
+  }
+}
+
 // Compute the weekly digest data for one kitchen. Returns null if nothing to report.
 async function computeWeeklyDigest(sb, kitchen) {
   const kid = kitchen.id
@@ -3688,11 +3815,46 @@ Output strictly valid JSON with no other text.`
     }
 
     // -------- SUPPLIER mutations (supplier accounts only) --------
-    if (path === 'supplier/products' || path === 'supplier/orders' || path === 'supplier/invites') {
+    if (path === 'supplier/products' || path === 'supplier/orders' || path === 'supplier/invites' || path === 'supplier/products/sample') {
       const { ctx, error } = await requireSupplier(request)
       if (error) return error
       const sid = ctx.kitchen.id
       const body = await request.json()
+
+      // One-click demo catalog: 20 realistic kitchen-supply products.
+      // Only allowed when the catalog is EMPTY (prevents duplicates).
+      if (path === 'supplier/products/sample') {
+        const { count } = await sb.from('supplier_products').select('id', { count: 'exact', head: true }).eq('supplier_id', sid)
+        if ((count || 0) > 0) return json({ error: 'Catalog is not empty — sample products can only be loaded into an empty catalog' }, 400)
+        const SAMPLES = [
+          ['Whole Milk', 'Dairy', 'litre', '12x1L case', 1.15, 'DAI-001'],
+          ['Double Cream', 'Dairy', 'litre', '2L bottle', 3.80, 'DAI-002'],
+          ['Mature Cheddar', 'Dairy', 'kg', '5kg block', 7.50, 'DAI-003'],
+          ['Salted Butter', 'Dairy', 'kg', '10x250g', 6.20, 'DAI-004'],
+          ['Free-Range Eggs', 'Dairy', 'tray', '30 eggs', 4.90, 'DAI-005'],
+          ['Chicken Breast Fillets', 'Meat & Poultry', 'kg', '5kg bag', 6.95, 'MEA-001'],
+          ['Beef Mince 80/20', 'Meat & Poultry', 'kg', '5kg pack', 7.40, 'MEA-002'],
+          ['Streaky Bacon', 'Meat & Poultry', 'kg', '2.27kg pack', 8.10, 'MEA-003'],
+          ['Pork Sausages 8s', 'Meat & Poultry', 'kg', '4.54kg box', 5.60, 'MEA-004'],
+          ['Atlantic Salmon Fillets', 'Fish', 'kg', '5kg box', 14.50, 'FIS-001'],
+          ['Basmati Rice', 'Dry Goods', 'bag', '20kg sack', 24.00, 'DRY-001'],
+          ['Plain Flour', 'Dry Goods', 'bag', '16kg sack', 11.50, 'DRY-002'],
+          ['Penne Pasta', 'Dry Goods', 'case', '4x3kg', 13.20, 'DRY-003'],
+          ['Chopped Tomatoes', 'Dry Goods', 'case', '12x400g tins', 7.80, 'DRY-004'],
+          ['Sunflower Oil', 'Oils & Sauces', 'bottle', '20L drum', 32.00, 'OIL-001'],
+          ['Extra Virgin Olive Oil', 'Oils & Sauces', 'bottle', '5L tin', 28.50, 'OIL-002'],
+          ['Mayonnaise', 'Oils & Sauces', 'tub', '10L tub', 16.90, 'OIL-003'],
+          ['Kitchen Degreaser', 'Cleaning', 'bottle', '5L jerry', 9.20, 'CLE-001'],
+          ['Blue Roll', 'Cleaning', 'case', '6 rolls', 11.40, 'CLE-002'],
+          ['Nitrile Gloves (M)', 'Cleaning', 'box', '100 pcs', 5.80, 'CLE-003'],
+        ]
+        const rows = SAMPLES.map(([name, category, unit, pack_size, price, sku]) => ({
+          id: uuidv4(), supplier_id: sid, name, category, unit, pack_size, price, sku, available: true, notes: '',
+        }))
+        const { error: e2 } = await sb.from('supplier_products').insert(rows)
+        if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
+        return json({ ok: true, added: rows.length }, 201)
+      }
 
       // Generate a single-use connection code for a specific client.
       // The supplier's internal client code (optional) rides along and is
@@ -3852,7 +4014,7 @@ Output strictly valid JSON with no other text.`
         const reqItems = Array.isArray(body.items) ? body.items.slice(0, 100) : []
         if (reqItems.length === 0) return json({ error: 'At least one item required' }, 400)
 
-        const { data: conn, error: cErr } = await sb.from('supplier_connections').select('id').eq('kitchen_id', kid).eq('supplier_id', supplierId).eq('status', 'active').maybeSingle()
+        const { data: conn, error: cErr } = await sb.from('supplier_connections').select('id,client_code').eq('kitchen_id', kid).eq('supplier_id', supplierId).eq('status', 'active').maybeSingle()
         if (cErr) { const miss = connsMissing(cErr); if (miss) return miss; throw cErr }
         if (!conn) return json({ error: 'Not connected to this supplier — connect first' }, 403)
 
@@ -3912,6 +4074,16 @@ Output strictly valid JSON with no other text.`
         }
         if (oErr) { const miss = supplierTablesMissing(oErr); if (miss) return miss; throw oErr }
         await logActivity(sb, kid, await validatedPersonFromRequest(sb, request, ctx), 'order_placed', `${supInfo.businessName} — ${items.length} items, ${supInfo.currencySymbol}${total.toFixed(2)}`)
+        // Notify both sides: email + web-push (best-effort, never blocks)
+        await notifyOrderEvent(sb, 'placed', {
+          order: data,
+          supplierName: supInfo.businessName,
+          supplierEmail: supRow?.owner_email || '',
+          restaurantEmail: kEmail || '',
+          restaurantName: kName || 'Kitchen',
+          clientCode: conn.client_code || '',
+          sym: supInfo.currencySymbol,
+        })
         return json({ ...supplierOrderToApi(data), supplierId, supplierName: supInfo.businessName }, 201)
       }
     }
@@ -4618,6 +4790,31 @@ export async function PUT(request, { params }) {
         }
         const { data, error: e2 } = await sb.from('supplier_orders').update(patch).eq('id', segs[2]).eq('supplier_id', sid).select().single()
         if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
+        // Notify the restaurant on confirm / fulfil (email + web-push, best-effort)
+        if (status === 'confirmed' || status === 'fulfilled') {
+          const prof = (ctx.kitchen.supplier_profile && typeof ctx.kitchen.supplier_profile === 'object') ? ctx.kitchen.supplier_profile : {}
+          let restaurantEmail = data.customer_email || ''
+          if (data.kitchen_id) {
+            const { data: kRow } = await sb.from('kitchens').select('owner_email').eq('id', data.kitchen_id).maybeSingle()
+            if (kRow?.owner_email) restaurantEmail = kRow.owner_email
+          }
+          // Client code for the email header (via connection, tolerate failure)
+          let clientCode = ''
+          if (data.kitchen_id) {
+            try {
+              const { data: cRow } = await sb.from('supplier_connections').select('client_code').eq('supplier_id', sid).eq('kitchen_id', data.kitchen_id).maybeSingle()
+              clientCode = cRow?.client_code || ''
+            } catch {}
+          }
+          await notifyOrderEvent(sb, status, {
+            order: data,
+            supplierName: prof.businessName || ctx.kitchen.kitchen_name || 'Your supplier',
+            restaurantEmail,
+            restaurantName: data.customer_name || '',
+            clientCode,
+            sym: prof.currencySymbol || '£',
+          })
+        }
         return json(supplierOrderToApi(data))
       }
 
@@ -4662,6 +4859,82 @@ export async function PUT(request, { params }) {
       }
 
       return json({ error: 'Unknown supplier route' }, 404)
+    }
+
+    // ------- KITCHEN: edit a PENDING order (before the supplier confirms) -------
+    if (segs[0] === 'kitchen' && segs[1] === 'orders' && segs[2]) {
+      const { ctx, error } = await requireOwnerOrChef(request)
+      if (error) return error
+      if (ctx.kitchen && ctx.kitchen.account_type === 'supplier') {
+        return json({ error: 'Supplier accounts cannot access kitchen tools' }, 403)
+      }
+      const kid = ctx.kitchenId
+      const body = await request.json()
+
+      const { data: existing, error: rErr } = await sb.from('supplier_orders').select('*').eq('id', segs[2]).eq('kitchen_id', kid).maybeSingle()
+      if (rErr) { const miss = supplierTablesMissing(rErr); if (miss) return miss; throw rErr }
+      if (!existing) return json({ error: 'Order not found' }, 404)
+      if (existing.status !== 'pending') {
+        return json({ error: 'This order has already been confirmed — contact your supplier directly to change it.' }, 409)
+      }
+
+      const patch = { updated_at: new Date().toISOString() }
+      if (body.notes !== undefined) patch.notes = String(body.notes).slice(0, 1000)
+      if (body.requestedDeliveryDate !== undefined) {
+        patch.requested_delivery_date = /^\d{4}-\d{2}-\d{2}$/.test(String(body.requestedDeliveryDate || '')) ? body.requestedDeliveryDate : null
+      }
+
+      // Re-price replacement items from the supplier's LIVE catalog (same as create)
+      if (Array.isArray(body.items)) {
+        const reqItems = body.items.slice(0, 100)
+        const ids = [...new Set(reqItems.map(i => String(i?.productId || '')).filter(Boolean))]
+        if (ids.length === 0) return json({ error: 'Items must reference catalog products' }, 400)
+        const { data: prods, error: pErr } = await sb.from('supplier_products').select('*').eq('supplier_id', existing.supplier_id).in('id', ids)
+        if (pErr) { const miss = supplierTablesMissing(pErr); if (miss) return miss; throw pErr }
+        const byId = Object.fromEntries((prods || []).map(p => [p.id, p]))
+        const items = reqItems
+          .map(i => {
+            const p = byId[String(i?.productId || '')]
+            if (!p || p.available === false) return null
+            const qty = Math.max(0, Number(i?.quantity) || 0)
+            if (qty <= 0) return null
+            return { productId: p.id, sku: p.sku || '', name: p.name, quantity: qty, unit: p.unit || '', price: Number(p.price) || 0 }
+          })
+          .filter(Boolean)
+        if (items.length === 0) return json({ error: 'No valid items — the products may no longer be available' }, 400)
+        const { subtotal, vatRate, total } = computeOrderTotals(items, existing.vat_rate)
+        // Respect the supplier's minimum order value
+        const { data: supRow } = await sb.from('kitchens').select('id,kitchen_name,owner_email,supplier_profile').eq('id', existing.supplier_id).maybeSingle()
+        const supInfo = supRow ? supplierPublicInfo(supRow) : { minOrderValue: 0, currencySymbol: '£' }
+        if (supInfo.minOrderValue > 0 && subtotal < supInfo.minOrderValue) {
+          return json({ error: `Minimum order is ${supInfo.currencySymbol}${supInfo.minOrderValue.toFixed(2)} — your subtotal is ${supInfo.currencySymbol}${subtotal.toFixed(2)}` }, 400)
+        }
+        patch.items = items
+        patch.subtotal = subtotal
+        patch.vat_rate = vatRate
+        patch.total = total
+      }
+
+      let { data, error: uErr } = await sb.from('supplier_orders').update(patch).eq('id', segs[2]).eq('kitchen_id', kid).select().single()
+      if (uErr && /column .* does not exist|could not find .*column/i.test(uErr.message || '')) {
+        const { requested_delivery_date, ...core } = patch
+        const retry = await sb.from('supplier_orders').update(core).eq('id', segs[2]).eq('kitchen_id', kid).select().single()
+        data = retry.data
+        uErr = retry.error
+      }
+      if (uErr) throw uErr
+
+      // Tell the supplier their pending order changed (email + push, best-effort)
+      const { data: supRow2 } = await sb.from('kitchens').select('kitchen_name,owner_email,supplier_profile').eq('id', existing.supplier_id).maybeSingle()
+      const prof2 = (supRow2?.supplier_profile && typeof supRow2.supplier_profile === 'object') ? supRow2.supplier_profile : {}
+      await notifyOrderEvent(sb, 'updated', {
+        order: data,
+        supplierName: prof2.businessName || supRow2?.kitchen_name || 'Supplier',
+        supplierEmail: supRow2?.owner_email || '',
+        restaurantName: data.customer_name || '',
+        sym: prof2.currencySymbol || '£',
+      })
+      return json(supplierOrderToApi(data))
     }
 
     // ------- Staff: owner sets a person's access -------
@@ -4900,6 +5173,32 @@ export async function DELETE(request, { params }) {
         throw e2
       }
       return json({ ok: true })
+    }
+
+    // ------- KITCHEN: cancel a PENDING order (before the supplier confirms) -------
+    if (segs[0] === 'kitchen' && segs[1] === 'orders' && segs[2]) {
+      if (ctx.kitchen && ctx.kitchen.account_type === 'supplier') {
+        return json({ error: 'Supplier accounts cannot access kitchen tools' }, 403)
+      }
+      const { data: existing, error: rErr } = await sb.from('supplier_orders').select('*').eq('id', segs[2]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+      if (rErr) { const miss = supplierTablesMissing(rErr); if (miss) return miss; throw rErr }
+      if (!existing) return json({ error: 'Order not found' }, 404)
+      if (existing.status !== 'pending') {
+        return json({ error: 'This order has already been confirmed — contact your supplier directly to change it.' }, 409)
+      }
+      const { data, error: uErr } = await sb.from('supplier_orders').update({ status: 'cancelled', updated_at: new Date().toISOString() }).eq('id', segs[2]).eq('kitchen_id', ctx.kitchenId).select().single()
+      if (uErr) throw uErr
+      // Tell the supplier (email + push, best-effort)
+      const { data: supRow } = await sb.from('kitchens').select('kitchen_name,owner_email,supplier_profile').eq('id', existing.supplier_id).maybeSingle()
+      const prof = (supRow?.supplier_profile && typeof supRow.supplier_profile === 'object') ? supRow.supplier_profile : {}
+      await notifyOrderEvent(sb, 'cancelled', {
+        order: data,
+        supplierName: prof.businessName || supRow?.kitchen_name || 'Supplier',
+        supplierEmail: supRow?.owner_email || '',
+        restaurantName: data.customer_name || '',
+        sym: prof.currencySymbol || '£',
+      })
+      return json({ ok: true, order: supplierOrderToApi(data) })
     }
 
     // ------- Shelves: remove a shelf name from the kitchen's list -------

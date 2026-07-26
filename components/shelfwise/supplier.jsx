@@ -103,7 +103,7 @@ function printOrderSummary(order, profile, businessName, ownerEmail, clientCode 
 }
 
 // CSV export of an order summary — for importing into invoicing software.
-function downloadOrderSummaryCsv(order, clientCode = '') {
+export function downloadOrderSummaryCsv(order, clientCode = '') {
   const escCsv = (v) => {
     const s = String(v ?? '')
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
@@ -431,6 +431,7 @@ export default function SupplierDashboard({ me }) {
   const [orderDialog, setOrderDialog] = useState(false)
   const [viewOrder, setViewOrder] = useState(null)
   const [statusBusy, setStatusBusy] = useState(null)
+  const [sampleBusy, setSampleBusy] = useState(false)
   const [migrationNeeded, setMigrationNeeded] = useState(false)
 
   const loadAll = useCallback(async () => {
@@ -698,6 +699,18 @@ export default function SupplierDashboard({ me }) {
                       <Package className="h-12 w-12 mx-auto mb-3 opacity-30" />
                       <p className="font-medium">Your catalog is empty</p>
                       <p className="text-sm">Add the products you supply so ordering is one tap.</p>
+                      <Button variant="outline" className="mt-4" disabled={sampleBusy}
+                        onClick={async () => {
+                          setSampleBusy(true)
+                          try {
+                            await apiJson('/api/supplier/products/sample', { method: 'POST', body: '{}' })
+                            toast.success('20 sample products added to your catalog')
+                            loadAll()
+                          } catch (e) { toast.error(e.message || 'Failed') } finally { setSampleBusy(false) }
+                        }}>
+                        {sampleBusy ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Plus className="h-4 w-4 mr-1.5" />}
+                        Load 20 sample products (demo)
+                      </Button>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
