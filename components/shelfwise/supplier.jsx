@@ -19,6 +19,7 @@ import { toast, Toaster } from 'sonner'
 import {
   Truck, Package, FileText, Settings, Plus, Pencil, Trash2, Loader2, Check, X,
   LogOut, Printer, RefreshCw, ClipboardCheck, PoundSterling, Inbox, Ban, Eye,
+  Users, Copy, CalendarDays,
 } from 'lucide-react'
 import { apiFetch, apiJson, signOutAll } from '@/lib/apiClient'
 
@@ -307,12 +308,17 @@ function OrderDetailDialog({ order, onClose, currencySymbol, onStatusChange, bus
             <Badge variant="outline" className={`${st.cls} text-[10px]`}>{st.label}</Badge>
           </DialogTitle>
           <p className="text-xs text-muted-foreground">
-            {order.createdAt ? new Date(order.createdAt).toLocaleString('en-GB') : ''}
+            {order.orderRef} · {order.createdAt ? new Date(order.createdAt).toLocaleString('en-GB') : ''}
             {order.invoiceNumber ? ` · ${order.invoiceNumber}` : ''}
           </p>
         </DialogHeader>
         <div className="space-y-3">
           {order.customerEmail && <p className="text-sm text-muted-foreground">{order.customerEmail}</p>}
+          {order.requestedDeliveryDate && (
+            <p className="text-sm inline-flex items-center gap-1.5 bg-indigo-50 text-indigo-800 rounded-lg px-2.5 py-1.5">
+              <CalendarDays className="h-4 w-4" /> Requested delivery: <b>{new Date(order.requestedDeliveryDate + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' })}</b>
+            </p>
+          )}
           <div className="border rounded-lg divide-y">
             {(order.items || []).map((i, idx) => (
               <div key={idx} className="px-3 py-2 flex justify-between text-sm">
@@ -366,6 +372,8 @@ export default function SupplierDashboard({ me }) {
   const [loading, setLoading] = useState(true)
   const [profile, setProfile] = useState(me?.kitchen?.supplierProfile || {})
   const [businessName, setBusinessName] = useState(me?.kitchen?.kitchenName || '')
+  const [supplierCode, setSupplierCode] = useState('')
+  const [clients, setClients] = useState([])
   const ownerEmail = me?.userEmail || me?.kitchen?.ownerEmail || ''
   const sym = profile?.currencySymbol || '£'
 
@@ -378,14 +386,22 @@ export default function SupplierDashboard({ me }) {
 
   const loadAll = useCallback(async () => {
     try {
-      const [o, p, s] = await Promise.all([
+      const [o, p, s, prof, cli] = await Promise.all([
         apiJson('/api/supplier/orders').catch(e => { throw e }),
         apiJson('/api/supplier/products').catch(() => []),
         apiJson('/api/supplier/stats').catch(() => null),
+        apiJson('/api/supplier/profile').catch(() => null),
+        apiJson('/api/supplier/clients').catch(() => []),
       ])
       setOrders(Array.isArray(o) ? o : [])
       setProducts(Array.isArray(p) ? p : [])
       setStats(s)
+      if (prof) {
+        setProfile(prof.profile || {})
+        if (prof.businessName) setBusinessName(prof.businessName)
+        setSupplierCode(prof.supplierCode || '')
+      }
+      setClients(Array.isArray(cli) ? cli : [])
       setMigrationNeeded(false)
     } catch (e) {
       if (/migration-20/i.test(e.message || '')) setMigrationNeeded(true)
@@ -439,6 +455,8 @@ export default function SupplierDashboard({ me }) {
     paymentTerms: profile.paymentTerms || '',
     currencySymbol: profile.currencySymbol || '£',
     invoiceFooter: profile.invoiceFooter || '',
+    deliveryDays: profile.deliveryDays || '',
+    minOrderValue: profile.minOrderValue ?? 0,
   })
   useEffect(() => { if (tab === 'profile' && !pForm) openProfileForm() }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
   const saveProfile = async () => {
@@ -457,6 +475,7 @@ export default function SupplierDashboard({ me }) {
     { id: 'orders', label: 'Orders', icon: Inbox },
     { id: 'catalog', label: 'Catalog', icon: Package },
     { id: 'invoices', label: 'Invoices', icon: FileText },
+    { id: 'clients', label: 'Clients', icon: Users },
     { id: 'profile', label: 'Profile', icon: Settings },
   ]
 
@@ -548,9 +567,13 @@ export default function SupplierDashboard({ me }) {
                         return (
                           <div key={o.id} className="flex items-center gap-3 border rounded-lg px-3 py-2.5 hover:bg-indigo-50/40 transition">
                             <div className="flex-1 min-w-0">
-                              <p className="font-semibold text-sm truncate">{o.customerName}</p>
+                              <p className="font-semibold text-sm truncate">
+                                {o.customerName}
+                                {o.placedVia === 'shelfwise' && <span className="ml-1.5 text-[9px] font-bold uppercase tracking-wide bg-indigo-100 text-indigo-700 rounded px-1.5 py-0.5 align-middle">via ShelfWise</span>}
+                              </p>
                               <p className="text-xs text-muted-foreground">
-                                {(o.items || []).length} item{(o.items || []).length !== 1 ? 's' : ''} · {o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB') : ''}
+                                {o.orderRef} · {(o.items || []).length} item{(o.items || []).length !== 1 ? 's' : ''} · {o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB') : ''}
+                                {o.requestedDeliveryDate ? ` · 🚚 ${new Date(o.requestedDeliveryDate + 'T00:00:00').toLocaleDateString('en-GB')}` : ''}
                                 {o.invoiceNumber ? ` · ${o.invoiceNumber}` : ''}
                               </p>
                             </div>
@@ -657,6 +680,57 @@ export default function SupplierDashboard({ me }) {
               </Card>
             )}
 
+            {/* ---------------- CLIENTS ---------------- */}
+            {tab === 'clients' && (
+              <Card className="border-0 shadow-sm">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg">Connected restaurants</CardTitle>
+                  <CardDescription>
+                    Kitchens connected to you can browse your catalog and place orders in-app.
+                    {supplierCode ? <> Share your supplier code so they can connect: <b className="text-indigo-700">{supplierCode}</b></> : ''}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {supplierCode && (
+                    <div className="mb-4 flex items-center gap-2 rounded-xl border-2 border-indigo-200 bg-indigo-50/50 px-4 py-3">
+                      <div className="flex-1">
+                        <p className="text-[10px] uppercase tracking-wider font-bold text-indigo-500">Your supplier code</p>
+                        <p className="text-xl font-mono font-bold text-indigo-800">{supplierCode}</p>
+                      </div>
+                      <Button size="sm" variant="outline" className="bg-white" onClick={() => { navigator.clipboard?.writeText(supplierCode).then(() => toast.success('Code copied')) }}>
+                        <Copy className="h-3.5 w-3.5 mr-1.5" /> Copy
+                      </Button>
+                    </div>
+                  )}
+                  {clients.length === 0 ? (
+                    <div className="text-center py-14 text-muted-foreground">
+                      <Users className="h-12 w-12 mx-auto mb-3 opacity-30" />
+                      <p className="font-medium">No connected restaurants yet</p>
+                      <p className="text-sm">Give your customers your supplier code{supplierCode ? ` (${supplierCode})` : ''} or email — they connect from their ShelfWise "Suppliers & Orders" screen.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {clients.map(c => (
+                        <div key={c.connectionId} className="flex items-center gap-3 border rounded-lg px-3 py-2.5">
+                          <div className="h-9 w-9 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 font-bold text-sm">
+                            {(c.kitchenName || '?').slice(0, 1).toUpperCase()}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-sm truncate">{c.kitchenName}</p>
+                            <p className="text-xs text-muted-foreground truncate">{c.email}</p>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className="text-sm font-bold text-indigo-700">{c.totalOrders} order{c.totalOrders !== 1 ? 's' : ''}</p>
+                            <p className="text-[11px] text-muted-foreground">since {c.connectedAt ? new Date(c.connectedAt).toLocaleDateString('en-GB') : ''}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
             {/* ---------------- PROFILE ---------------- */}
             {tab === 'profile' && pForm && (
               <Card className="border-0 shadow-sm max-w-2xl">
@@ -697,6 +771,14 @@ export default function SupplierDashboard({ me }) {
                     <div>
                       <Label className="text-xs">Payment terms</Label>
                       <Input value={pForm.paymentTerms} onChange={e => setPForm({ ...pForm, paymentTerms: e.target.value })} placeholder="e.g. Net 30 days" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Delivery days <span className="text-muted-foreground">(shown to customers)</span></Label>
+                      <Input value={pForm.deliveryDays} onChange={e => setPForm({ ...pForm, deliveryDays: e.target.value })} placeholder="e.g. Mon, Wed, Fri" />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Minimum order value</Label>
+                      <Input type="number" min="0" step="0.01" value={pForm.minOrderValue} onChange={e => setPForm({ ...pForm, minOrderValue: e.target.value })} placeholder="0 = no minimum" />
                     </div>
                     <div className="col-span-2">
                       <Label className="text-xs">Invoice footer note</Label>

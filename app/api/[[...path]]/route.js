@@ -437,6 +437,9 @@ function supplierProductToApi(p) {
 function supplierOrderToApi(o) {
   return {
     id: o.id,
+    orderRef: 'ORD-' + String(o.id || '').replace(/-/g, '').slice(0, 6).toUpperCase(),
+    kitchenId: o.kitchen_id || null,
+    placedVia: o.kitchen_id ? 'shelfwise' : 'manual',
     customerName: o.customer_name || '',
     customerEmail: o.customer_email || '',
     status: o.status || 'pending',
@@ -446,9 +449,33 @@ function supplierOrderToApi(o) {
     total: Number(o.total) || 0,
     notes: o.notes || '',
     invoiceNumber: o.invoice_number || '',
+    requestedDeliveryDate: o.requested_delivery_date || null,
     createdAt: o.created_at,
     updatedAt: o.updated_at,
     fulfilledAt: o.fulfilled_at,
+  }
+}
+
+/** Short shareable supplier code, e.g. SUP-7K2F9Q (no ambiguous chars). */
+function newSupplierCode() {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+  let s = ''
+  for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)]
+  return 'SUP-' + s
+}
+
+/** Public-safe supplier info shown to kitchens (search results / connections). */
+function supplierPublicInfo(k) {
+  const prof = (k.supplier_profile && typeof k.supplier_profile === 'object') ? k.supplier_profile : {}
+  return {
+    supplierId: k.id,
+    businessName: prof.businessName || k.kitchen_name || '(unnamed supplier)',
+    email: k.owner_email || '',
+    phone: prof.phone || '',
+    deliveryDays: prof.deliveryDays || '',
+    minOrderValue: Number(prof.minOrderValue) || 0,
+    currencySymbol: prof.currencySymbol || '£',
+    defaultVatRate: Number(prof.defaultVatRate) || 0,
   }
 }
 
@@ -2259,17 +2286,55 @@ export async function GET(request, { params }) {
     }
 
     // ----- SUPPLIER endpoints (supplier accounts only, migration-20) -----
-    if (path === 'supplier/profile' || path === 'supplier/products' || path === 'supplier/orders' || path === 'supplier/stats' || path.startsWith('supplier/orders/')) {
+    if (path === 'supplier/profile' || path === 'supplier/products' || path === 'supplier/orders' || path === 'supplier/stats' || path === 'supplier/clients' || path.startsWith('supplier/orders/')) {
       const { ctx, error } = await requireSupplier(request)
       if (error) return error
       const sid = ctx.kitchen.id
 
       if (path === 'supplier/profile') {
+        // Ensure this supplier has a shareable connect code (SUP-XXXXXX).
+        let code = ctx.kitchen.supplier_code || ''
+        if (!code) {
+          code = newSupplierCode()
+          const { error: cErr } = await sb.from('kitchens').update({ supplier_code: code }).eq('id', sid)
+          if (cErr) code = '' // migration-21 not run yet — degrade gracefully
+        }
         return json({
           profile: (ctx.kitchen.supplier_profile && typeof ctx.kitchen.supplier_profile === 'object') ? ctx.kitchen.supplier_profile : {},
           businessName: ctx.kitchen.kitchen_name || '',
           ownerEmail: ctx.kitchen.owner_email || '',
+          supplierCode: code,
         })
+      }
+
+      // Connected restaurants (client list)
+      if (path === 'supplier/clients') {
+        const { data: conns, error: e2 } = await sb.from('supplier_connections').select('*').eq('supplier_id', sid).eq('status', 'active').order('created_at', { ascending: false }).limit(1000)
+        if (e2) {
+          if (/relation .*supplier_connections.* does not exist/i.test(e2.message || '')) {
+            return json({ error: 'Connections table not found — run supabase/migration-21-supplier-connections.sql in the Supabase SQL editor first.' }, 500)
+          }
+          throw e2
+        }
+        const list = conns || []
+        if (list.length === 0) return json([])
+        const kids = [...new Set(list.map(c => c.kitchen_id))]
+        const { data: kitchens } = await sb.from('kitchens').select('id,kitchen_name,owner_email').in('id', kids)
+        // Order counts per kitchen (nice-to-have; tolerate failure)
+        let counts = {}
+        try {
+          const { data: ords } = await sb.from('supplier_orders').select('kitchen_id').eq('supplier_id', sid).not('kitchen_id', 'is', null).limit(5000)
+          for (const o of (ords || [])) counts[o.kitchen_id] = (counts[o.kitchen_id] || 0) + 1
+        } catch {}
+        const byId = Object.fromEntries((kitchens || []).map(k => [k.id, k]))
+        return json(list.map(c => ({
+          connectionId: c.id,
+          kitchenId: c.kitchen_id,
+          kitchenName: byId[c.kitchen_id]?.kitchen_name || '(unknown kitchen)',
+          email: byId[c.kitchen_id]?.owner_email || '',
+          connectedAt: c.created_at,
+          totalOrders: counts[c.kitchen_id] || 0,
+        })))
       }
 
       if (path === 'supplier/products') {
@@ -2312,6 +2377,88 @@ export async function GET(request, { params }) {
           invoices: list.filter(o => o.invoice_number).length,
           products: productCount || 0,
         })
+      }
+    }
+
+    // ----- KITCHEN ↔ SUPPLIER marketplace (kitchen accounts, migration-21) -----
+    if (path === 'kitchen/suppliers' || path.startsWith('kitchen/suppliers/') || path === 'kitchen/orders') {
+      const { ctx, error } = await requireOwnerOrChef(request)
+      if (error) return error
+      if (ctx.kitchen && ctx.kitchen.account_type === 'supplier') {
+        return json({ error: 'Supplier accounts cannot access kitchen tools' }, 403)
+      }
+      const kid = ctx.kitchenId
+      const connsMissing = (e) => /relation .*supplier_connections.* does not exist/i.test(e?.message || '')
+        ? json({ error: 'Connections table not found — run supabase/migration-21-supplier-connections.sql in the Supabase SQL editor first.' }, 500)
+        : null
+
+      // Search approved suppliers by business name, email or supplier code
+      if (path === 'kitchen/suppliers/search') {
+        const url = new URL(request.url)
+        const q = String(url.searchParams.get('q') || '').trim().slice(0, 120)
+        if (q.length < 2) return json([])
+        let rows = []
+        const base = () => sb.from('kitchens').select('id,kitchen_name,owner_email,supplier_profile,supplier_code').eq('account_type', 'supplier').eq('status', 'approved').limit(10)
+        if (q.includes('@')) {
+          const { data } = await base().ilike('owner_email', escapeLike(q.toLowerCase()))
+          rows = data || []
+        } else {
+          // Try exact supplier code first, then business-name search
+          const { data: byCode } = await base().eq('supplier_code', q.toUpperCase().startsWith('SUP-') ? q.toUpperCase() : 'SUP-' + q.toUpperCase())
+          const { data: byName } = await base().ilike('kitchen_name', `%${escapeLike(q)}%`)
+          const seen = new Set()
+          rows = [...(byCode || []), ...(byName || [])].filter(k => !seen.has(k.id) && seen.add(k.id))
+        }
+        return json(rows.map(supplierPublicInfo))
+      }
+
+      // Connected supplier's browsable catalog
+      if (path.startsWith('kitchen/suppliers/') && path.endsWith('/catalog')) {
+        const supplierId = path.split('/')[2]
+        const { data: conn, error: cErr } = await sb.from('supplier_connections').select('id').eq('kitchen_id', kid).eq('supplier_id', supplierId).eq('status', 'active').maybeSingle()
+        if (cErr) { const miss = connsMissing(cErr); if (miss) return miss; throw cErr }
+        if (!conn) return json({ error: 'Not connected to this supplier' }, 403)
+        const { data: supRow } = await sb.from('kitchens').select('id,kitchen_name,owner_email,supplier_profile,supplier_code').eq('id', supplierId).maybeSingle()
+        const { data: prods, error: pErr } = await sb.from('supplier_products').select('*').eq('supplier_id', supplierId).eq('available', true).order('category', { ascending: true }).order('name', { ascending: true }).limit(2000)
+        if (pErr) { const miss = supplierTablesMissing(pErr); if (miss) return miss; throw pErr }
+        return json({
+          supplier: supRow ? supplierPublicInfo(supRow) : null,
+          products: (prods || []).map(supplierProductToApi),
+        })
+      }
+
+      // Connected suppliers list
+      if (path === 'kitchen/suppliers') {
+        const { data: conns, error: e2 } = await sb.from('supplier_connections').select('*').eq('kitchen_id', kid).eq('status', 'active').order('created_at', { ascending: false }).limit(200)
+        if (e2) { const miss = connsMissing(e2); if (miss) return miss; throw e2 }
+        const list = conns || []
+        if (list.length === 0) return json([])
+        const sids = [...new Set(list.map(c => c.supplier_id))]
+        const { data: sups } = await sb.from('kitchens').select('id,kitchen_name,owner_email,supplier_profile,supplier_code').in('id', sids)
+        const byId = Object.fromEntries((sups || []).map(k => [k.id, k]))
+        return json(list.map(c => ({
+          connectionId: c.id,
+          connectedAt: c.created_at,
+          ...(byId[c.supplier_id] ? supplierPublicInfo(byId[c.supplier_id]) : { supplierId: c.supplier_id, businessName: '(unknown supplier)' }),
+        })))
+      }
+
+      // Kitchen's order history across all suppliers
+      if (path === 'kitchen/orders') {
+        const { data: ords, error: e2 } = await sb.from('supplier_orders').select('*').eq('kitchen_id', kid).order('created_at', { ascending: false }).limit(500)
+        if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
+        const list = ords || []
+        const sids = [...new Set(list.map(o => o.supplier_id))]
+        let byId = {}
+        if (sids.length > 0) {
+          const { data: sups } = await sb.from('kitchens').select('id,kitchen_name,supplier_profile').in('id', sids)
+          byId = Object.fromEntries((sups || []).map(k => [k.id, k]))
+        }
+        return json(list.map(o => ({
+          ...supplierOrderToApi(o),
+          supplierId: o.supplier_id,
+          supplierName: (byId[o.supplier_id]?.supplier_profile?.businessName) || byId[o.supplier_id]?.kitchen_name || '(supplier)',
+        })))
       }
     }
 
@@ -3558,6 +3705,126 @@ Output strictly valid JSON with no other text.`
       }
     }
 
+    // -------- KITCHEN marketplace mutations: connect + place order --------
+    if (path === 'kitchen/suppliers/connect' || path === 'kitchen/orders') {
+      const { ctx, error } = await requireOwnerOrChef(request)
+      if (error) return error
+      if (ctx.kitchen && ctx.kitchen.account_type === 'supplier') {
+        return json({ error: 'Supplier accounts cannot access kitchen tools' }, 403)
+      }
+      const kid = ctx.kitchenId
+      const body = await request.json()
+      const connsMissing = (e) => /relation .*supplier_connections.* does not exist/i.test(e?.message || '')
+        ? json({ error: 'Connections table not found — run supabase/migration-21-supplier-connections.sql in the Supabase SQL editor first.' }, 500)
+        : null
+
+      // Connect to a supplier — AUTOMATIC (no approval): entering the supplier's
+      // code / email / picking them from search is treated as authorization.
+      if (path === 'kitchen/suppliers/connect') {
+        let supplier = null
+        if (body.supplierId) {
+          const { data } = await sb.from('kitchens').select('id,kitchen_name,owner_email,supplier_profile,supplier_code,account_type,status').eq('id', String(body.supplierId)).maybeSingle()
+          supplier = data
+        } else if (body.code) {
+          const code = String(body.code).trim().toUpperCase()
+          const norm = code.startsWith('SUP-') ? code : 'SUP-' + code
+          const { data } = await sb.from('kitchens').select('id,kitchen_name,owner_email,supplier_profile,supplier_code,account_type,status').eq('supplier_code', norm).maybeSingle()
+          supplier = data
+        } else if (body.email) {
+          const { data } = await sb.from('kitchens').select('id,kitchen_name,owner_email,supplier_profile,supplier_code,account_type,status').ilike('owner_email', escapeLike(String(body.email).trim().toLowerCase())).eq('account_type', 'supplier').maybeSingle()
+          supplier = data
+        } else {
+          return json({ error: 'Provide supplierId, code or email' }, 400)
+        }
+        if (!supplier || supplier.account_type !== 'supplier') return json({ error: 'Supplier not found — check the code/email and try again' }, 404)
+        if (supplier.status !== 'approved') return json({ error: 'This supplier account is not active yet' }, 403)
+        if (supplier.id === kid) return json({ error: 'You cannot connect to yourself' }, 400)
+
+        // Already connected?
+        const { data: existing, error: exErr } = await sb.from('supplier_connections').select('*').eq('kitchen_id', kid).eq('supplier_id', supplier.id).maybeSingle()
+        if (exErr) { const miss = connsMissing(exErr); if (miss) return miss; throw exErr }
+        if (existing) {
+          if (existing.status !== 'active') await sb.from('supplier_connections').update({ status: 'active' }).eq('id', existing.id)
+          return json({ ok: true, alreadyConnected: true, connectionId: existing.id, ...supplierPublicInfo(supplier) })
+        }
+        const { data: conn, error: cErr } = await sb.from('supplier_connections').insert({ id: uuidv4(), supplier_id: supplier.id, kitchen_id: kid, status: 'active' }).select().single()
+        if (cErr) { const miss = connsMissing(cErr); if (miss) return miss; throw cErr }
+        await logActivity(sb, kid, await validatedPersonFromRequest(sb, request, ctx), 'supplier_connected', supplierPublicInfo(supplier).businessName)
+        return json({ ok: true, connectionId: conn.id, ...supplierPublicInfo(supplier) }, 201)
+      }
+
+      // Place an order with a CONNECTED supplier. Items are re-priced from the
+      // supplier's live catalog server-side — client prices are never trusted.
+      if (path === 'kitchen/orders') {
+        const supplierId = String(body.supplierId || '')
+        if (!supplierId) return json({ error: 'supplierId required' }, 400)
+        const reqItems = Array.isArray(body.items) ? body.items.slice(0, 100) : []
+        if (reqItems.length === 0) return json({ error: 'At least one item required' }, 400)
+
+        const { data: conn, error: cErr } = await sb.from('supplier_connections').select('id').eq('kitchen_id', kid).eq('supplier_id', supplierId).eq('status', 'active').maybeSingle()
+        if (cErr) { const miss = connsMissing(cErr); if (miss) return miss; throw cErr }
+        if (!conn) return json({ error: 'Not connected to this supplier — connect first' }, 403)
+
+        const ids = [...new Set(reqItems.map(i => String(i?.productId || '')).filter(Boolean))]
+        if (ids.length === 0) return json({ error: 'Items must reference catalog products' }, 400)
+        const { data: prods, error: pErr } = await sb.from('supplier_products').select('*').eq('supplier_id', supplierId).in('id', ids)
+        if (pErr) { const miss = supplierTablesMissing(pErr); if (miss) return miss; throw pErr }
+        const byId = Object.fromEntries((prods || []).map(p => [p.id, p]))
+        const items = reqItems
+          .map(i => {
+            const p = byId[String(i?.productId || '')]
+            if (!p || p.available === false) return null
+            const qty = Math.max(0, Number(i?.quantity) || 0)
+            if (qty <= 0) return null
+            return { productId: p.id, name: p.name, quantity: qty, unit: p.unit || '', price: Number(p.price) || 0 }
+          })
+          .filter(Boolean)
+        if (items.length === 0) return json({ error: 'No valid items — the products may no longer be available' }, 400)
+
+        // Supplier settings (VAT, min order)
+        const { data: supRow } = await sb.from('kitchens').select('id,kitchen_name,owner_email,supplier_profile').eq('id', supplierId).maybeSingle()
+        const supInfo = supRow ? supplierPublicInfo(supRow) : { defaultVatRate: 0, minOrderValue: 0, currencySymbol: '£', businessName: '(supplier)' }
+        const { subtotal, vatRate, total } = computeOrderTotals(items, supInfo.defaultVatRate)
+        if (supInfo.minOrderValue > 0 && subtotal < supInfo.minOrderValue) {
+          return json({ error: `Minimum order for ${supInfo.businessName} is ${supInfo.currencySymbol}${supInfo.minOrderValue.toFixed(2)} — your subtotal is ${supInfo.currencySymbol}${subtotal.toFixed(2)}` }, 400)
+        }
+
+        // Kitchen identity for the supplier's order card
+        let kName = ctx.kitchen?.kitchen_name, kEmail = ctx.kitchen?.owner_email
+        if (!kName) {
+          const { data: kRow } = await sb.from('kitchens').select('kitchen_name,owner_email').eq('id', kid).maybeSingle()
+          kName = kRow?.kitchen_name || 'Kitchen'
+          kEmail = kRow?.owner_email || ''
+        }
+
+        const row = {
+          id: uuidv4(),
+          supplier_id: supplierId,
+          kitchen_id: kid,
+          customer_name: kName || 'Kitchen',
+          customer_email: kEmail || '',
+          status: 'pending',
+          items,
+          subtotal,
+          vat_rate: vatRate,
+          total,
+          notes: String(body.notes || '').slice(0, 1000),
+          requested_delivery_date: /^\d{4}-\d{2}-\d{2}$/.test(String(body.requestedDeliveryDate || '')) ? body.requestedDeliveryDate : null,
+        }
+        let { data, error: oErr } = await sb.from('supplier_orders').insert(row).select().single()
+        // requested_delivery_date column missing (migration-21 not run) → retry without
+        if (oErr && /column .* does not exist|could not find .*column/i.test(oErr.message || '')) {
+          const { requested_delivery_date, ...core } = row
+          const retry = await sb.from('supplier_orders').insert(core).select().single()
+          data = retry.data
+          oErr = retry.error
+        }
+        if (oErr) { const miss = supplierTablesMissing(oErr); if (miss) return miss; throw oErr }
+        await logActivity(sb, kid, await validatedPersonFromRequest(sb, request, ctx), 'order_placed', `${supInfo.businessName} — ${items.length} items, ${supInfo.currencySymbol}${total.toFixed(2)}`)
+        return json({ ...supplierOrderToApi(data), supplierId, supplierName: supInfo.businessName }, 201)
+      }
+    }
+
     // -------- Kitchen-scoped mutations --------
     const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect'].some(p => path === p)
       || (path.startsWith('recipes/') && path.endsWith('/favorite'))
@@ -4279,6 +4546,9 @@ export async function PUT(request, { params }) {
           paymentTerms: String(body.paymentTerms ?? current.paymentTerms ?? '').slice(0, 200),
           currencySymbol: String(body.currencySymbol ?? current.currencySymbol ?? '£').slice(0, 4),
           invoiceFooter: String(body.invoiceFooter ?? current.invoiceFooter ?? '').slice(0, 400),
+          // B2B ordering (migration-21): shown to connected kitchens
+          deliveryDays: String(body.deliveryDays ?? current.deliveryDays ?? '').slice(0, 120),
+          minOrderValue: Math.max(0, Number(body.minOrderValue ?? current.minOrderValue) || 0),
         }
         const patch = { supplier_profile: profile }
         // Business name doubles as the account display name.
@@ -4508,6 +4778,21 @@ export async function DELETE(request, { params }) {
 
     const { ctx, error } = await requireOwnerOrChef(request)
     if (error) return error
+
+    // ------- KITCHEN: disconnect from a supplier -------
+    if (segs[0] === 'kitchen' && segs[1] === 'suppliers' && segs[2]) {
+      if (ctx.kitchen && ctx.kitchen.account_type === 'supplier') {
+        return json({ error: 'Supplier accounts cannot access kitchen tools' }, 403)
+      }
+      const { error: e2 } = await sb.from('supplier_connections').delete().eq('id', segs[2]).eq('kitchen_id', ctx.kitchenId)
+      if (e2) {
+        if (/relation .*supplier_connections.* does not exist/i.test(e2.message || '')) {
+          return json({ error: 'Connections table not found — run supabase/migration-21-supplier-connections.sql first.' }, 500)
+        }
+        throw e2
+      }
+      return json({ ok: true })
+    }
 
     // ------- Shelves: remove a shelf name from the kitchen's list -------
     if (segs[0] === 'shelves') {

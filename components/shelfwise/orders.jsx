@@ -12,8 +12,9 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from 'sonner'
-import { Truck, Plus, Pencil, Trash2, Loader2, Check, X, AlertTriangle, PackageX, RefreshCw, Copy, ShieldCheck, Send, Mail, Phone, StickyNote } from 'lucide-react'
+import { Truck, Plus, Pencil, Trash2, Loader2, Check, X, AlertTriangle, PackageX, RefreshCw, Copy, ShieldCheck, Send, Mail, Phone, StickyNote, Store } from 'lucide-react'
 import { apiFetch } from '@/lib/apiClient'
+import { MarketplaceView } from '@/components/shelfwise/kitchen-ordering'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
 const fetch = apiFetch
@@ -21,6 +22,7 @@ const fetch = apiFetch
 const EMPTY_SUPPLIER = { name: '', email: '', phone: '', notes: '' }
 
 export function OrdersView() {
+  const [ordersTab, setOrdersTab] = useState('marketplace') // 'marketplace' | 'email'
   const [suppliers, setSuppliers] = useState([])
   const [lowStock, setLowStock] = useState({ groups: {}, total: 0 })
   const [loading, setLoading] = useState(true)
@@ -81,13 +83,30 @@ export function OrdersView() {
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">Suppliers & Orders</h2>
-          <p className="text-muted-foreground mt-1">Low stock is grouped by supplier — send a professional order email in one tap</p>
+          <p className="text-muted-foreground mt-1">Order in-app from connected ShelfWise suppliers, or send order emails from your contacts</p>
         </div>
         <Button variant="outline" size="sm" onClick={load} disabled={loading}>
           <RefreshCw className={`h-4 w-4 mr-1.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
         </Button>
       </div>
 
+      {/* Tab switcher: in-app marketplace vs legacy email ordering */}
+      <div className="flex gap-2">
+        <button onClick={() => setOrdersTab('marketplace')}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border-2 transition ${ordersTab === 'marketplace' ? 'border-indigo-500 bg-indigo-50 text-indigo-800' : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300'}`}>
+          <Store className="h-4 w-4" /> Order from Suppliers
+          <span className="text-[9px] font-bold bg-indigo-600 text-white rounded px-1.5 py-0.5">NEW</span>
+        </button>
+        <button onClick={() => setOrdersTab('email')}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold border-2 transition ${ordersTab === 'email' ? 'border-indigo-500 bg-indigo-50 text-indigo-800' : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300'}`}>
+          <Mail className="h-4 w-4" /> Low Stock & Email Orders
+        </button>
+      </div>
+
+      {ordersTab === 'marketplace' && <MarketplaceView />}
+
+      {ordersTab === 'email' && (
+      <>
       {/* ---- LOW STOCK / REORDER ---- */}
       <Card className="border-0 shadow-sm">
         <CardHeader className="pb-3">
@@ -212,6 +231,8 @@ export function OrdersView() {
           onClose={() => setOrderDialog(null)}
           onSent={() => { setOrderDialog(null) }}
         />
+      )}
+      </>
       )}
     </div>
   )
