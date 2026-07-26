@@ -1970,9 +1970,19 @@ export async function GET(request, { params }) {
 
     // ------- Deployment version (public) — used by clients to auto-refresh
     // stale PWA installs when a new build goes live (fixes the recurring
-    // "old version on staff phones" problem). Vercel injects the commit SHA.
+    // "old version on staff phones" problem).
+    // Priority: Vercel commit SHA → Next.js BUILD_ID (changes every production
+    // build on ANY host, incl. Emergent) → 'dev' (local dev server only).
     if (path === 'version') {
-      return json({ version: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || 'dev' })
+      let version = process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA || ''
+      if (!version) {
+        try {
+          const fs = require('fs')
+          const nodePath = require('path')
+          version = fs.readFileSync(nodePath.join(process.cwd(), '.next', 'BUILD_ID'), 'utf8').trim()
+        } catch { version = '' }
+      }
+      return json({ version: version || 'dev' })
     }
 
     // ---- Commercial barcode lookup fallback ----

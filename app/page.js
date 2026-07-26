@@ -1790,20 +1790,32 @@ function App() {
   // detected the app reloads itself once to pull fresh code.
   useEffect(() => {
     let base = null
+    const doReload = (v) => {
+      const key = 'sw_reloaded_' + v
+      if (sessionStorage.getItem(key)) return
+      sessionStorage.setItem(key, '1')
+      try { localStorage.setItem('sw_last_version', v) } catch {}
+      toast.info('New version available — updating…')
+      setTimeout(() => window.location.reload(), 1200)
+    }
     const check = async () => {
       try {
         const r = await window.fetch('/api/version', { cache: 'no-store' })
         const d = await r.json().catch(() => ({}))
         if (!d?.version || d.version === 'dev') return
-        if (base === null) { base = d.version; return }
-        if (d.version !== base) {
-          const key = 'sw_reloaded_' + d.version
-          if (!sessionStorage.getItem(key)) {
-            sessionStorage.setItem(key, '1')
-            toast.info('New version available — updating…')
-            setTimeout(() => window.location.reload(), 1200)
-          }
+        // STALE-INSTALL FIX (Aug 2026): compare against the LAST version this
+        // device saw (persisted). If the server moved on while the app was
+        // closed, reload IMMEDIATELY on launch — old installed PWAs no longer
+        // stay stuck until a mid-session version flip.
+        if (base === null) {
+          base = d.version
+          let last = null
+          try { last = localStorage.getItem('sw_last_version') } catch {}
+          if (last && last !== d.version) { doReload(d.version); return }
+          try { localStorage.setItem('sw_last_version', d.version) } catch {}
+          return
         }
+        if (d.version !== base) doReload(d.version)
       } catch {}
     }
     check()
