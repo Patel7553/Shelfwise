@@ -464,6 +464,35 @@ function newSupplierCode() {
   return 'SUP-' + s
 }
 
+/** Single-use per-client connection code, e.g. CON-8XK2FQ (migration-22). */
+function newConnectionCode() {
+  const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+  let s = ''
+  for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)]
+  return 'CON-' + s
+}
+
+/** Friendly error when migration-22 hasn't been run yet. */
+function invitesTableMissing(error) {
+  if (/relation .*supplier_invites.* does not exist/i.test(error?.message || '')) {
+    return json({ error: 'Connection-codes table not found — run supabase/migration-22-connection-codes.sql in the Supabase SQL editor first.' }, 500)
+  }
+  return null
+}
+
+function inviteToApi(i) {
+  return {
+    id: i.id,
+    code: i.code,
+    clientCode: i.client_code || '',
+    clientLabel: i.client_label || '',
+    status: i.status || 'active',
+    usedByKitchenId: i.used_by_kitchen_id || null,
+    usedAt: i.used_at || null,
+    createdAt: i.created_at,
+  }
+}
+
 /** Public-safe supplier info shown to kitchens (search results / connections). */
 function supplierPublicInfo(k) {
   const prof = (k.supplier_profile && typeof k.supplier_profile === 'object') ? k.supplier_profile : {}
@@ -2286,10 +2315,17 @@ export async function GET(request, { params }) {
     }
 
     // ----- SUPPLIER endpoints (supplier accounts only, migration-20) -----
-    if (path === 'supplier/profile' || path === 'supplier/products' || path === 'supplier/orders' || path === 'supplier/stats' || path === 'supplier/clients' || path.startsWith('supplier/orders/')) {
+    if (path === 'supplier/profile' || path === 'supplier/products' || path === 'supplier/orders' || path === 'supplier/stats' || path === 'supplier/clients' || path === 'supplier/invites' || path.startsWith('supplier/orders/')) {
       const { ctx, error } = await requireSupplier(request)
       if (error) return error
       const sid = ctx.kitchen.id
+
+      // Active (unused) connection codes this supplier has generated
+      if (path === 'supplier/invites') {
+        const { data, error: e2 } = await sb.from('supplier_invites').select('*').eq('supplier_id', sid).eq('status', 'active').order('created_at', { ascending: false }).limit(200)
+        if (e2) { const miss = invitesTableMissing(e2); if (miss) return miss; throw e2 }
+        return json((data || []).map(inviteToApi))
+      }
 
       if (path === 'supplier/profile') {
         // Ensure this supplier has a shareable connect code (SUP-XXXXXX).
@@ -2332,6 +2368,7 @@ export async function GET(request, { params }) {
           kitchenId: c.kitchen_id,
           kitchenName: byId[c.kitchen_id]?.kitchen_name || '(unknown kitchen)',
           email: byId[c.kitchen_id]?.owner_email || '',
+          clientCode: c.client_code || '',
           connectedAt: c.created_at,
           totalOrders: counts[c.kitchen_id] || 0,
         })))
@@ -2439,6 +2476,7 @@ export async function GET(request, { params }) {
         return json(list.map(c => ({
           connectionId: c.id,
           connectedAt: c.created_at,
+          clientCode: c.client_code || '',
           ...(byId[c.supplier_id] ? supplierPublicInfo(byId[c.supplier_id]) : { supplierId: c.supplier_id, businessName: '(unknown supplier)' }),
         })))
       }
@@ -3650,11 +3688,34 @@ Output strictly valid JSON with no other text.`
     }
 
     // -------- SUPPLIER mutations (supplier accounts only) --------
-    if (path === 'supplier/products' || path === 'supplier/orders') {
+    if (path === 'supplier/products' || path === 'supplier/orders' || path === 'supplier/invites') {
       const { ctx, error } = await requireSupplier(request)
       if (error) return error
       const sid = ctx.kitchen.id
       const body = await request.json()
+
+      // Generate a single-use connection code for a specific client.
+      // The supplier's internal client code (optional) rides along and is
+      // copied onto the connection automatically when the code is redeemed.
+      if (path === 'supplier/invites') {
+        const row = {
+          id: uuidv4(),
+          supplier_id: sid,
+          code: newConnectionCode(),
+          client_code: String(body.clientCode || '').trim().slice(0, 60),
+          client_label: String(body.clientLabel || '').trim().slice(0, 120),
+          status: 'active',
+        }
+        let { data, error: e2 } = await sb.from('supplier_invites').insert(row).select().single()
+        // Astronomically unlikely code collision → retry once with a new code
+        if (e2 && /duplicate key/i.test(e2.message || '')) {
+          const retry = await sb.from('supplier_invites').insert({ ...row, id: uuidv4(), code: newConnectionCode() }).select().single()
+          data = retry.data
+          e2 = retry.error
+        }
+        if (e2) { const miss = invitesTableMissing(e2); if (miss) return miss; throw e2 }
+        return json(inviteToApi(data), 201)
+      }
 
       if (path === 'supplier/products') {
         const name = String(body.name || '').trim().slice(0, 160)
@@ -3720,18 +3781,35 @@ Output strictly valid JSON with no other text.`
 
       // Connect to a supplier — AUTOMATIC (no approval): entering the supplier's
       // code / email / picking them from search is treated as authorization.
+      // Codes can be either:
+      //   CON-XXXXXX — single-use per-client connection code generated by the
+      //                supplier (migration-22); carries their internal client
+      //                code onto the connection automatically.
+      //   SUP-XXXXXX — the supplier's general shareable code (migration-21).
       if (path === 'kitchen/suppliers/connect') {
         let supplier = null
+        let invite = null
+        const SUPPLIER_COLS = 'id,kitchen_name,owner_email,supplier_profile,supplier_code,account_type,status'
         if (body.supplierId) {
-          const { data } = await sb.from('kitchens').select('id,kitchen_name,owner_email,supplier_profile,supplier_code,account_type,status').eq('id', String(body.supplierId)).maybeSingle()
+          const { data } = await sb.from('kitchens').select(SUPPLIER_COLS).eq('id', String(body.supplierId)).maybeSingle()
           supplier = data
         } else if (body.code) {
           const code = String(body.code).trim().toUpperCase()
-          const norm = code.startsWith('SUP-') ? code : 'SUP-' + code
-          const { data } = await sb.from('kitchens').select('id,kitchen_name,owner_email,supplier_profile,supplier_code,account_type,status').eq('supplier_code', norm).maybeSingle()
-          supplier = data
+          // 1) Try a per-client connection code first
+          const candidates = (code.startsWith('CON-') || code.startsWith('SUP-')) ? [code] : ['CON-' + code, 'SUP-' + code, code]
+          const { data: invRows, error: invErr } = await sb.from('supplier_invites').select('*').in('code', candidates).eq('status', 'active').limit(1)
+          if (!invErr && invRows && invRows[0]) invite = invRows[0]
+          if (invite) {
+            const { data } = await sb.from('kitchens').select(SUPPLIER_COLS).eq('id', invite.supplier_id).maybeSingle()
+            supplier = data
+          } else {
+            // 2) Fall back to the supplier's general code
+            const norm = (code.startsWith('SUP-') || code.startsWith('CON-')) ? code : 'SUP-' + code
+            const { data } = await sb.from('kitchens').select(SUPPLIER_COLS).eq('supplier_code', norm).maybeSingle()
+            supplier = data
+          }
         } else if (body.email) {
-          const { data } = await sb.from('kitchens').select('id,kitchen_name,owner_email,supplier_profile,supplier_code,account_type,status').ilike('owner_email', escapeLike(String(body.email).trim().toLowerCase())).eq('account_type', 'supplier').maybeSingle()
+          const { data } = await sb.from('kitchens').select(SUPPLIER_COLS).ilike('owner_email', escapeLike(String(body.email).trim().toLowerCase())).eq('account_type', 'supplier').maybeSingle()
           supplier = data
         } else {
           return json({ error: 'Provide supplierId, code or email' }, 400)
@@ -3740,17 +3818,30 @@ Output strictly valid JSON with no other text.`
         if (supplier.status !== 'approved') return json({ error: 'This supplier account is not active yet' }, 403)
         if (supplier.id === kid) return json({ error: 'You cannot connect to yourself' }, 400)
 
+        const markInviteUsed = async () => {
+          if (!invite) return
+          await sb.from('supplier_invites').update({ status: 'used', used_by_kitchen_id: kid, used_at: new Date().toISOString() }).eq('id', invite.id).eq('status', 'active')
+        }
+
         // Already connected?
         const { data: existing, error: exErr } = await sb.from('supplier_connections').select('*').eq('kitchen_id', kid).eq('supplier_id', supplier.id).maybeSingle()
         if (exErr) { const miss = connsMissing(exErr); if (miss) return miss; throw exErr }
         if (existing) {
-          if (existing.status !== 'active') await sb.from('supplier_connections').update({ status: 'active' }).eq('id', existing.id)
-          return json({ ok: true, alreadyConnected: true, connectionId: existing.id, ...supplierPublicInfo(supplier) })
+          const patch = {}
+          if (existing.status !== 'active') patch.status = 'active'
+          // A fresh per-client code can update/set the client code on an existing link
+          if (invite && invite.client_code) patch.client_code = invite.client_code
+          if (Object.keys(patch).length > 0) await sb.from('supplier_connections').update(patch).eq('id', existing.id)
+          await markInviteUsed()
+          return json({ ok: true, alreadyConnected: true, connectionId: existing.id, clientCode: (invite?.client_code || existing.client_code || ''), ...supplierPublicInfo(supplier) })
         }
-        const { data: conn, error: cErr } = await sb.from('supplier_connections').insert({ id: uuidv4(), supplier_id: supplier.id, kitchen_id: kid, status: 'active' }).select().single()
+        const row = { id: uuidv4(), supplier_id: supplier.id, kitchen_id: kid, status: 'active' }
+        if (invite && invite.client_code) row.client_code = invite.client_code
+        const { data: conn, error: cErr } = await sb.from('supplier_connections').insert(row).select().single()
         if (cErr) { const miss = connsMissing(cErr); if (miss) return miss; throw cErr }
+        await markInviteUsed()
         await logActivity(sb, kid, await validatedPersonFromRequest(sb, request, ctx), 'supplier_connected', supplierPublicInfo(supplier).businessName)
-        return json({ ok: true, connectionId: conn.id, ...supplierPublicInfo(supplier) }, 201)
+        return json({ ok: true, connectionId: conn.id, clientCode: (invite?.client_code || ''), ...supplierPublicInfo(supplier) }, 201)
       }
 
       // Place an order with a CONNECTED supplier. Items are re-priced from the
@@ -3776,7 +3867,7 @@ Output strictly valid JSON with no other text.`
             if (!p || p.available === false) return null
             const qty = Math.max(0, Number(i?.quantity) || 0)
             if (qty <= 0) return null
-            return { productId: p.id, name: p.name, quantity: qty, unit: p.unit || '', price: Number(p.price) || 0 }
+            return { productId: p.id, sku: p.sku || '', name: p.name, quantity: qty, unit: p.unit || '', price: Number(p.price) || 0 }
           })
           .filter(Boolean)
         if (items.length === 0) return json({ error: 'No valid items — the products may no longer be available' }, 400)
@@ -4510,7 +4601,9 @@ export async function PUT(request, { params }) {
       }
 
       // PUT /api/supplier/orders/:id — change status (pending→confirmed→fulfilled / cancelled)
-      // Fulfilling an order assigns the next invoice number (INV-YYYY-0001).
+      // NOTE (Aug 2026): ShelfWise no longer generates invoice numbers — fulfilment
+      // produces a neutral "Order Summary" (record only). Suppliers issue their own
+      // official invoices via their existing accounting software.
       if (segs[1] === 'orders' && segs[2]) {
         const VALID = ['pending', 'confirmed', 'fulfilled', 'cancelled']
         const status = String(body.status || '').toLowerCase()
@@ -4522,14 +4615,24 @@ export async function PUT(request, { params }) {
         if (body.notes !== undefined) patch.notes = String(body.notes).slice(0, 1000)
         if (status === 'fulfilled') {
           patch.fulfilled_at = existing.fulfilled_at || new Date().toISOString()
-          if (!existing.invoice_number) {
-            const { count } = await sb.from('supplier_orders').select('id', { count: 'exact', head: true }).eq('supplier_id', sid).not('invoice_number', 'is', null)
-            patch.invoice_number = `INV-${new Date().getFullYear()}-${String((count || 0) + 1).padStart(4, '0')}`
-          }
         }
         const { data, error: e2 } = await sb.from('supplier_orders').update(patch).eq('id', segs[2]).eq('supplier_id', sid).select().single()
         if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
         return json(supplierOrderToApi(data))
+      }
+
+      // PUT /api/supplier/clients/:connectionId — edit the internal client code
+      if (segs[1] === 'clients' && segs[2]) {
+        const clientCode = String(body.clientCode ?? '').trim().slice(0, 60)
+        const { data, error: e2 } = await sb.from('supplier_connections').update({ client_code: clientCode }).eq('id', segs[2]).eq('supplier_id', sid).select().maybeSingle()
+        if (e2) {
+          if (/column .*client_code.* does not exist|could not find .*client_code/i.test(e2.message || '')) {
+            return json({ error: 'Client-code column not found — run supabase/migration-22-connection-codes.sql first.' }, 500)
+          }
+          throw e2
+        }
+        if (!data) return json({ error: 'Connection not found' }, 404)
+        return json({ ok: true, connectionId: data.id, clientCode: data.client_code || '' })
       }
 
       // PUT /api/supplier/profile — business details for invoices
@@ -4764,13 +4867,18 @@ export async function DELETE(request, { params }) {
     const segs = params?.path || []
     const sb = supabaseAdmin
 
-    // ------- SUPPLIER: remove a catalog product -------
+    // ------- SUPPLIER: remove a catalog product / revoke a connection code -------
     if (segs[0] === 'supplier') {
       const { ctx, error } = await requireSupplier(request)
       if (error) return error
       if (segs[1] === 'products' && segs[2]) {
         const { error: e2 } = await sb.from('supplier_products').delete().eq('id', segs[2]).eq('supplier_id', ctx.kitchen.id)
         if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
+        return json({ ok: true })
+      }
+      if (segs[1] === 'invites' && segs[2]) {
+        const { error: e2 } = await sb.from('supplier_invites').update({ status: 'revoked' }).eq('id', segs[2]).eq('supplier_id', ctx.kitchen.id)
+        if (e2) { const miss = invitesTableMissing(e2); if (miss) return miss; throw e2 }
         return json({ ok: true })
       }
       return json({ error: 'Unknown supplier route' }, 404)

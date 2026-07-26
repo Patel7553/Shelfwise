@@ -19,7 +19,7 @@ import { toast, Toaster } from 'sonner'
 import {
   Truck, Package, FileText, Settings, Plus, Pencil, Trash2, Loader2, Check, X,
   LogOut, Printer, RefreshCw, ClipboardCheck, PoundSterling, Inbox, Ban, Eye,
-  Users, Copy, CalendarDays,
+  Users, Copy, CalendarDays, Download, KeyRound,
 } from 'lucide-react'
 import { apiFetch, apiJson, signOutAll } from '@/lib/apiClient'
 
@@ -33,31 +33,35 @@ const STATUS_STYLE = {
 const money = (n, sym = '£') => `${sym}${(Number(n) || 0).toFixed(2)}`
 
 // ---------------------------------------------------------------------------
-// Printable invoice — opens a print-ready window (record stays in the app).
+// Printable ORDER SUMMARY — a reference/record document, deliberately NOT an
+// invoice. Suppliers issue official invoices from their own accounting system.
 // ---------------------------------------------------------------------------
-function printInvoice(order, profile, businessName, ownerEmail) {
+function printOrderSummary(order, profile, businessName, ownerEmail, clientCode = '') {
   const sym = profile?.currencySymbol || '£'
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const rows = (order.items || []).map((i, idx) => `
     <tr>
-      <td>${idx + 1}</td><td>${esc(i.name)}</td>
+      <td>${idx + 1}</td>
+      <td>${esc(i.sku || '—')}</td>
+      <td>${esc(i.name)}</td>
       <td style="text-align:right">${Number(i.quantity) || 0} ${esc(i.unit || '')}</td>
       <td style="text-align:right">${sym}${(Number(i.price) || 0).toFixed(2)}</td>
       <td style="text-align:right">${sym}${((Number(i.quantity) || 0) * (Number(i.price) || 0)).toFixed(2)}</td>
     </tr>`).join('')
-  const html = `<!doctype html><html><head><title>${esc(order.invoiceNumber || 'Invoice')}</title>
+  const html = `<!doctype html><html><head><title>${esc(order.orderRef || 'Order Summary')}</title>
   <style>
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111;margin:40px;font-size:14px}
-    h1{font-size:26px;margin:0;color:#312e81} .muted{color:#6b7280;font-size:12px}
+    h1{font-size:24px;margin:0;color:#312e81} .muted{color:#6b7280;font-size:12px}
     table{width:100%;border-collapse:collapse;margin-top:24px}
     th{background:#eef2ff;color:#312e81;text-align:left;padding:8px;font-size:12px;text-transform:uppercase;letter-spacing:.05em}
-    th:nth-child(n+3){text-align:right}
+    th:nth-child(n+4){text-align:right}
     td{padding:8px;border-bottom:1px solid #e5e7eb}
     .totals{margin-top:16px;margin-left:auto;width:280px}
     .totals div{display:flex;justify-content:space-between;padding:4px 8px}
     .totals .grand{font-weight:700;font-size:18px;border-top:2px solid #312e81;margin-top:4px;padding-top:8px}
     .head{display:flex;justify-content:space-between;align-items:flex-start}
-    .footer{margin-top:40px;font-size:12px;color:#6b7280;border-top:1px solid #e5e7eb;padding-top:12px}
+    .disclaimer{margin-top:32px;font-size:11px;color:#6b7280;border:1px dashed #cbd5e1;border-radius:8px;padding:10px 12px;background:#f8fafc}
+    .footer{margin-top:16px;font-size:12px;color:#6b7280;border-top:1px solid #e5e7eb;padding-top:12px}
     @media print { body{margin:16px} }
   </style></head><body>
   <div class="head">
@@ -66,35 +70,74 @@ function printInvoice(order, profile, businessName, ownerEmail) {
       ${profile?.address ? `<div class="muted" style="white-space:pre-line">${esc(profile.address)}</div>` : ''}
       ${profile?.phone ? `<div class="muted">Tel: ${esc(profile.phone)}</div>` : ''}
       ${ownerEmail ? `<div class="muted">${esc(ownerEmail)}</div>` : ''}
-      ${profile?.vatNumber ? `<div class="muted">VAT No: ${esc(profile.vatNumber)}</div>` : ''}
     </div>
     <div style="text-align:right">
-      <div style="font-size:22px;font-weight:800;color:#312e81">INVOICE</div>
-      <div><b>${esc(order.invoiceNumber || '(draft)')}</b></div>
-      <div class="muted">Issued: ${order.fulfilledAt ? new Date(order.fulfilledAt).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB')}</div>
+      <div style="font-size:20px;font-weight:800;color:#312e81">ORDER SUMMARY</div>
+      <div><b>${esc(order.orderRef || '')}</b></div>
+      <div class="muted">Fulfilled: ${order.fulfilledAt ? new Date(order.fulfilledAt).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB')}</div>
       <div class="muted">Order date: ${order.createdAt ? new Date(order.createdAt).toLocaleDateString('en-GB') : ''}</div>
+      ${order.requestedDeliveryDate ? `<div class="muted">Requested delivery: ${new Date(order.requestedDeliveryDate + 'T00:00:00').toLocaleDateString('en-GB')}</div>` : ''}
     </div>
   </div>
   <div style="margin-top:28px">
-    <div class="muted" style="text-transform:uppercase;letter-spacing:.05em">Billed to</div>
+    <div class="muted" style="text-transform:uppercase;letter-spacing:.05em">Customer</div>
     <div style="font-weight:700;font-size:16px">${esc(order.customerName)}</div>
+    ${clientCode ? `<div class="muted">Client code: <b>${esc(clientCode)}</b></div>` : ''}
     ${order.customerEmail ? `<div class="muted">${esc(order.customerEmail)}</div>` : ''}
   </div>
-  <table><thead><tr><th>#</th><th>Item</th><th>Qty</th><th>Unit price</th><th>Amount</th></tr></thead>
+  <table><thead><tr><th>#</th><th>Code</th><th>Item</th><th>Qty</th><th>Unit price</th><th>Amount</th></tr></thead>
   <tbody>${rows}</tbody></table>
   <div class="totals">
     <div><span>Subtotal</span><span>${sym}${(order.subtotal || 0).toFixed(2)}</span></div>
     ${order.vatRate ? `<div><span>VAT (${order.vatRate}%)</span><span>${sym}${((order.total || 0) - (order.subtotal || 0)).toFixed(2)}</span></div>` : ''}
-    <div class="grand"><span>Total</span><span>${sym}${(order.total || 0).toFixed(2)}</span></div>
+    <div class="grand"><span>Total (agreed prices)</span><span>${sym}${(order.total || 0).toFixed(2)}</span></div>
   </div>
-  ${profile?.paymentTerms ? `<div class="footer"><b>Payment terms:</b> ${esc(profile.paymentTerms)}</div>` : ''}
-  ${profile?.invoiceFooter ? `<div class="footer">${esc(profile.invoiceFooter)}</div>` : ''}
+  ${order.notes ? `<div class="footer"><b>Order notes:</b> ${esc(order.notes)}</div>` : ''}
+  <div class="disclaimer">This order summary is a record of the order for reference only. It is <b>not a tax invoice</b> — the official invoice is issued separately by ${esc(profile?.businessName || businessName || 'the supplier')} through their own invoicing system.</div>
   <script>window.onload = () => setTimeout(() => window.print(), 300)</script>
   </body></html>`
   const w = window.open('', '_blank')
-  if (!w) { toast.error('Pop-up blocked — allow pop-ups to print invoices'); return }
+  if (!w) { toast.error('Pop-up blocked — allow pop-ups to print the summary'); return }
   w.document.write(html)
   w.document.close()
+}
+
+// CSV export of an order summary — for importing into invoicing software.
+function downloadOrderSummaryCsv(order, clientCode = '') {
+  const escCsv = (v) => {
+    const s = String(v ?? '')
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
+  }
+  const head = ['order_ref', 'order_date', 'fulfilled_date', 'customer', 'client_code', 'product_code', 'product', 'quantity', 'unit', 'unit_price', 'line_total']
+  const meta = [
+    order.orderRef || '',
+    order.createdAt ? new Date(order.createdAt).toISOString().slice(0, 10) : '',
+    order.fulfilledAt ? new Date(order.fulfilledAt).toISOString().slice(0, 10) : '',
+    order.customerName || '',
+    clientCode || '',
+  ]
+  const lines = [head.join(',')]
+  for (const i of (order.items || [])) {
+    lines.push([
+      ...meta,
+      i.sku || '', i.name || '', Number(i.quantity) || 0, i.unit || '',
+      (Number(i.price) || 0).toFixed(2),
+      ((Number(i.quantity) || 0) * (Number(i.price) || 0)).toFixed(2),
+    ].map(escCsv).join(','))
+  }
+  lines.push([...meta, '', 'SUBTOTAL', '', '', '', (order.subtotal || 0).toFixed(2)].map(escCsv).join(','))
+  if (order.vatRate) lines.push([...meta, '', `VAT ${order.vatRate}%`, '', '', '', ((order.total || 0) - (order.subtotal || 0)).toFixed(2)].map(escCsv).join(','))
+  lines.push([...meta, '', 'TOTAL', '', '', '', (order.total || 0).toFixed(2)].map(escCsv).join(','))
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${order.orderRef || 'order'}-summary.csv`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  toast.success('CSV downloaded')
 }
 
 // ---------------------------------------------------------------------------
@@ -296,7 +339,7 @@ function NewOrderDialog({ open, onClose, products, defaultVatRate, currencySymbo
 // ---------------------------------------------------------------------------
 // Order detail dialog
 // ---------------------------------------------------------------------------
-function OrderDetailDialog({ order, onClose, currencySymbol, onStatusChange, busyId, profile, businessName, ownerEmail }) {
+function OrderDetailDialog({ order, onClose, currencySymbol, onStatusChange, busyId, profile, businessName, ownerEmail, clientCode }) {
   if (!order) return null
   const st = STATUS_STYLE[order.status] || STATUS_STYLE.pending
   return (
@@ -350,9 +393,14 @@ function OrderDetailDialog({ order, onClose, currencySymbol, onStatusChange, bus
             </Button>
           )}
           {order.status === 'fulfilled' && (
-            <Button size="sm" variant="outline" onClick={() => printInvoice(order, profile, businessName, ownerEmail)}>
-              <Printer className="h-3.5 w-3.5 mr-1" /> Print invoice
-            </Button>
+            <>
+              <Button size="sm" variant="outline" onClick={() => downloadOrderSummaryCsv(order, clientCode)}>
+                <Download className="h-3.5 w-3.5 mr-1" /> CSV
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => printOrderSummary(order, profile, businessName, ownerEmail, clientCode)}>
+                <Printer className="h-3.5 w-3.5 mr-1" /> Print summary
+              </Button>
+            </>
           )}
         </DialogFooter>
       </DialogContent>
@@ -374,6 +422,7 @@ export default function SupplierDashboard({ me }) {
   const [businessName, setBusinessName] = useState(me?.kitchen?.kitchenName || '')
   const [supplierCode, setSupplierCode] = useState('')
   const [clients, setClients] = useState([])
+  const [invites, setInvites] = useState([])
   const ownerEmail = me?.userEmail || me?.kitchen?.ownerEmail || ''
   const sym = profile?.currencySymbol || '£'
 
@@ -386,12 +435,13 @@ export default function SupplierDashboard({ me }) {
 
   const loadAll = useCallback(async () => {
     try {
-      const [o, p, s, prof, cli] = await Promise.all([
+      const [o, p, s, prof, cli, inv] = await Promise.all([
         apiJson('/api/supplier/orders').catch(e => { throw e }),
         apiJson('/api/supplier/products').catch(() => []),
         apiJson('/api/supplier/stats').catch(() => null),
         apiJson('/api/supplier/profile').catch(() => null),
         apiJson('/api/supplier/clients').catch(() => []),
+        apiJson('/api/supplier/invites').catch(() => []),
       ])
       setOrders(Array.isArray(o) ? o : [])
       setProducts(Array.isArray(p) ? p : [])
@@ -402,6 +452,7 @@ export default function SupplierDashboard({ me }) {
         setSupplierCode(prof.supplierCode || '')
       }
       setClients(Array.isArray(cli) ? cli : [])
+      setInvites(Array.isArray(inv) ? inv : [])
       setMigrationNeeded(false)
     } catch (e) {
       if (/migration-20/i.test(e.message || '')) setMigrationNeeded(true)
@@ -422,10 +473,43 @@ export default function SupplierDashboard({ me }) {
     setStatusBusy(order.id)
     try {
       const updated = await apiJson(`/api/supplier/orders/${order.id}`, { method: 'PUT', body: JSON.stringify({ status }) })
-      toast.success(status === 'fulfilled' ? `Order fulfilled — invoice ${updated.invoiceNumber} created` : `Order ${status}`)
+      toast.success(status === 'fulfilled' ? `Order ${updated.orderRef} fulfilled — order summary ready` : `Order ${status}`)
       setViewOrder(v => (v && v.id === order.id) ? updated : v)
       loadAll()
     } catch (e) { toast.error(e.message || 'Update failed') } finally { setStatusBusy(null) }
+  }
+
+  // Supplier's internal client code for an order (via the connection record)
+  const clientCodeFor = (o) => (o?.kitchenId && clients.find(c => c.kitchenId === o.kitchenId)?.clientCode) || ''
+
+  // ---- Connection codes (per-client invites) ----
+  const [inviteForm, setInviteForm] = useState({ clientLabel: '', clientCode: '' })
+  const [inviteBusy, setInviteBusy] = useState(false)
+  const generateInvite = async () => {
+    setInviteBusy(true)
+    try {
+      const inv = await apiJson('/api/supplier/invites', { method: 'POST', body: JSON.stringify(inviteForm) })
+      toast.success(`Connection code ${inv.code} created — share it with your client`)
+      setInviteForm({ clientLabel: '', clientCode: '' })
+      loadAll()
+    } catch (e) { toast.error(e.message || 'Could not create code') } finally { setInviteBusy(false) }
+  }
+  const revokeInvite = async (inv) => {
+    if (!confirm(`Revoke code ${inv.code}? It will no longer work.`)) return
+    try {
+      await apiJson(`/api/supplier/invites/${inv.id}`, { method: 'DELETE' })
+      toast.success('Code revoked')
+      loadAll()
+    } catch (e) { toast.error(e.message || 'Failed') }
+  }
+  const editClientCode = async (c) => {
+    const next = prompt(`Internal client code for ${c.kitchenName}:`, c.clientCode || '')
+    if (next === null) return
+    try {
+      await apiJson(`/api/supplier/clients/${c.connectionId}`, { method: 'PUT', body: JSON.stringify({ clientCode: next }) })
+      toast.success('Client code saved')
+      loadAll()
+    } catch (e) { toast.error(e.message || 'Failed') }
   }
 
   const deleteProduct = async (p) => {
@@ -469,12 +553,12 @@ export default function SupplierDashboard({ me }) {
     } catch (e) { toast.error(e.message || 'Save failed') } finally { setPBusy(false) }
   }
 
-  const invoices = orders.filter(o => o.invoiceNumber)
+  const summaries = orders.filter(o => o.status === 'fulfilled')
 
   const TABS = [
     { id: 'orders', label: 'Orders', icon: Inbox },
     { id: 'catalog', label: 'Catalog', icon: Package },
-    { id: 'invoices', label: 'Invoices', icon: FileText },
+    { id: 'invoices', label: 'Summaries', icon: FileText },
     { id: 'clients', label: 'Clients', icon: Users },
     { id: 'profile', label: 'Profile', icon: Settings },
   ]
@@ -644,34 +728,46 @@ export default function SupplierDashboard({ me }) {
               </Card>
             )}
 
-            {/* ---------------- INVOICES ---------------- */}
+            {/* ---------------- ORDER SUMMARIES (not invoices) ---------------- */}
             {tab === 'invoices' && (
               <Card className="border-0 shadow-sm">
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-lg">Invoices</CardTitle>
-                  <CardDescription>Created automatically when an order is fulfilled — view in-app or print / save as PDF</CardDescription>
+                  <CardTitle className="text-lg">Order summaries</CardTitle>
+                  <CardDescription>
+                    A clean record of each fulfilled order — view, print/PDF or export CSV for your own invoicing software.
+                    ShelfWise does not issue invoices; you invoice through your usual system.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {invoices.length === 0 ? (
+                  {summaries.length === 0 ? (
                     <div className="text-center py-14 text-muted-foreground">
                       <FileText className="h-12 w-12 mx-auto mb-3 opacity-30" />
-                      <p className="font-medium">No invoices yet</p>
-                      <p className="text-sm">Mark an order as fulfilled to generate its invoice.</p>
+                      <p className="font-medium">No order summaries yet</p>
+                      <p className="text-sm">Mark an order as fulfilled to generate its summary.</p>
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      {invoices.map(o => (
-                        <div key={o.id} className="flex items-center gap-3 border rounded-lg px-3 py-2.5">
+                      {summaries.map(o => (
+                        <div key={o.id} className="flex items-center gap-3 border rounded-lg px-3 py-2.5 flex-wrap">
                           <FileText className="h-4 w-4 text-indigo-500 shrink-0" />
                           <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-sm">{o.invoiceNumber}</p>
-                            <p className="text-xs text-muted-foreground truncate">{o.customerName} · {o.fulfilledAt ? new Date(o.fulfilledAt).toLocaleDateString('en-GB') : ''}</p>
+                            <p className="font-semibold text-sm">{o.orderRef}</p>
+                            <p className="text-xs text-muted-foreground truncate">
+                              {o.customerName}
+                              {clientCodeFor(o) ? ` · Client: ${clientCodeFor(o)}` : ''}
+                              {' · '}{o.fulfilledAt ? new Date(o.fulfilledAt).toLocaleDateString('en-GB') : ''}
+                            </p>
                           </div>
                           <span className="font-bold text-sm text-indigo-700 whitespace-nowrap">{money(o.total, sym)}</span>
-                          <Button size="sm" variant="ghost" className="h-8" onClick={() => setViewOrder(o)} title="View"><Eye className="h-4 w-4" /></Button>
-                          <Button size="sm" variant="outline" className="h-8" onClick={() => printInvoice(o, profile, businessName, ownerEmail)}>
-                            <Printer className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Print / PDF</span>
-                          </Button>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <Button size="sm" variant="ghost" className="h-8" onClick={() => setViewOrder(o)} title="View"><Eye className="h-4 w-4" /></Button>
+                            <Button size="sm" variant="outline" className="h-8" onClick={() => downloadOrderSummaryCsv(o, clientCodeFor(o))} title="Export CSV">
+                              <Download className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">CSV</span>
+                            </Button>
+                            <Button size="sm" variant="outline" className="h-8" onClick={() => printOrderSummary(o, profile, businessName, ownerEmail, clientCodeFor(o))}>
+                              <Printer className="h-3.5 w-3.5 sm:mr-1" /><span className="hidden sm:inline">Print / PDF</span>
+                            </Button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -691,17 +787,42 @@ export default function SupplierDashboard({ me }) {
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {supplierCode && (
-                    <div className="mb-4 flex items-center gap-2 rounded-xl border-2 border-indigo-200 bg-indigo-50/50 px-4 py-3">
-                      <div className="flex-1">
-                        <p className="text-[10px] uppercase tracking-wider font-bold text-indigo-500">Your supplier code</p>
-                        <p className="text-xl font-mono font-bold text-indigo-800">{supplierCode}</p>
-                      </div>
-                      <Button size="sm" variant="outline" className="bg-white" onClick={() => { navigator.clipboard?.writeText(supplierCode).then(() => toast.success('Code copied')) }}>
-                        <Copy className="h-3.5 w-3.5 mr-1.5" /> Copy
+                  {/* Per-client connection code generator (migration-22) */}
+                  <div className="mb-4 rounded-xl border-2 border-indigo-200 bg-indigo-50/50 p-4 space-y-3">
+                    <p className="font-semibold text-sm flex items-center gap-1.5 text-indigo-900"><KeyRound className="h-4 w-4" /> Generate a connection code for a client</p>
+                    <p className="text-xs text-muted-foreground">
+                      Create a single-use code and share it with the restaurant (verbally, email…). When they enter it in
+                      ShelfWise they connect to you AND your internal client code is attached automatically.
+                    </p>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <Input value={inviteForm.clientLabel} onChange={e => setInviteForm(f => ({ ...f, clientLabel: e.target.value }))} placeholder="Client name (for your reference)" className="bg-white" />
+                      <Input value={inviteForm.clientCode} onChange={e => setInviteForm(f => ({ ...f, clientCode: e.target.value }))} placeholder="Your internal client code (optional)" className="bg-white" />
+                      <Button onClick={generateInvite} disabled={inviteBusy} className="bg-indigo-600 hover:bg-indigo-700 text-white shrink-0">
+                        {inviteBusy ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Plus className="h-4 w-4 mr-1.5" />} Generate code
                       </Button>
                     </div>
-                  )}
+                    {invites.length > 0 && (
+                      <div className="space-y-1.5">
+                        <p className="text-[10px] uppercase tracking-wider font-bold text-indigo-500">Active codes (not yet used)</p>
+                        {invites.map(inv => (
+                          <div key={inv.id} className="flex items-center gap-2 bg-white border rounded-lg px-3 py-2">
+                            <span className="font-mono font-bold text-indigo-800 text-sm">{inv.code}</span>
+                            <span className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
+                              {inv.clientLabel || 'Any client'}{inv.clientCode ? ` · client code: ${inv.clientCode}` : ''}
+                            </span>
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Copy code" onClick={() => { navigator.clipboard?.writeText(inv.code).then(() => toast.success('Code copied')) }}><Copy className="h-3.5 w-3.5" /></Button>
+                            <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-500 hover:bg-red-50" title="Revoke" onClick={() => revokeInvite(inv)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {supplierCode && (
+                      <p className="text-[11px] text-muted-foreground">
+                        Your general code <b className="font-mono text-indigo-700">{supplierCode}</b> also works (connects without a client code).
+                        <button className="ml-1 underline" onClick={() => { navigator.clipboard?.writeText(supplierCode).then(() => toast.success('Code copied')) }}>copy</button>
+                      </p>
+                    )}
+                  </div>
                   {clients.length === 0 ? (
                     <div className="text-center py-14 text-muted-foreground">
                       <Users className="h-12 w-12 mx-auto mb-3 opacity-30" />
@@ -711,7 +832,7 @@ export default function SupplierDashboard({ me }) {
                   ) : (
                     <div className="space-y-2">
                       {clients.map(c => (
-                        <div key={c.connectionId} className="flex items-center gap-3 border rounded-lg px-3 py-2.5">
+                        <div key={c.connectionId} className="flex items-center gap-3 border rounded-lg px-3 py-2.5 flex-wrap">
                           <div className="h-9 w-9 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 font-bold text-sm">
                             {(c.kitchenName || '?').slice(0, 1).toUpperCase()}
                           </div>
@@ -719,6 +840,10 @@ export default function SupplierDashboard({ me }) {
                             <p className="font-semibold text-sm truncate">{c.kitchenName}</p>
                             <p className="text-xs text-muted-foreground truncate">{c.email}</p>
                           </div>
+                          <button onClick={() => editClientCode(c)} title="Edit internal client code"
+                            className={`text-xs font-mono font-semibold rounded-md px-2 py-1 border transition shrink-0 ${c.clientCode ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-400' : 'bg-slate-50 text-slate-400 border-dashed border-slate-300 hover:border-indigo-400'}`}>
+                            {c.clientCode || '+ client code'}
+                          </button>
                           <div className="text-right shrink-0">
                             <p className="text-sm font-bold text-indigo-700">{c.totalOrders} order{c.totalOrders !== 1 ? 's' : ''}</p>
                             <p className="text-[11px] text-muted-foreground">since {c.connectedAt ? new Date(c.connectedAt).toLocaleDateString('en-GB') : ''}</p>
@@ -736,7 +861,7 @@ export default function SupplierDashboard({ me }) {
               <Card className="border-0 shadow-sm max-w-2xl">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-lg">Business profile</CardTitle>
-                  <CardDescription>Shown on your invoices</CardDescription>
+                  <CardDescription>Shown on your order summaries</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <div className="grid grid-cols-2 gap-3">
@@ -781,7 +906,7 @@ export default function SupplierDashboard({ me }) {
                       <Input type="number" min="0" step="0.01" value={pForm.minOrderValue} onChange={e => setPForm({ ...pForm, minOrderValue: e.target.value })} placeholder="0 = no minimum" />
                     </div>
                     <div className="col-span-2">
-                      <Label className="text-xs">Invoice footer note</Label>
+                      <Label className="text-xs">Summary footer note</Label>
                       <Input value={pForm.invoiceFooter} onChange={e => setPForm({ ...pForm, invoiceFooter: e.target.value })} placeholder="e.g. Thank you for your business!" />
                     </div>
                   </div>
@@ -800,7 +925,7 @@ export default function SupplierDashboard({ me }) {
       {/* Dialogs */}
       <ProductDialog open={productDialog.open} product={productDialog.product} onClose={() => setProductDialog({ open: false, product: null })} onSaved={loadAll} />
       <NewOrderDialog open={orderDialog} onClose={() => setOrderDialog(false)} products={products} defaultVatRate={Number(profile?.defaultVatRate) || 0} currencySymbol={sym} onSaved={loadAll} />
-      <OrderDetailDialog order={viewOrder} onClose={() => setViewOrder(null)} currencySymbol={sym} onStatusChange={changeStatus} busyId={statusBusy} profile={profile} businessName={businessName} ownerEmail={ownerEmail} />
+      <OrderDetailDialog order={viewOrder} onClose={() => setViewOrder(null)} currencySymbol={sym} onStatusChange={changeStatus} busyId={statusBusy} profile={profile} businessName={businessName} ownerEmail={ownerEmail} clientCode={clientCodeFor(viewOrder)} />
     </div>
   )
 }

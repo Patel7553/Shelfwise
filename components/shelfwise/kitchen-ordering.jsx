@@ -67,17 +67,20 @@ function ConnectSupplierPanel({ onConnected }) {
     } finally { setConnecting(null) }
   }
 
-  // Direct connect when the input looks like a code or email
-  const looksLikeCode = /^(sup-)?[a-z0-9]{6}$/i.test(q.trim())
+  // Direct connect when the input looks like a connection/supplier code or email
+  const looksLikeCode = /^((sup|con)-)?[a-z0-9]{6}$/i.test(q.trim())
   const looksLikeEmail = q.includes('@') && q.includes('.')
 
   return (
     <div className="rounded-xl border-2 border-dashed border-indigo-200 bg-indigo-50/40 p-4">
       <p className="font-semibold text-sm flex items-center gap-1.5 text-indigo-900"><Link2 className="h-4 w-4" /> Connect a supplier</p>
-      <p className="text-xs text-muted-foreground mt-0.5">Search by business name, or enter the supplier's code (e.g. SUP-7K2F9Q) or email. Connection is instant.</p>
+      <p className="text-xs text-muted-foreground mt-0.5">
+        Enter the connection code your supplier gave you (e.g. CON-8XK2FQ) — it links you AND sets up your account
+        reference automatically. You can also use their general code, email, or search by business name.
+      </p>
       <div className="flex gap-2 mt-2.5">
         <Input value={q} onChange={e => setQ(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') search() }}
-          placeholder='e.g. "Fresh Farm Foods", SUP-7K2F9Q or orders@freshfarm.com' className="bg-white" />
+          placeholder='e.g. CON-8XK2FQ, "Fresh Farm Foods" or orders@freshfarm.com' className="bg-white" />
         {(looksLikeCode || looksLikeEmail) ? (
           <Button onClick={() => connect(looksLikeEmail ? { email: q.trim() } : { code: q.trim() }, 'direct')} disabled={!!connecting} className="bg-indigo-600 hover:bg-indigo-700 text-white shrink-0">
             {connecting === 'direct' ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Link2 className="h-4 w-4 mr-1.5" />} Connect
@@ -480,6 +483,7 @@ export function MarketplaceView() {
                       <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground mt-2">
                         {s.deliveryDays && <span className="inline-flex items-center gap-1"><CalendarDays className="h-3 w-3" /> {s.deliveryDays}</span>}
                         {s.minOrderValue > 0 && <span>Min order {money(s.minOrderValue, s.currencySymbol)}</span>}
+                        {s.clientCode && <span className="font-mono">Account ref: {s.clientCode}</span>}
                       </div>
                       <Button onClick={() => setWizard({ supplier: s, initialCart: {} })} className="w-full mt-3 bg-indigo-600 hover:bg-indigo-700 text-white">
                         <ShoppingCart className="h-4 w-4 mr-1.5" /> Place order
