@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe, Star, Shuffle } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
@@ -308,9 +308,38 @@ export function RecipesView({ recipes, search, setSearch, openRecipe, onView, on
   // Web recipe search state
   const [webQuery, setWebQuery] = useState('')
   const [webServings, setWebServings] = useState(1)
+  const [webDietary, setWebDietary] = useState([])
   const [webLoading, setWebLoading] = useState(false)
   const [webResults, setWebResults] = useState([])
   const [webSearched, setWebSearched] = useState(false)
+  // Saved-tab favourites
+  const [favOnly, setFavOnly] = useState(false)
+  const [favBusy, setFavBusy] = useState(null)
+
+  const DIETARY_OPTIONS = ['Vegetarian', 'Vegan', 'Gluten-free', 'Dairy-free', 'Nut-free', 'Halal', 'Low-calorie']
+  const toggleDietary = (d) => setWebDietary(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d])
+
+  const isFav = (r) => !!(r?.summary && typeof r.summary === 'object' && r.summary.favorite)
+  const toggleFavorite = async (e, r) => {
+    e.stopPropagation()
+    e.preventDefault()
+    if (favBusy) return
+    setFavBusy(r.id)
+    try {
+      const res = await apiFetch(`/api/recipes/${r.id}/favorite`, { method: 'POST', body: '{}' })
+      const data = await safeJson(res)
+      if (!res.ok) throw new Error(data.error || 'Failed')
+      toast.success(data.favorite ? 'Added to favourites' : 'Removed from favourites')
+      onSaved && onSaved()
+    } catch (err) {
+      toast.error(err.message || 'Could not update favourite')
+    } finally { setFavBusy(null) }
+  }
+
+  // Favourites first, then newest
+  const sortedRecipes = [...recipes].sort((a, b) => (isFav(b) - isFav(a)) || (new Date(b.created_at || 0) - new Date(a.created_at || 0)))
+  const visibleRecipes = favOnly ? sortedRecipes.filter(isFav) : sortedRecipes
+  const favCount = recipes.filter(isFav).length
 
   const runWebSearch = async () => {
     const q = webQuery.trim()
@@ -321,7 +350,7 @@ export function RecipesView({ recipes, search, setSearch, openRecipe, onView, on
       const res = await fetch('/api/recipe/web-search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q, servings: webServings })
+        body: JSON.stringify({ query: q, servings: webServings, dietary: webDietary })
       })
       const data = await safeJson(res)
       if (!res.ok) throw new Error(data.error || 'Search failed — try again')
@@ -365,7 +394,7 @@ export function RecipesView({ recipes, search, setSearch, openRecipe, onView, on
             </div>
             <div>
               <p className="font-semibold">Search Web Recipes</p>
-              <p className="text-xs text-muted-foreground">Type a dish → get the 3 best recipes with allergens + scaling</p>
+              <p className="text-xs text-muted-foreground">Type a dish → get 6 top recipes with dietary filters, allergens + scaling</p>
             </div>
           </div>
         </button>
@@ -390,7 +419,7 @@ export function RecipesView({ recipes, search, setSearch, openRecipe, onView, on
             </div>
             <div>
               <p className="font-semibold">Recipe Generator from Stock</p>
-              <p className="text-xs text-muted-foreground">Your expiring stock loads automatically → AI creates 3 recipes with allergens + timing</p>
+              <p className="text-xs text-muted-foreground">Your expiring stock loads automatically → AI creates 4 recipes with allergens + timing</p>
             </div>
           </div>
         </button>
@@ -424,6 +453,20 @@ export function RecipesView({ recipes, search, setSearch, openRecipe, onView, on
               </div>
             </div>
 
+            {/* Dietary filters */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mr-1">Dietary</span>
+              {DIETARY_OPTIONS.map(d => (
+                <button key={d} onClick={() => toggleDietary(d)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium border-2 transition ${webDietary.includes(d) ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-600 border-slate-200 hover:border-emerald-400'}`}>
+                  {webDietary.includes(d) ? '✓ ' : ''}{d}
+                </button>
+              ))}
+              {webDietary.length > 0 && (
+                <button onClick={() => setWebDietary([])} className="text-xs text-muted-foreground underline">clear</button>
+              )}
+            </div>
+
             {/* Loading state */}
             {webLoading && (
               <div className="text-center py-14">
@@ -438,7 +481,7 @@ export function RecipesView({ recipes, search, setSearch, openRecipe, onView, on
               <div className="text-center py-14 text-muted-foreground">
                 <Globe className="h-12 w-12 mx-auto mb-3 opacity-30" />
                 <p className="font-medium">{webSearched ? 'No results — try another dish name' : 'Search any dish'}</p>
-                <p className="text-sm mt-1">We'll find the 3 best versions from trusted cooking sites — with allergen warnings and 1x-5x scaling.</p>
+                <p className="text-sm mt-1">We'll find 6 top versions from trusted cooking sites — with allergen warnings, dietary filters and 1x-5x scaling.</p>
                 <div className="flex flex-wrap justify-center gap-2 mt-4">
                   {['Chicken Tikka Masala', 'Spaghetti Carbonara', 'Beef Wellington', 'Pad Thai'].map(s => (
                     <button key={s} onClick={() => { setWebQuery(s) }} className="px-3 py-1.5 rounded-full border border-sky-200 bg-sky-50 text-sky-700 text-xs font-medium hover:bg-sky-100 transition">
@@ -464,23 +507,41 @@ export function RecipesView({ recipes, search, setSearch, openRecipe, onView, on
       {tab === 'saved' && (
         <Card className="border-0 shadow-sm">
           <CardContent className="pt-6">
-            <div className="relative max-w-md mb-4">
-              <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input className="pl-9" placeholder="Search saved recipes..." value={search} onChange={e => setSearch(e.target.value)} />
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-4">
+              <div className="relative max-w-md flex-1">
+                <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input className="pl-9" placeholder="Search saved recipes..." value={search} onChange={e => setSearch(e.target.value)} />
+              </div>
+              <button onClick={() => setFavOnly(v => !v)}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border-2 transition shrink-0 ${favOnly ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-slate-600 border-slate-200 hover:border-amber-400'}`}>
+                <Star className={`h-4 w-4 ${favOnly ? 'fill-white' : ''}`} />
+                Favourites{favCount > 0 ? ` (${favCount})` : ''}
+              </button>
             </div>
 
-            {recipes.length === 0 ? (
+            {visibleRecipes.length === 0 ? (
               <div className="text-center py-16 text-muted-foreground">
-                <BookOpen className="h-12 w-12 mx-auto mb-3 opacity-30" />
-                <p className="font-medium">No saved recipes yet</p>
-                <p className="text-sm">Click "Scan or Upload Recipe" above to start your collection.</p>
+                {favOnly ? <Star className="h-12 w-12 mx-auto mb-3 opacity-30" /> : <BookOpen className="h-12 w-12 mx-auto mb-3 opacity-30" />}
+                <p className="font-medium">{favOnly ? 'No favourites yet' : 'No saved recipes yet'}</p>
+                <p className="text-sm">{favOnly ? 'Tap the star on any recipe card to add it to favourites.' : 'Click "Scan or Upload Recipe" above to start your collection.'}</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {recipes.map(r => (
+                {visibleRecipes.map(r => (
                   <button key={r.id} onClick={() => onView(r)} className="text-left">
-                    <Card className="hover:shadow-md hover:-translate-y-0.5 transition cursor-pointer h-full">
-                      <CardHeader className="pb-3">
+                    <Card className="hover:shadow-md hover:-translate-y-0.5 transition cursor-pointer h-full relative">
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={(e) => toggleFavorite(e, r)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') toggleFavorite(e, r) }}
+                        title={isFav(r) ? 'Remove from favourites' : 'Add to favourites'}
+                        className="absolute top-2.5 right-2.5 z-10 h-8 w-8 rounded-full flex items-center justify-center bg-white/90 border border-slate-200 hover:border-amber-400 transition">
+                        {favBusy === r.id
+                          ? <Loader2 className="h-4 w-4 animate-spin text-amber-500" />
+                          : <Star className={`h-4 w-4 ${isFav(r) ? 'fill-amber-400 text-amber-400' : 'text-slate-300'}`} />}
+                      </span>
+                      <CardHeader className="pb-3 pr-10">
                         <CardTitle className="text-base line-clamp-2">{r.title || 'Untitled'}</CardTitle>
                         {r.servings && <CardDescription>{r.servings}</CardDescription>}
                       </CardHeader>
@@ -505,6 +566,65 @@ export function RecipesView({ recipes, search, setSearch, openRecipe, onView, on
             )}
           </CardContent>
         </Card>
+      )}
+    </div>
+  )
+}
+
+// AI ingredient substitutions — used in web-search cards AND saved-recipe view.
+export function SubstitutionsPanel({ title, ingredients, accent = 'sky' }) {
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [subs, setSubs] = useState(null)
+
+  const colors = accent === 'purple'
+    ? { text: 'text-purple-700', hover: 'hover:text-purple-900', border: 'border-purple-200', chip: 'bg-purple-50 text-purple-800 border-purple-200' }
+    : { text: 'text-sky-700', hover: 'hover:text-sky-900', border: 'border-sky-200', chip: 'bg-sky-50 text-sky-800 border-sky-200' }
+
+  const load = async () => {
+    if (subs) { setOpen(o => !o); return }
+    setLoading(true)
+    setOpen(true)
+    try {
+      const res = await apiFetch('/api/recipe/substitutions', {
+        method: 'POST',
+        body: JSON.stringify({ title, ingredients: (ingredients || []).map(i => ({ name: i.name, quantity: i.quantity, unit: i.unit })) })
+      })
+      const data = await safeJson(res)
+      if (!res.ok) throw new Error(data.error || 'Failed to get substitutions')
+      setSubs(Array.isArray(data.substitutions) ? data.substitutions : [])
+    } catch (e) {
+      toast.error(e.message || 'Substitutions failed — try again')
+      setOpen(false)
+    } finally { setLoading(false) }
+  }
+
+  return (
+    <div>
+      <button onClick={load} disabled={loading} className={`text-sm font-bold ${colors.text} ${colors.hover} inline-flex items-center gap-1.5`}>
+        {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Shuffle className="h-3.5 w-3.5" />}
+        {loading ? 'Finding substitutions...' : subs ? (open ? 'Hide substitutions' : 'Show substitutions') : 'Suggest substitutions (AI)'}
+      </button>
+      {open && subs && subs.length === 0 && (
+        <p className="mt-2 text-xs text-muted-foreground italic">No sensible substitutions found for this recipe.</p>
+      )}
+      {open && subs && subs.length > 0 && (
+        <div className={`mt-2 rounded-lg border ${colors.border} divide-y divide-slate-100`}>
+          {subs.map((s, idx) => (
+            <div key={idx} className="p-3">
+              <p className="text-sm font-semibold text-slate-800">{s.ingredient}</p>
+              <div className="mt-1.5 space-y-1">
+                {s.swaps.map((w, j) => (
+                  <div key={j} className="flex flex-wrap items-baseline gap-x-2 text-xs">
+                    <span className={`px-2 py-0.5 rounded-full border font-medium ${colors.chip}`}>{w.name}</span>
+                    {w.ratio && <span className="text-slate-500 font-semibold">{w.ratio}</span>}
+                    {w.note && <span className="text-muted-foreground">{w.note}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   )
@@ -638,6 +758,9 @@ export function WebRecipeCard({ recipe: r, onSaved }) {
             ))}
           </div>
         </div>
+
+        {/* Substitutions (AI) */}
+        <SubstitutionsPanel title={r.title} ingredients={r.ingredients} accent="sky" />
 
         {/* Steps (collapsible) */}
         <div>
@@ -848,6 +971,11 @@ export function ViewRecipeDialog({ recipe, onClose, onDelete, onUpdated }) {
           )}
         </div>
 
+        {/* Substitutions (AI) — view mode only */}
+        {!editMode && Array.isArray(recipe.ingredients) && recipe.ingredients.length > 0 && (
+          <SubstitutionsPanel title={recipe.title || 'Recipe'} ingredients={recipe.ingredients} accent="purple" />
+        )}
+
         {editMode ? (
           <div>
             <p className="font-semibold text-sm mb-2">Cooking Steps</p>
@@ -1043,7 +1171,7 @@ ${r.notes ? `<h2>Chef's Note</h2><p>${escapeText(r.notes)}</p>` : ''}
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">✨ Recipe Generator from Stock</DialogTitle>
           <p className="text-sm text-muted-foreground">
-            Your expiring items are loaded first — add or remove ingredients, then we suggest 3 recipes.
+            Your expiring items are loaded first — add or remove ingredients, then we suggest 4 recipes.
           </p>
         </DialogHeader>
 

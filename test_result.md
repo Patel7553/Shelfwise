@@ -3708,3 +3708,31 @@ All indexed by `(kitchen_id, timestamp desc)`. All FK to `kitchens` with `on del
         **Test file:** /app/test_recipe_web_search_upgraded.py (can be re-run anytime)
         
         No critical issues found. UPGRADED recipe web-search endpoint working perfectly.
+
+    - agent: "main"
+      message: |
+        NEW ROUND (Aug 2026) — Phase 1-3 of 4-part user request implemented. NEEDS BACKEND TESTING.
+        
+        **Phase 1 — CACHE / STALE DATA FIX (P0, recurring bug):**
+        - route.js json() helper now adds 'Cache-Control: no-store, no-cache, must-revalidate, max-age=0',
+          'Pragma: no-cache', 'Expires: 0' headers to EVERY API response.
+        - lib/apiClient.js apiFetch() now passes { cache: 'no-store' } to fetch.
+        - app/page.js live-sync effect adds window 'pageshow' (persisted) listener for iOS bfcache restores.
+        TEST: verify Cache-Control no-store headers present on API responses (e.g. GET /api/auth/me, 401 responses too).
+        
+        **Phase 2 — Label fix:** "Chef name" placeholders/labels changed to "Name" (page.js line ~2355, rota.jsx). Frontend only.
+        
+        **Phase 3 — RECIPE OVERHAUL (backend):**
+        1. POST /api/recipe/generate REWRITTEN: was 1 gpt-4o call returning 3 recipes (~25s);
+           now 4 PARALLEL gpt-4o-mini calls (styles: Waste-Buster, Quick & Easy, Comfort Classic, Creative Twist).
+           Returns up to 4 recipes each with "style" field, numeric ingredient quantities, allergens, steps.
+           TEST with chef JWT: POST {"ingredients":["chicken breast","rice","peppers"],"servings":2} → 200, 3-4 recipes, distinct styles, numeric quantities.
+        2. NEW POST /api/recipe/substitutions: body {"title":"...","ingredients":[{name,quantity,unit}]} →
+           200 {"substitutions":[{ingredient, swaps:[{name,ratio,note}]}]}. Requires auth (401 without). 400 if title/ingredients missing.
+        3. NEW POST /api/recipes/:id/favorite — toggles summary.favorite in recipes table.
+           Locally Supabase missing → expect 500 supabase error (NOT 404) = correctly wired.
+        4. POST /api/recipe/web-search unchanged but now accepts dietary array from frontend (already supported).
+        
+        **Local env notes:** Supabase NOT configured locally. Use chef JWT minting per /app/memory/test_credentials.md.
+        Recipe LLM endpoints (generate/web-search/substitutions) work locally with chef JWT since they only call the LLM.
+        DB-backed endpoints (recipes CRUD/favorite) will 500 with supabase error locally — verify routing (not 404) only.

@@ -657,11 +657,16 @@ function App() {
     if (!authed) return
     const refresh = () => { fetchProducts({ silent: true }); fetchStats() }
     const onVis = () => { if (document.visibilityState === 'visible') refresh() }
+    // CACHE FIX (Aug 2026): iOS Safari restores PWAs from the back/forward
+    // cache WITHOUT firing visibilitychange — pageshow(persisted) catches it.
+    const onPageShow = (e) => { if (e.persisted) refresh() }
     window.addEventListener('focus', refresh)
+    window.addEventListener('pageshow', onPageShow)
     document.addEventListener('visibilitychange', onVis)
     const iv = setInterval(() => { if (document.visibilityState === 'visible') refresh() }, 30000)
     return () => {
       window.removeEventListener('focus', refresh)
+      window.removeEventListener('pageshow', onPageShow)
       document.removeEventListener('visibilitychange', onVis)
       clearInterval(iv)
     }
@@ -2347,7 +2352,7 @@ function App() {
             </div>
             <div className="sm:col-span-2">
               <Label htmlFor="prep">Prepared By</Label>
-              <Input id="prep" value={form.preparedBy} onChange={e => setForm({ ...form, preparedBy: e.target.value })} placeholder="Chef name" />
+              <Input id="prep" value={form.preparedBy} onChange={e => setForm({ ...form, preparedBy: e.target.value })} placeholder="Name" />
             </div>
 
             {/* Cost + Reorder + Supplier — collapsed into a subtle group */}

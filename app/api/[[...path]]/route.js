@@ -14,7 +14,17 @@ export const dynamic = 'force-dynamic'
 const EMERGENT_URL = 'https://integrations.emergentagent.com/llm/v1/chat/completions'
 
 function json(data, status = 200) {
-  return NextResponse.json(data, { status })
+  // CACHE FIX (Aug 2026): iOS Safari PWAs aggressively cache API GET responses
+  // when no Cache-Control header is present, causing stale inventory/stats on
+  // app re-open. Explicitly forbid ALL caching of API responses.
+  return NextResponse.json(data, {
+    status,
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+    },
+  })
 }
 
 function escapeLike(s) {
@@ -1386,10 +1396,91 @@ function normalizeItemName(s) {
     .trim()
 }
 
+// SPEED OVERHAUL (Aug 2026): was ONE gpt-4o call generating 3 recipes (~25s).
+// Now FOUR parallel gpt-4o-mini calls (one recipe style each) — ~7-9s AND one
+// more result. Same parallelisation trick as web-search. Do NOT merge back.
+const GEN_RECIPE_STYLES = [
+  { style: 'Waste-Buster', hint: 'uses the MAXIMUM number of the listed ingredients so nothing goes to waste' },
+  { style: 'Quick & Easy', hint: 'the fastest realistic dish (30 minutes or less) with minimal steps and pans' },
+  { style: 'Comfort Classic', hint: 'a hearty, familiar crowd-pleasing classic built around the main listed ingredients' },
+  { style: 'Creative Twist', hint: 'a creative, interesting dish with a modern flavour twist that still respects the ingredients' },
+]
+
+async function generateOneRecipe({ ingredients, servings, kitchenLine, cuisineLine, dietaryLine, skillLine, style, hint }) {
+  const key = process.env.EMERGENT_LLM_KEY
+  if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+  const systemPrompt = `You are a professional chef. Generate ONE practical recipe using the ingredients provided: ${hint}.
+
+Ingredients on hand: ${ingredients.join(', ')}
+Servings target: ${servings}
+${kitchenLine}${cuisineLine}${dietaryLine}${skillLine}
+Rules:
+- Recipe must be REALISTIC and cookable — no obscure techniques or rare equipment.
+- Common pantry staples (salt, pepper, oil, water, basic spices) can be assumed available.
+- Any ingredient NOT in the provided list should be marked with "pantry": true in the JSON.
+- Every ingredient quantity MUST be a plain NUMBER (decimals allowed) so the app can scale it. Never write "1-2" or "a pinch" — use a number and put nuance in the name.
+- Detect allergens using UK/EU Natasha's Law 14 list: gluten, crustaceans, eggs, fish, peanuts, soy, dairy, nuts, celery, mustard, sesame, sulphites, lupin, molluscs.
+- Skill levels: "easy" (<=30 min, few steps), "medium" (30-60 min), "hard" (60+ min or advanced techniques).
+- 4-10 numbered cooking steps, each 12-30 words, mention temperatures, times, and pans/tools.
+
+Return ONLY a JSON object of this shape (no prose, no markdown):
+{
+  "title": "Recipe name",
+  "description": "1-sentence enticing description",
+  "style": "${style}",
+  "servings": ${servings},
+  "prepMinutes": number,
+  "cookMinutes": number,
+  "difficulty": "easy" | "medium" | "hard",
+  "cuisine": "cuisine type",
+  "allergens": ["gluten","dairy"],
+  "ingredients": [
+    { "name": "Chicken breast", "quantity": 400, "unit": "g", "pantry": false, "usesInStock": true },
+    { "name": "Salt", "quantity": 1, "unit": "tsp", "pantry": true, "usesInStock": false }
+  ],
+  "steps": ["1. Preheat oven to 200°C...", "2. Dice the chicken..."],
+  "notes": "Optional serving suggestion or substitution tip"
+}
+
+Output STRICT JSON. No trailing commas.`
+  const body = {
+    model: 'gpt-4o-mini',
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: `Generate a "${style}" recipe using these ingredients: ${ingredients.join(', ')}. Return JSON.` }
+    ],
+    temperature: 0.6,
+    response_format: { type: 'json_object' },
+  }
+  const res = await fetch(EMERGENT_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`Emergent LLM ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  const content = data?.choices?.[0]?.message?.content || '{}'
+  let r
+  try { r = JSON.parse(content) } catch { const m = content.match(/\{[\s\S]*\}/); r = m ? JSON.parse(m[0]) : null }
+  if (!r || !r.title) return null
+  r.ingredients = Array.isArray(r.ingredients) ? r.ingredients.map(i => ({
+    name: String(i?.name || '').slice(0, 120),
+    quantity: Number(i?.quantity) || 0,
+    unit: String(i?.unit || '').slice(0, 20),
+    pantry: !!i?.pantry,
+    usesInStock: !!i?.usesInStock,
+  })) : []
+  r.allergens = Array.isArray(r.allergens) ? r.allergens.map(a => String(a).toLowerCase()) : []
+  r.steps = Array.isArray(r.steps) ? r.steps.map(s => String(s)) : []
+  r.servings = Number(r.servings) || servings
+  r.style = r.style || style
+  return r
+}
+
 async function generateRecipesFromIngredients({ ingredients, servings = 4, cuisine = '', dietary = [], skillLevel = 'easy', kitchenType = '' }) {
   const key = process.env.EMERGENT_LLM_KEY
   if (!key) throw new Error('EMERGENT_LLM_KEY not set')
-  const dietaryLine = Array.isArray(dietary) && dietary.length ? `Dietary requirements: ${dietary.join(', ')}.\n` : ''
+  const dietaryLine = Array.isArray(dietary) && dietary.length ? `Dietary requirements (MUST follow strictly): ${dietary.join(', ')}.\n` : ''
   const cuisineLine = cuisine ? `Preferred cuisine: ${cuisine}.\n` : ''
   const skillLine = `Difficulty level: ${skillLevel}.\n`
   // Tailor recipes to the type of kitchen (hospital vs restaurant vs cafe...)
@@ -1403,51 +1494,61 @@ async function generateRecipesFromIngredients({ ingredients, servings = 4, cuisi
     kitchenLine = `KITCHEN CONTEXT: This is a professional ${kitchenType} kitchen. Recipes should be menu-worthy dishes that suit the venue's style${cuisine ? ` and its ${cuisine} theme` : ''} — presentable, portionable and service-friendly.\n`
   }
 
-  const systemPrompt = `You are a professional chef. Generate 3 different practical recipes using the ingredients provided.
+  // Fire all 4 styles in PARALLEL — each is a small fast gpt-4o-mini call.
+  const settled = await Promise.allSettled(
+    GEN_RECIPE_STYLES.map(s => generateOneRecipe({
+      ingredients, servings, kitchenLine, cuisineLine, dietaryLine, skillLine,
+      style: s.style, hint: s.hint,
+    }))
+  )
+  const recipes = settled
+    .filter(x => x.status === 'fulfilled' && x.value)
+    .map(x => x.value)
+  if (recipes.length === 0) {
+    const firstErr = settled.find(x => x.status === 'rejected')
+    throw new Error(firstErr?.reason?.message || 'Recipe generation failed — try again')
+  }
+  return { recipes: recipes.slice(0, 6) }
+}
 
-Ingredients on hand: ${ingredients.join(', ')}
-Servings target: ${servings}
-${kitchenLine}${cuisineLine}${dietaryLine}${skillLine}
+// ---- Ingredient Substitutions: suggest swaps for a recipe's ingredients ----
+async function suggestSubstitutions({ title, ingredients, reason = '' }) {
+  const key = process.env.EMERGENT_LLM_KEY
+  if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+  const list = ingredients.map(i => `${i.quantity || ''} ${i.unit || ''} ${i.name}`.trim()).join('; ')
+  const reasonLine = reason ? `The user's specific need: ${reason}.\n` : ''
+  const systemPrompt = `You are a professional chef advising a commercial kitchen on ingredient substitutions.
+
+The recipe is: "${title}"
+Its ingredients: ${list}
+${reasonLine}
+For the 4-8 MOST substitutable / most commonly-missing ingredients, suggest practical swaps a professional kitchen would actually use. Skip water, salt, pepper and trivially available staples.
+
 Rules:
-- Prioritise recipes that use the MOST of the listed ingredients (to reduce waste).
-- Recipes must be REALISTIC and cookable — no obscure techniques or rare equipment.
-- Common pantry staples (salt, pepper, oil, water, basic spices) can be assumed available.
-- Any ingredient NOT in the provided list should be marked with "pantry": true in the JSON.
-- Detect allergens using UK/EU Natasha's Law 14 list: gluten, crustaceans, eggs, fish, peanuts, soy, dairy, nuts, celery, mustard, sesame, sulphites, lupin, molluscs.
-- Skill levels: "easy" (<=30 min, few steps), "medium" (30-60 min), "hard" (60+ min or advanced techniques).
-- 4-10 numbered cooking steps, each 12-30 words, mention temperatures, times, and pans/tools.
+- Each substitution must keep the dish's character intact (or clearly say how it changes).
+- Give the conversion ratio when quantities differ (e.g. "use 3/4 of the amount").
+- Where relevant, flag allergen-friendly swaps (dairy-free, gluten-free, nut-free, vegan).
 
 Return ONLY a JSON object of this shape (no prose, no markdown):
 {
-  "recipes": [
+  "substitutions": [
     {
-      "title": "Recipe name",
-      "description": "1-sentence enticing description",
-      "servings": ${servings},
-      "prepMinutes": number,
-      "cookMinutes": number,
-      "difficulty": "easy" | "medium" | "hard",
-      "cuisine": "cuisine type",
-      "allergens": ["gluten","dairy",...],
-      "ingredients": [
-        { "name": "Chicken breast", "quantity": 400, "unit": "g", "pantry": false, "usesInStock": true },
-        { "name": "Salt", "quantity": 1, "unit": "tsp", "pantry": true, "usesInStock": false }
-      ],
-      "steps": ["1. Preheat oven to 200°C...", "2. Dice the chicken..."],
-      "notes": "Optional serving suggestion or substitution tip"
+      "ingredient": "Double cream",
+      "swaps": [
+        { "name": "Crème fraîche", "ratio": "1:1", "note": "Slightly tangier; do not boil hard" },
+        { "name": "Coconut cream", "ratio": "1:1", "note": "Dairy-free option; adds mild coconut note" }
+      ]
     }
   ]
 }
-
 Output STRICT JSON. No trailing commas.`
-
   const body = {
-    model: 'gpt-4o',
+    model: 'gpt-4o-mini',
     messages: [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: `Please generate 3 recipe suggestions using these ingredients: ${ingredients.join(', ')}. Return JSON.` }
+      { role: 'user', content: `Suggest substitutions for "${title}". Return JSON.` }
     ],
-    temperature: 0.6,
+    temperature: 0.3,
     response_format: { type: 'json_object' },
   }
   const res = await fetch(EMERGENT_URL, {
@@ -1460,8 +1561,17 @@ Output STRICT JSON. No trailing commas.`
   const content = data?.choices?.[0]?.message?.content || '{}'
   let parsed
   try { parsed = JSON.parse(content) } catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : {} }
-  const recipes = Array.isArray(parsed.recipes) ? parsed.recipes : []
-  return { recipes: recipes.slice(0, 5) }
+  const subs = Array.isArray(parsed.substitutions) ? parsed.substitutions : []
+  return {
+    substitutions: subs.map(s => ({
+      ingredient: String(s?.ingredient || '').slice(0, 120),
+      swaps: Array.isArray(s?.swaps) ? s.swaps.map(w => ({
+        name: String(w?.name || '').slice(0, 120),
+        ratio: String(w?.ratio || '').slice(0, 40),
+        note: String(w?.note || '').slice(0, 200),
+      })) : [],
+    })).filter(s => s.ingredient && s.swaps.length > 0),
+  }
 }
 
 // ---- Web Recipe Search: find the best-known recipes for a dish name ----
@@ -3097,7 +3207,7 @@ export async function POST(request, { params }) {
     }
 
     // -------- AI passthrough (still requires auth, but not kitchen scoping)
-    if (path === 'scan' || path === 'scan-receipt' || path === 'parse-voice' || path === 'recipe-instructions' || path === 'identify-product' || path === 'recipe/generate' || path === 'recipe/web-search' || path === 'haccp/scan-temperatures') {
+    if (path === 'scan' || path === 'scan-receipt' || path === 'parse-voice' || path === 'recipe-instructions' || path === 'identify-product' || path === 'recipe/generate' || path === 'recipe/web-search' || path === 'recipe/substitutions' || path === 'haccp/scan-temperatures') {
       const { ctx, error } = await requireAuth(request)
       if (error) return error
       const body = await request.json()
@@ -3148,6 +3258,22 @@ export async function POST(request, { params }) {
           dietary: Array.isArray(body.dietary) ? body.dietary.slice(0, 8) : [],
         }
         const parsed = await searchWebRecipes(opts)
+        return json(parsed)
+      }
+
+      // ---- Ingredient substitutions for a recipe (AI) ----
+      if (path === 'recipe/substitutions') {
+        const title = String(body.title || '').trim().slice(0, 160)
+        const ingredients = Array.isArray(body.ingredients)
+          ? body.ingredients.slice(0, 40).map(i => ({
+              name: String(i?.name || '').slice(0, 120),
+              quantity: i?.quantity ?? '',
+              unit: String(i?.unit || '').slice(0, 20),
+            })).filter(i => i.name)
+          : []
+        if (!title || ingredients.length === 0) return json({ error: 'title and ingredients required' }, 400)
+        const reason = String(body.reason || '').slice(0, 200)
+        const parsed = await suggestSubstitutions({ title, ingredients, reason })
         return json(parsed)
       }
 
@@ -3219,6 +3345,7 @@ Output strictly valid JSON with no other text.`
 
     // -------- Kitchen-scoped mutations --------
     const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect'].some(p => path === p)
+      || (path.startsWith('recipes/') && path.endsWith('/favorite'))
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
@@ -3700,6 +3827,24 @@ Output strictly valid JSON with no other text.`
           missing: matched.filter(m => m.status === 'missing').length,
         }
         return json({ ...recipe, matched, summary })
+      }
+
+      // ---- Toggle recipe favourite (stored in summary JSONB — no migration needed) ----
+      if (path.startsWith('recipes/') && path.endsWith('/favorite')) {
+        const id = path.split('/')[1]
+        let { data: row, error: readErr } = await sb.from('recipes').select('id,summary').eq('id', id).eq('kitchen_id', kid).maybeSingle()
+        if (readErr && /column .* does not exist/i.test(readErr.message || '')) {
+          const retry = await sb.from('recipes').select('id,summary').eq('id', id).maybeSingle()
+          row = retry.data
+          readErr = retry.error
+        }
+        if (readErr) throw readErr
+        if (!row) return json({ error: 'Not found' }, 404)
+        const summary = (row.summary && typeof row.summary === 'object') ? row.summary : {}
+        const next = !summary.favorite
+        const { data, error } = await sb.from('recipes').update({ summary: { ...summary, favorite: next } }).eq('id', id).select().single()
+        if (error) throw error
+        return json({ ok: true, favorite: next, recipe: data })
       }
 
       if (path === 'recipes') {

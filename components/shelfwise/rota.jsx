@@ -184,7 +184,7 @@ export function RotaShiftDialog({ target, onClose, onSaved }) {
   if (!target) return null
 
   const save = async () => {
-    if (!chefName.trim()) { toast.error('Chef name required (or "OFF" for a day off)'); return }
+    if (!chefName.trim()) { toast.error('Name required (or "OFF" for a day off)'); return }
     setBusy(true)
     try {
       const body = {
@@ -233,7 +233,7 @@ export function RotaShiftDialog({ target, onClose, onSaved }) {
         </DialogHeader>
         <div className="grid grid-cols-2 gap-3 py-2">
           <div className="col-span-2">
-            <Label className="text-xs">Chef name</Label>
+            <Label className="text-xs">Name</Label>
             <Input value={chefName} onChange={e => setChefName(e.target.value)} placeholder='Anna, "OFF", "Open"…' autoFocus />
             <p className="text-[10px] text-muted-foreground mt-1">Tip: use &quot;OFF&quot; to mark a day off.</p>
           </div>
