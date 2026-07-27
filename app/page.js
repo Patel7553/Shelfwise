@@ -430,6 +430,11 @@ function App() {
   const [mobileNav, setMobileNav] = useState(false)
   const [namePromptOpen, setNamePromptOpen] = useState(false)   // "add your name" popup for existing users
   const [namePromptValue, setNamePromptValue] = useState('')
+  // One-time OWNER name prompt — asks the owner for their real name so
+  // "Added by <name>" works without hunting through Settings (Aug 2026).
+  const [ownerNamePromptOpen, setOwnerNamePromptOpen] = useState(false)
+  const [ownerNameValue, setOwnerNameValue] = useState('')
+  const [ownerNameBusy, setOwnerNameBusy] = useState(false)
   const [namePromptBusy, setNamePromptBusy] = useState(false)
   const [kioskLocked, setKioskLocked] = useState(false)         // owner device → staff-code lock screen
   const [isKioskDevice, setIsKioskDevice] = useState(false)     // chef session started FROM the kiosk lock
@@ -476,6 +481,15 @@ function App() {
                 }
               } else if (ku?.name) localStorage.setItem('sw_person_name', ku.name)
               else localStorage.removeItem('sw_person_name')
+            }
+          } catch {}
+          // ONE-TIME owner name prompt: if the owner never set their display
+          // name ("Owner" is the generic default), ask once on this device so
+          // "Added by <name>" works without visiting Settings.
+          try {
+            if ((data?.role === 'owner' || data?.role === 'admin') && data?.kitchen && data?.kitchen?.accountType !== 'supplier') {
+              const generic = !data?.personName || /^owner$/i.test(String(data.personName).trim())
+              if (generic && !localStorage.getItem('sw_owner_name_prompt_done')) setOwnerNamePromptOpen(true)
             }
           } catch {}
           // KIOSK: owner-authed devices lock to the staff-code screen until
@@ -554,6 +568,39 @@ function App() {
     } finally {
       setNamePromptBusy(false)
     }
+  }
+
+  // ---- ONE-TIME owner name prompt handlers --------------------------------
+  const saveOwnerName = async () => {
+    const name = ownerNameValue.trim().slice(0, 40)
+    if (!name) { toast.error('Please enter your name'); return }
+    setOwnerNameBusy(true)
+    try {
+      const res = await fetch('/api/staff/owner-name', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not save your name')
+      try {
+        localStorage.setItem('sw_person_name', name)
+        localStorage.setItem('sw_owner_name_prompt_done', '1')
+        const ku = JSON.parse(localStorage.getItem('sw_kiosk_user') || 'null')
+        if (ku?.isOwner) localStorage.setItem('sw_kiosk_user', JSON.stringify({ ...ku, name }))
+      } catch {}
+      setMe(prev => prev ? { ...prev, personName: name } : prev)
+      setOwnerNamePromptOpen(false)
+      toast.success(`Thanks, ${name}! Everything you add will show "Added by ${name}"`)
+    } catch (e) {
+      toast.error(e.message || 'Could not save your name')
+    } finally { setOwnerNameBusy(false) }
+  }
+  const dismissOwnerNamePrompt = () => {
+    // Don't nag again on this device — the name can still be set any time in
+    // Settings → Staff → "Your name".
+    try { localStorage.setItem('sw_owner_name_prompt_done', '1') } catch {}
+    setOwnerNamePromptOpen(false)
   }
 
   const fetchProducts = async (opts = {}) => {
@@ -3253,6 +3300,34 @@ function App() {
           <Button onClick={() => submitNamePrompt()} disabled={namePromptBusy} className="w-full bg-emerald-600 hover:bg-emerald-700">
             {namePromptBusy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null} Save my name
           </Button>
+        </DialogContent>
+      </Dialog>
+
+      {/* ONE-TIME owner name popup — so "Added by <name>" shows the owner's
+          real name without hunting through Settings (Aug 2026, user request) */}
+      <Dialog open={ownerNamePromptOpen} onOpenChange={(v) => { if (!v) dismissOwnerNamePrompt() }}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle>👋 Welcome! What's your name?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Your name will show on everything you add — like <b className="text-slate-700">"Added by {ownerNameValue.trim() || 'you'}"</b> on
+            inventory items — so your team always knows who did what. Your staff already show theirs via their staff codes.
+          </p>
+          <Input
+            value={ownerNameValue}
+            onChange={e => setOwnerNameValue(e.target.value)}
+            placeholder="e.g. Parth"
+            maxLength={40}
+            autoFocus
+            onKeyDown={e => { if (e.key === 'Enter') saveOwnerName() }}
+          />
+          <Button onClick={saveOwnerName} disabled={ownerNameBusy} className="w-full bg-emerald-600 hover:bg-emerald-700">
+            {ownerNameBusy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null} Save my name
+          </Button>
+          <button type="button" onClick={dismissOwnerNamePrompt} className="w-full text-xs text-muted-foreground hover:text-slate-700 underline-offset-2 hover:underline py-1">
+            Maybe later — you can set it any time in Settings → Staff
+          </button>
         </DialogContent>
       </Dialog>
     </div>
