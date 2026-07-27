@@ -20,10 +20,10 @@ import { toast } from 'sonner'
 import {
   Truck, Plus, Minus, Trash2, Loader2, Check, X, Search, ShoppingCart,
   ArrowLeft, ArrowRight, CalendarDays, ClipboardCheck, Store, Link2,
-  History, RotateCcw, PackageX, CheckCircle2, Unlink, Pencil, Ban, Download, Info,
+  History, RotateCcw, PackageX, CheckCircle2, Unlink, Pencil, Ban, Download, Info, FileText,
 } from 'lucide-react'
 import { apiFetch, apiJson } from '@/lib/apiClient'
-import { downloadOrderSummaryCsv } from '@/components/shelfwise/supplier'
+import { downloadOrderSummaryCsv, printOrderSummary } from '@/components/shelfwise/supplier'
 
 const money = (n, sym = '£') => `${sym}${(Number(n) || 0).toFixed(2)}`
 
@@ -162,9 +162,9 @@ function ConnectSupplierPanel({ onConnected }) {
 // ---------------------------------------------------------------------------
 // ORDER WIZARD — browse catalog → review → confirmation
 // ---------------------------------------------------------------------------
-function OrderWizard({ supplier, initialCart = {}, editOrder = null, onBack, onPlaced }) {
+function OrderWizard({ supplier, initialCart = {}, editOrder = null, startStep = null, onBack, onPlaced }) {
   const isEdit = !!editOrder
-  const [step, setStep] = useState(isEdit ? 'review' : 'browse') // browse | review | done
+  const [step, setStep] = useState(startStep || (isEdit ? 'review' : 'browse')) // browse | review | done
   const [loading, setLoading] = useState(true)
   const [catalog, setCatalog] = useState([])
   const [supInfo, setSupInfo] = useState(supplier)
@@ -489,13 +489,15 @@ export function MarketplaceView() {
     setWizard({ supplier: sup, initialCart })
   }
 
-  // Edit a PENDING order — reopens the wizard prefilled, saves via PUT
-  const editOrder = (o) => {
+  // Edit a PENDING order — reopens the wizard prefilled, saves via PUT.
+  // startStep 'browse' = "Add items" (jump straight to the catalog),
+  // startStep 'review' = "Edit order" (jump to the summary screen).
+  const editOrder = (o, startStep = 'review') => {
     const sup = suppliers.find(s => s.supplierId === o.supplierId)
     if (!sup) { toast.error('You are no longer connected to this supplier'); return }
     const initialCart = {}
     for (const i of (o.items || [])) if (i.productId) initialCart[i.productId] = Number(i.quantity) || 1
-    setWizard({ supplier: sup, initialCart, editOrder: o })
+    setWizard({ supplier: sup, initialCart, editOrder: o, startStep })
   }
 
   // Cancel a PENDING order (with confirmation prompt)
@@ -511,7 +513,7 @@ export function MarketplaceView() {
   }
 
   if (wizard) {
-    return <OrderWizard supplier={wizard.supplier} initialCart={wizard.initialCart} editOrder={wizard.editOrder || null} onBack={() => { setWizard(null); load() }} onPlaced={load} />
+    return <OrderWizard supplier={wizard.supplier} initialCart={wizard.initialCart} editOrder={wizard.editOrder || null} startStep={wizard.startStep || null} onBack={() => { setWizard(null); load() }} onPlaced={load} />
   }
 
   return (
@@ -615,13 +617,16 @@ export function MarketplaceView() {
                         {o.notes && <p className="text-xs text-muted-foreground italic">📝 {o.notes}</p>}
                         {o.status === 'confirmed' && (
                           <p className="text-xs flex items-center gap-1.5 text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-2.5 py-1.5">
-                            <Info className="h-3.5 w-3.5 shrink-0" /> This order is confirmed — contact your supplier directly to change a confirmed order.
+                            <Info className="h-3.5 w-3.5 shrink-0" /> This order is confirmed — contact your supplier directly to change or add items to a confirmed order.
                           </p>
                         )}
                         <div className="flex justify-end flex-wrap gap-2">
                           {o.status === 'pending' && (
                             <>
-                              <Button size="sm" variant="outline" onClick={() => editOrder(o)}>
+                              <Button size="sm" variant="outline" onClick={() => editOrder(o, 'browse')}>
+                                <Plus className="h-3.5 w-3.5 mr-1.5" /> Add items
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => editOrder(o, 'review')}>
                                 <Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit order
                               </Button>
                               <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50" disabled={cancelBusy === o.id} onClick={() => cancelOrder(o)}>
@@ -629,7 +634,18 @@ export function MarketplaceView() {
                               </Button>
                             </>
                           )}
-                          <Button size="sm" variant="outline" onClick={() => downloadOrderSummaryCsv(o)}>
+                          {o.status !== 'cancelled' && (
+                            <Button size="sm" variant="outline" onClick={() => {
+                              const sup = suppliers.find(s => s.supplierId === o.supplierId)
+                              printOrderSummary(o, { currencySymbol: sup?.currencySymbol || '£' }, o.supplierName, sup?.email || '', sup?.clientCode || '')
+                            }}>
+                              <FileText className="h-3.5 w-3.5 mr-1.5" /> Summary (Print / PDF)
+                            </Button>
+                          )}
+                          <Button size="sm" variant="outline" onClick={() => {
+                            const sup = suppliers.find(s => s.supplierId === o.supplierId)
+                            downloadOrderSummaryCsv(o, sup?.clientCode || '')
+                          }}>
                             <Download className="h-3.5 w-3.5 mr-1.5" /> CSV
                           </Button>
                           {o.status !== 'cancelled' && (

@@ -36,7 +36,7 @@ const money = (n, sym = '£') => `${sym}${(Number(n) || 0).toFixed(2)}`
 // Printable ORDER SUMMARY — a reference/record document, deliberately NOT an
 // invoice. Suppliers issue official invoices from their own accounting system.
 // ---------------------------------------------------------------------------
-function printOrderSummary(order, profile, businessName, ownerEmail, clientCode = '') {
+export function printOrderSummary(order, profile, businessName, ownerEmail, clientCode = '') {
   const sym = profile?.currencySymbol || '£'
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const rows = (order.items || []).map((i, idx) => `
