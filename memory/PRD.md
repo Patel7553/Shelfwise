@@ -32,3 +32,12 @@ Next.js App Router PWA (Supabase Postgres) for professional kitchen management: 
 ## Ops notes
 - Prod admin: patel.parth1966@gmail.com. Migrations 20 AND 21 must be run in Supabase SQL editor; then redeploy.
 - Never modify .env URLs; all APIs under /api.
+
+## Session (Aug 2026) — 3 UX fixes
+1. "Added by [Name]" for Owner: NEW POST /api/staff/owner-name renames the isOwner entry in kitchens.staff_names;
+   ownerDisplayName() helper resolves owner identity in validatedPersonFromRequest; auth/me returns owner personName;
+   Settings → Staff owner card has "👤 Your name" edit (settings-auth.jsx). Owner must set their name ONCE in
+   Settings → Staff for "Added by <real name>" (until then shows "Added by Owner").
+2. "Supplier Client Code" renamed to "Account Number" everywhere (labels only — DB column stays client_code, still optional).
+3. Order Summary truncation fixed: product names now wrap (break-words) instead of truncate in browse/review/done/
+   history/OrderDetailDialog; print HTML td word-break.
