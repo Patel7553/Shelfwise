@@ -465,8 +465,16 @@ function App() {
             if (data?.role === 'chef') {
               if (data?.personName) localStorage.setItem('sw_person_name', data.personName)
             } else if (data?.role === 'owner' || data?.role === 'admin') {
+              // Owner: prefer the FRESH display name from the server (owner
+              // entry in staff_names — set via Settings → Staff) so "Added by"
+              // always shows the owner's real name.
               const ku = JSON.parse(localStorage.getItem('sw_kiosk_user') || 'null')
-              if (ku?.name) localStorage.setItem('sw_person_name', ku.name)
+              if (data?.personName) {
+                localStorage.setItem('sw_person_name', data.personName)
+                if (ku?.isOwner && ku.name !== data.personName) {
+                  localStorage.setItem('sw_kiosk_user', JSON.stringify({ ...ku, name: data.personName }))
+                }
+              } else if (ku?.name) localStorage.setItem('sw_person_name', ku.name)
               else localStorage.removeItem('sw_person_name')
             }
           } catch {}

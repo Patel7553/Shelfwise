@@ -2056,6 +2056,34 @@ export function StaffActivityCard() {
     } catch (err) { toast.error(err.message || 'Could not add staff member') } finally { setAdding(false) }
   }
 
+  // Owner's display name — shown on everything the owner adds ("Added by …").
+  const renameOwner = async () => {
+    const ownerEntry = staff.find(s => s.isOwner)
+    const current = ownerEntry?.name && ownerEntry.name !== 'Owner' ? ownerEntry.name : ''
+    const next = window.prompt('Your name — it will show on items you add ("Added by …"):', current)
+    if (next === null) return
+    const name = next.trim().slice(0, 40)
+    if (!name) { toast.error('Name cannot be empty'); return }
+    setRemoving('__owner__')
+    try {
+      const res = await fetch('/api/staff/owner-name', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not save your name')
+      // Keep this device's identity in sync immediately
+      try {
+        localStorage.setItem('sw_person_name', name)
+        const ku = JSON.parse(localStorage.getItem('sw_kiosk_user') || 'null')
+        if (ku?.isOwner) localStorage.setItem('sw_kiosk_user', JSON.stringify({ ...ku, name }))
+      } catch {}
+      setStaff(prev => prev.map(x => x.isOwner ? { ...x, name } : x))
+      toast.success(`Done — items you add will show "Added by ${name}"`)
+    } catch (err) { toast.error(err.message || 'Could not save your name') } finally { setRemoving('') }
+  }
+
   const regeneratePin = async (s) => {
     if (!window.confirm(`Generate a NEW staff code for "${s.name}"?\n\nTheir old code stops working immediately — tell them the new one.`)) return
     setRemoving(s.name)
@@ -2183,19 +2211,30 @@ export function StaffActivityCard() {
         </Button>
       </div>
 
-      {/* Owner's own code */}
+      {/* Owner's own code + display name */}
       {ownerEntry && (
-        <div className="mt-3 rounded-lg border-2 border-emerald-300 bg-emerald-50 px-3 py-2.5 flex items-center justify-between gap-2">
-          <div>
-            <p className="text-xs font-bold text-emerald-900">🔑 Your owner code</p>
-            <p className="text-[11px] text-emerald-700">Unlocks full owner mode on the kitchen tablet. Keep it private.</p>
+        <div className="mt-3 rounded-lg border-2 border-emerald-300 bg-emerald-50 px-3 py-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <p className="text-xs font-bold text-emerald-900">🔑 Your owner code</p>
+              <p className="text-[11px] text-emerald-700">Unlocks full owner mode on the kitchen tablet. Keep it private.</p>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="font-mono text-lg font-bold tracking-[0.25em] bg-white border border-emerald-300 rounded-md px-2.5 py-1 text-emerald-900">{ownerEntry.pin}</span>
+              <Button variant="ghost" size="sm" type="button" onClick={() => regeneratePin(ownerEntry)} disabled={removing === ownerEntry.name} className="h-8 px-2" title="Generate a new owner code">
+                {removing === ownerEntry.name ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              </Button>
+            </div>
           </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <span className="font-mono text-lg font-bold tracking-[0.25em] bg-white border border-emerald-300 rounded-md px-2.5 py-1 text-emerald-900">{ownerEntry.pin}</span>
-            <Button variant="ghost" size="sm" type="button" onClick={() => regeneratePin(ownerEntry)} disabled={removing === ownerEntry.name} className="h-8 px-2" title="Generate a new owner code">
-              {removing === ownerEntry.name ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            </Button>
-          </div>
+          <button type="button" onClick={renameOwner} disabled={removing === '__owner__'}
+            className="mt-2 w-full flex items-center justify-between gap-2 bg-white border border-emerald-200 hover:border-emerald-400 rounded-md px-2.5 py-1.5 text-left transition">
+            <span className="text-xs text-emerald-900">
+              👤 Your name: {ownerEntry.name && ownerEntry.name !== 'Owner'
+                ? <b className="capitalize">{ownerEntry.name}</b>
+                : <span className="text-amber-700 font-semibold">not set — tap to add so items show "Added by you"</span>}
+            </span>
+            {removing === '__owner__' ? <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-700 shrink-0" /> : <Pencil className="h-3.5 w-3.5 text-emerald-700 shrink-0" />}
+          </button>
         </div>
       )}
 

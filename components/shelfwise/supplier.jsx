@@ -55,7 +55,7 @@ export function printOrderSummary(order, profile, businessName, ownerEmail, clie
     table{width:100%;border-collapse:collapse;margin-top:24px}
     th{background:#eef2ff;color:#312e81;text-align:left;padding:8px;font-size:12px;text-transform:uppercase;letter-spacing:.05em}
     th:nth-child(n+4){text-align:right}
-    td{padding:8px;border-bottom:1px solid #e5e7eb}
+    td{padding:8px;border-bottom:1px solid #e5e7eb;word-break:break-word}
     .totals{margin-top:16px;margin-left:auto;width:280px}
     .totals div{display:flex;justify-content:space-between;padding:4px 8px}
     .totals .grand{font-weight:700;font-size:18px;border-top:2px solid #312e81;margin-top:4px;padding-top:8px}
@@ -82,7 +82,7 @@ export function printOrderSummary(order, profile, businessName, ownerEmail, clie
   <div style="margin-top:28px">
     <div class="muted" style="text-transform:uppercase;letter-spacing:.05em">Customer</div>
     <div style="font-weight:700;font-size:16px">${esc(order.customerName)}</div>
-    ${clientCode ? `<div class="muted">Client code: <b>${esc(clientCode)}</b></div>` : ''}
+    ${clientCode ? `<div class="muted">Account number: <b>${esc(clientCode)}</b></div>` : ''}
     ${order.customerEmail ? `<div class="muted">${esc(order.customerEmail)}</div>` : ''}
   </div>
   <table><thead><tr><th>#</th><th>Code</th><th>Item</th><th>Qty</th><th>Unit price</th><th>Amount</th></tr></thead>
@@ -108,7 +108,7 @@ export function downloadOrderSummaryCsv(order, clientCode = '') {
     const s = String(v ?? '')
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
   }
-  const head = ['order_ref', 'order_date', 'fulfilled_date', 'customer', 'client_code', 'product_code', 'product', 'quantity', 'unit', 'unit_price', 'line_total']
+  const head = ['order_ref', 'order_date', 'fulfilled_date', 'customer', 'account_number', 'product_code', 'product', 'quantity', 'unit', 'unit_price', 'line_total']
   const meta = [
     order.orderRef || '',
     order.createdAt ? new Date(order.createdAt).toISOString().slice(0, 10) : '',
@@ -364,9 +364,9 @@ function OrderDetailDialog({ order, onClose, currencySymbol, onStatusChange, bus
           )}
           <div className="border rounded-lg divide-y">
             {(order.items || []).map((i, idx) => (
-              <div key={idx} className="px-3 py-2 flex justify-between text-sm">
-                <span>{i.name}</span>
-                <span className="text-muted-foreground">{i.quantity} {i.unit || ''} × {money(i.price, currencySymbol)} = <b className="text-slate-800">{money((Number(i.quantity) || 0) * (Number(i.price) || 0), currencySymbol)}</b></span>
+              <div key={idx} className="px-3 py-2 flex justify-between gap-2 text-sm">
+                <span className="min-w-0 flex-1 break-words">{i.name}</span>
+                <span className="text-muted-foreground text-right shrink-0 max-w-[55%] break-words">{i.quantity} {i.unit || ''} × {money(i.price, currencySymbol)} = <b className="text-slate-800">{money((Number(i.quantity) || 0) * (Number(i.price) || 0), currencySymbol)}</b></span>
               </div>
             ))}
           </div>
@@ -504,11 +504,11 @@ export default function SupplierDashboard({ me }) {
     } catch (e) { toast.error(e.message || 'Failed') }
   }
   const editClientCode = async (c) => {
-    const next = prompt(`Internal client code for ${c.kitchenName}:`, c.clientCode || '')
+    const next = prompt(`Account number for ${c.kitchenName}:`, c.clientCode || '')
     if (next === null) return
     try {
       await apiJson(`/api/supplier/clients/${c.connectionId}`, { method: 'PUT', body: JSON.stringify({ clientCode: next }) })
-      toast.success('Client code saved')
+      toast.success('Account number saved')
       loadAll()
     } catch (e) { toast.error(e.message || 'Failed') }
   }
@@ -767,7 +767,7 @@ export default function SupplierDashboard({ me }) {
                             <p className="font-semibold text-sm">{o.orderRef}</p>
                             <p className="text-xs text-muted-foreground truncate">
                               {o.customerName}
-                              {clientCodeFor(o) ? ` · Client: ${clientCodeFor(o)}` : ''}
+                              {clientCodeFor(o) ? ` · Account no: ${clientCodeFor(o)}` : ''}
                               {' · '}{o.fulfilledAt ? new Date(o.fulfilledAt).toLocaleDateString('en-GB') : ''}
                             </p>
                           </div>
@@ -805,11 +805,11 @@ export default function SupplierDashboard({ me }) {
                     <p className="font-semibold text-sm flex items-center gap-1.5 text-indigo-900"><KeyRound className="h-4 w-4" /> Generate a connection code for a client</p>
                     <p className="text-xs text-muted-foreground">
                       Create a single-use code and share it with the restaurant (verbally, email…). When they enter it in
-                      ShelfWise they connect to you AND your internal client code is attached automatically.
+                      ShelfWise they connect to you AND their account number is attached automatically.
                     </p>
                     <div className="flex flex-col sm:flex-row gap-2">
                       <Input value={inviteForm.clientLabel} onChange={e => setInviteForm(f => ({ ...f, clientLabel: e.target.value }))} placeholder="Client name (for your reference)" className="bg-white" />
-                      <Input value={inviteForm.clientCode} onChange={e => setInviteForm(f => ({ ...f, clientCode: e.target.value }))} placeholder="Your internal client code (optional)" className="bg-white" />
+                      <Input value={inviteForm.clientCode} onChange={e => setInviteForm(f => ({ ...f, clientCode: e.target.value }))} placeholder="Account number (optional)" className="bg-white" />
                       <Button onClick={generateInvite} disabled={inviteBusy} className="bg-indigo-600 hover:bg-indigo-700 text-white shrink-0">
                         {inviteBusy ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Plus className="h-4 w-4 mr-1.5" />} Generate code
                       </Button>
@@ -821,7 +821,7 @@ export default function SupplierDashboard({ me }) {
                           <div key={inv.id} className="flex items-center gap-2 bg-white border rounded-lg px-3 py-2">
                             <span className="font-mono font-bold text-indigo-800 text-sm">{inv.code}</span>
                             <span className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
-                              {inv.clientLabel || 'Any client'}{inv.clientCode ? ` · client code: ${inv.clientCode}` : ''}
+                              {inv.clientLabel || 'Any client'}{inv.clientCode ? ` · account number: ${inv.clientCode}` : ''}
                             </span>
                             <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Copy code" onClick={() => { navigator.clipboard?.writeText(inv.code).then(() => toast.success('Code copied')) }}><Copy className="h-3.5 w-3.5" /></Button>
                             <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-500 hover:bg-red-50" title="Revoke" onClick={() => revokeInvite(inv)}><Trash2 className="h-3.5 w-3.5" /></Button>
@@ -831,7 +831,7 @@ export default function SupplierDashboard({ me }) {
                     )}
                     {supplierCode && (
                       <p className="text-[11px] text-muted-foreground">
-                        Your general code <b className="font-mono text-indigo-700">{supplierCode}</b> also works (connects without a client code).
+                        Your general code <b className="font-mono text-indigo-700">{supplierCode}</b> also works (connects without an account number).
                         <button className="ml-1 underline" onClick={() => { navigator.clipboard?.writeText(supplierCode).then(() => toast.success('Code copied')) }}>copy</button>
                       </p>
                     )}
@@ -853,9 +853,9 @@ export default function SupplierDashboard({ me }) {
                             <p className="font-semibold text-sm truncate">{c.kitchenName}</p>
                             <p className="text-xs text-muted-foreground truncate">{c.email}</p>
                           </div>
-                          <button onClick={() => editClientCode(c)} title="Edit internal client code"
+                          <button onClick={() => editClientCode(c)} title="Edit account number"
                             className={`text-xs font-mono font-semibold rounded-md px-2 py-1 border transition shrink-0 ${c.clientCode ? 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-400' : 'bg-slate-50 text-slate-400 border-dashed border-slate-300 hover:border-indigo-400'}`}>
-                            {c.clientCode || '+ client code'}
+                            {c.clientCode || '+ account number'}
                           </button>
                           <div className="text-right shrink-0">
                             <p className="text-sm font-bold text-indigo-700">{c.totalOrders} order{c.totalOrders !== 1 ? 's' : ''}</p>

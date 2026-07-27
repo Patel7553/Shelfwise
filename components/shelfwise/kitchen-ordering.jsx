@@ -269,9 +269,9 @@ function OrderWizard({ supplier, initialCart = {}, editOrder = null, startStep =
           </p>
           <div className="border rounded-lg divide-y text-left max-w-sm mx-auto">
             {(placedOrder.items || []).map((i, idx) => (
-              <div key={idx} className="px-3 py-1.5 flex justify-between text-sm">
-                <span className="truncate">{i.name}</span>
-                <span className="text-muted-foreground whitespace-nowrap ml-2">{i.quantity} {i.unit || ''}</span>
+              <div key={idx} className="px-3 py-1.5 flex justify-between gap-2 text-sm">
+                <span className="min-w-0 flex-1 break-words">{i.name}</span>
+                <span className="text-muted-foreground whitespace-nowrap shrink-0 ml-2">{i.quantity} {i.unit || ''}</span>
               </div>
             ))}
           </div>
@@ -341,7 +341,7 @@ function OrderWizard({ supplier, initialCart = {}, editOrder = null, startStep =
                       {items.map(p => (
                         <div key={p.id} className="flex items-center gap-3 px-3.5 py-2.5 bg-white hover:bg-indigo-50/30 transition">
                           <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-sm truncate">{p.name}</p>
+                            <p className="font-semibold text-sm break-words">{p.name}</p>
                             <p className="text-xs text-muted-foreground">
                               {money(p.price, sym)}{p.unit ? ` / ${p.unit}` : ''}{p.packSize ? ` · ${p.packSize}` : ''}{p.sku ? ` · ${p.sku}` : ''}
                             </p>
@@ -394,7 +394,7 @@ function OrderWizard({ supplier, initialCart = {}, editOrder = null, startStep =
                   {cartItems.map(i => (
                     <div key={i.id} className="flex items-center gap-3 px-3.5 py-2.5">
                       <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-sm truncate">{i.name}</p>
+                        <p className="font-semibold text-sm break-words">{i.name}</p>
                         <p className="text-xs text-muted-foreground">{money(i.price, sym)}{i.unit ? ` / ${i.unit}` : ''}</p>
                       </div>
                       <Stepper p={i} />
@@ -554,7 +554,7 @@ export function MarketplaceView() {
                       <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground mt-2">
                         {s.deliveryDays && <span className="inline-flex items-center gap-1"><CalendarDays className="h-3 w-3" /> {s.deliveryDays}</span>}
                         {s.minOrderValue > 0 && <span>Min order {money(s.minOrderValue, s.currencySymbol)}</span>}
-                        {s.clientCode && <span className="font-mono">Account ref: {s.clientCode}</span>}
+                        {s.clientCode && <span className="font-mono">Account number: {s.clientCode}</span>}
                       </div>
                       <Button onClick={() => setWizard({ supplier: s, initialCart: {} })} className="w-full mt-3 bg-indigo-600 hover:bg-indigo-700 text-white">
                         <ShoppingCart className="h-4 w-4 mr-1.5" /> Place order
@@ -608,9 +608,9 @@ export function MarketplaceView() {
                         </div>
                         <div className="border rounded-lg divide-y bg-white">
                           {(o.items || []).map((i, idx) => (
-                            <div key={idx} className="px-3 py-1.5 flex justify-between text-sm">
-                              <span>{i.name}{i.sku ? <span className="text-[10px] text-muted-foreground font-mono ml-1.5">{i.sku}</span> : null}</span>
-                              <span className="text-muted-foreground">{i.quantity} {i.unit || ''} × {money(i.price)}</span>
+                            <div key={idx} className="px-3 py-1.5 flex justify-between gap-2 text-sm">
+                              <span className="min-w-0 flex-1 break-words">{i.name}{i.sku ? <span className="text-[10px] text-muted-foreground font-mono ml-1.5">{i.sku}</span> : null}</span>
+                              <span className="text-muted-foreground text-right shrink-0">{i.quantity} {i.unit || ''} × {money(i.price)}</span>
                             </div>
                           ))}
                         </div>

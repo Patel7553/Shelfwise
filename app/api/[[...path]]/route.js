@@ -744,7 +744,7 @@ function orderEmailHtml({ order, supplierName, clientCode, heading, intro, sym =
       <p style="font-size:14px;margin:0 0 12px">${intro}</p>
       <div style="font-size:12px;color:#6b7280;margin-bottom:10px">
         Customer: <b style="color:#111">${esc(order.customer_name || order.customerName || '')}</b>
-        ${clientCode ? ` · Client code: <b style="color:#111">${esc(clientCode)}</b>` : ''}
+        ${clientCode ? ` · Account number: <b style="color:#111">${esc(clientCode)}</b>` : ''}
         ${delivery ? ` · Requested delivery: <b style="color:#111">${new Date(String(delivery) + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}</b>` : ''}
       </div>
       <table style="width:100%;border-collapse:collapse">
@@ -2067,7 +2067,9 @@ async function validatedPersonFromRequest(sb, request, ctx) {
     if (h) header = decodeURIComponent(h).trim().slice(0, 40) || null
   } catch {}
   if (header) {
-    if (/^owner$/i.test(header)) return 'Owner'
+    // Generic "Owner" header → resolve to the owner's REAL display name
+    // (set in Settings → Staff), falling back to "Owner".
+    if (/^owner$/i.test(header)) return await ownerDisplayName(sb, ctx)
     try {
       const kId = ctx?.kitchenId || ctx?.kitchen?.id
       let list = Array.isArray(ctx?.kitchen?.staff_names) ? ctx.kitchen.staff_names : null
@@ -2080,8 +2082,26 @@ async function validatedPersonFromRequest(sb, request, ctx) {
     } catch {}
     // Unknown / stale name → fall through and use the verified identity instead.
   }
-  if (ctx?.role === 'owner' || ctx?.role === 'admin') return 'Owner'
+  if (ctx?.role === 'owner' || ctx?.role === 'admin') return await ownerDisplayName(sb, ctx)
   return ctx?.userEmail || (ctx?.role === 'chef' ? 'Chef (code login)' : 'Unknown')
+}
+
+// The owner's display name — the "Owner" entry in kitchens.staff_names can be
+// renamed to the owner's real name (Settings → Staff → "Set your name"), so
+// items they add show "Added by <Name>" like every staff member.
+async function ownerDisplayName(sb, ctx) {
+  try {
+    let list = Array.isArray(ctx?.kitchen?.staff_names) ? ctx.kitchen.staff_names : null
+    const kId = ctx?.kitchenId || ctx?.kitchen?.id
+    if (!list && kId) {
+      const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', kId).maybeSingle()
+      list = Array.isArray(k?.staff_names) ? k.staff_names : []
+    }
+    const owner = (list || []).find(e => e?.isOwner)
+    const n = String(owner?.name || '').trim()
+    if (n) return n.slice(0, 40)
+  } catch {}
+  return 'Owner'
 }
 
 // DPDP: record a person's consent ONCE (first code login) — a timestamped
@@ -2387,6 +2407,16 @@ export async function GET(request, { params }) {
         try {
           const h = request.headers.get('x-person-name')
           if (h) personName = decodeURIComponent(h).trim().slice(0, 40) || null
+        } catch {}
+      }
+      // Owner/admin sessions: the owner entry's name in staff_names is
+      // authoritative (can be renamed in Settings → Staff) — overrides any
+      // stale header so "Added by <Name>" always uses the current name.
+      if ((ctx.role === 'owner' || ctx.role === 'admin') && ctx.kitchen) {
+        try {
+          const list = Array.isArray(ctx.kitchen.staff_names) ? ctx.kitchen.staff_names : []
+          const ownerEntry = list.find(e => e?.isOwner)
+          if (ownerEntry?.name) personName = String(ownerEntry.name).slice(0, 40)
         } catch {}
       }
       let chefKitchen = ctx.kitchen
@@ -3127,6 +3157,29 @@ export async function POST(request, { params }) {
     }
 
     // ------- Staff: owner adds a new staff member (PIN auto-generated) -------
+    // ------- Staff: owner sets their OWN display name -------
+    // Renames the "Owner" entry in staff_names so everything the owner does
+    // shows their real name ("Added by Parth" instead of nothing/"Owner").
+    if (path === 'staff/owner-name') {
+      const { ctx, error } = await requireAuth(request)
+      if (error) return error
+      if (ctx.role !== 'owner' && ctx.role !== 'admin') return json({ error: 'Owner only' }, 403)
+      const kId = ctx.kitchenId || ctx.kitchen?.id
+      if (!kId) return json({ error: 'No kitchen' }, 403)
+      const body = await request.json()
+      const name = String(body.name || '').trim().slice(0, 40)
+      if (!name) return json({ error: 'Name required' }, 400)
+      const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', kId).maybeSingle()
+      const { list } = ensureStaffPins(k?.staff_names)
+      if (list.some(e => !e?.isOwner && String(e?.name || '').toLowerCase() === name.toLowerCase())) {
+        return json({ error: `"${name}" is already used by a staff member — pick a different name` }, 409)
+      }
+      const next = list.map(e => e?.isOwner ? { ...e, name } : e)
+      const { error: uErr } = await sb.from('kitchens').update({ staff_names: next }).eq('id', kId)
+      if (uErr) return json({ error: 'Could not save' }, 500)
+      return json({ ok: true, name })
+    }
+
     if (path === 'staff/add') {
       const { ctx, error } = await requireAuth(request)
       if (error) return error
