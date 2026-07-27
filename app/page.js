@@ -489,7 +489,8 @@ function App() {
           try {
             if ((data?.role === 'owner' || data?.role === 'admin') && data?.kitchen && data?.kitchen?.accountType !== 'supplier') {
               const generic = !data?.personName || /^owner$/i.test(String(data.personName).trim())
-              if (generic && !localStorage.getItem('sw_owner_name_prompt_done')) setOwnerNamePromptOpen(true)
+              const dismissKey = `sw_owner_name_prompt_done_${data?.kitchen?.id || ''}`
+              if (generic && !localStorage.getItem(dismissKey)) setOwnerNamePromptOpen(true)
             }
           } catch {}
           // KIOSK: owner-authed devices lock to the staff-code screen until
@@ -585,7 +586,7 @@ function App() {
       if (!res.ok) throw new Error(data.error || 'Could not save your name')
       try {
         localStorage.setItem('sw_person_name', name)
-        localStorage.setItem('sw_owner_name_prompt_done', '1')
+        localStorage.setItem(`sw_owner_name_prompt_done_${me?.kitchen?.id || ''}`, '1')
         const ku = JSON.parse(localStorage.getItem('sw_kiosk_user') || 'null')
         if (ku?.isOwner) localStorage.setItem('sw_kiosk_user', JSON.stringify({ ...ku, name }))
       } catch {}
@@ -597,9 +598,9 @@ function App() {
     } finally { setOwnerNameBusy(false) }
   }
   const dismissOwnerNamePrompt = () => {
-    // Don't nag again on this device — the name can still be set any time in
-    // Settings → Staff → "Your name".
-    try { localStorage.setItem('sw_owner_name_prompt_done', '1') } catch {}
+    // Don't nag again for THIS kitchen on this device — the name can still be
+    // set any time in Settings → Staff → "Your name".
+    try { localStorage.setItem(`sw_owner_name_prompt_done_${me?.kitchen?.id || ''}`, '1') } catch {}
     setOwnerNamePromptOpen(false)
   }
 
@@ -864,7 +865,14 @@ function App() {
   }
 
   // Name of the person using this phone (set at code login) — stamped on items they add
-  const getPersonName = () => { try { return localStorage.getItem('sw_person_name') || '' } catch { return '' } }
+  // WHO is using the app RIGHT NOW — the server-verified session identity
+  // (me.personName: staff-JWT person or the owner's display name) ALWAYS wins.
+  // localStorage is only a fallback for the brief moment before auth/me loads —
+  // a stale name left by a previous user of this browser can never leak.
+  const getPersonName = () => {
+    if (me?.personName) return String(me.personName)
+    try { return localStorage.getItem('sw_person_name') || '' } catch { return '' }
+  }
 
   // Find an inventory product with the same name (case-insensitive)
   const findByName = (name) => {

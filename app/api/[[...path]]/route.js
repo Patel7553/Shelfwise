@@ -2051,25 +2051,28 @@ function personFromRequest(request, ctx) {
   return ctx?.userEmail || (ctx?.role === 'chef' ? 'Chef (code login)' : ctx?.role || 'Unknown')
 }
 
-// HARDENED attribution (July 2026, user request): the x-person-name header can
-// hold a STALE name on devices running old app versions (e.g. the owner's name
-// typed long ago) — so header names are only trusted if they match a REAL
-// staff member of this kitchen (or "Owner"). Anything else is rejected and
-// replaced with the code-verified identity. JWT-embedded names (staff-code
-// logins) are always authoritative.
+// HARDENED attribution (Aug 2026, user bug report): "Added by" must ALWAYS
+// reflect the CURRENT verified session — never a stale name remembered by the
+// device/browser (x-person-name header).
+//  - Staff-code JWT logins: the person is embedded in the token (authoritative).
+//  - Owner/admin email logins: ALWAYS the owner's display name of THEIR OWN
+//    kitchen — the header is completely IGNORED for these sessions, so a name
+//    left behind by a previous user of the same browser can never be stamped
+//    on the owner's actions.
+//  - Legacy chef logins (old tokens without an embedded person): the header is
+//    accepted ONLY if it matches a real (non-owner) staff member of this kitchen.
 async function validatedPersonFromRequest(sb, request, ctx) {
   // 1) Name embedded in the staff-code JWT — verified at login, always trusted.
   if (ctx?.person) return String(ctx.person).slice(0, 40)
-  // 2) Header name — must match a real staff member or "Owner".
+  // 2) Owner/admin session → the owner's display name, from THIS session's kitchen.
+  if (ctx?.role === 'owner' || ctx?.role === 'admin') return await ownerDisplayName(sb, ctx)
+  // 3) Legacy chef logins — header must match a real staff member (never the owner).
   let header = null
   try {
     const h = request.headers.get('x-person-name')
     if (h) header = decodeURIComponent(h).trim().slice(0, 40) || null
   } catch {}
-  if (header) {
-    // Generic "Owner" header → resolve to the owner's REAL display name
-    // (set in Settings → Staff), falling back to "Owner".
-    if (/^owner$/i.test(header)) return await ownerDisplayName(sb, ctx)
+  if (header && !/^owner$/i.test(header)) {
     try {
       const kId = ctx?.kitchenId || ctx?.kitchen?.id
       let list = Array.isArray(ctx?.kitchen?.staff_names) ? ctx.kitchen.staff_names : null
@@ -2077,12 +2080,11 @@ async function validatedPersonFromRequest(sb, request, ctx) {
         const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', kId).maybeSingle()
         list = Array.isArray(k?.staff_names) ? k.staff_names : []
       }
-      const match = (list || []).find(e => String(e?.name || '').toLowerCase() === header.toLowerCase())
+      const match = (list || []).find(e => !e?.isOwner && String(e?.name || '').toLowerCase() === header.toLowerCase())
       if (match) return match.name
     } catch {}
     // Unknown / stale name → fall through and use the verified identity instead.
   }
-  if (ctx?.role === 'owner' || ctx?.role === 'admin') return await ownerDisplayName(sb, ctx)
   return ctx?.userEmail || (ctx?.role === 'chef' ? 'Chef (code login)' : 'Unknown')
 }
 
