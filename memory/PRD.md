@@ -41,3 +41,15 @@ Next.js App Router PWA (Supabase Postgres) for professional kitchen management: 
 2. "Supplier Client Code" renamed to "Account Number" everywhere (labels only — DB column stays client_code, still optional).
 3. Order Summary truncation fixed: product names now wrap (break-words) instead of truncate in browse/review/done/
    history/OrderDetailDialog; print HTML td word-break.
+
+## Session (Aug 2026, cont.) — "Added by Parth" stale-identity bug fix
+- validatedPersonFromRequest: owner/admin sessions now ALWAYS use ownerDisplayName of their own kitchen;
+  x-person-name header IGNORED for owner sessions; legacy chef header only matches non-owner staff.
+- getPersonName() (page.js) prefers me.personName (server truth) over localStorage — fixes preparedBy prefill
+  + HACCP checkedBy/recordedBy stale-name leak.
+- signOutAll() clears sw_person_name + sw_kiosk_user (no cross-account identity inheritance).
+- Owner-name prompt dismiss flag keyed per kitchen id.
+- Verified: 9/9 attribution unit tests, 10/10 backend regression, UI screenshot.
+- NOTE: production (https://kitchen-stock-39.emergent.host) needs REDEPLOY to get this fix. If a kitchen's
+  owner entry was already saved with the wrong name, correct it in Settings → Staff → "Your name" —
+  items added AFTER the fix use the corrected name; old items keep the name stamped at creation time.
