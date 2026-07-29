@@ -746,6 +746,34 @@ function App() {
     const t = setInterval(ping, 30 * 60 * 1000)
     return () => clearInterval(t)
   }, [authed, isSupplier])
+
+  // PUSH RE-BIND (Aug 2026 bug fix) — a browser/device has ONE push
+  // subscription shared by whichever account logs in. Re-register it for the
+  // CURRENT account on every login, so notifications always go to (and are
+  // labeled for) the account that is actually active on this device — never
+  // the one that logged in previously (e.g. Demo → Kitchen switch).
+  useEffect(() => {
+    if (!authed || isSupplier || !me?.kitchen?.id) return
+    ;(async () => {
+      try {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
+        if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') return
+        const reg = await navigator.serviceWorker.getRegistration()
+        const sub = reg ? await reg.pushManager.getSubscription() : null
+        if (!sub) return
+        // Skip only if this exact kitchen was already bound recently
+        let rec = null
+        try { rec = JSON.parse(localStorage.getItem('sw_push_bound') || 'null') } catch {}
+        if (rec?.kid === me.kitchen.id && Date.now() - (rec.at || 0) < 12 * 60 * 60 * 1000) return
+        const res = await fetch('/api/push/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subscription: sub.toJSON(), userLabel: me?.personName || me?.userEmail || '' }),
+        })
+        if (res.ok) { try { localStorage.setItem('sw_push_bound', JSON.stringify({ kid: me.kitchen.id, at: Date.now() })) } catch {} }
+      } catch { /* best-effort */ }
+    })()
+  }, [authed, me?.kitchen?.id])
   useEffect(() => { if (authed && !isSupplier && view === 'recipes') fetchRecipes() }, [authed, isSupplier, view, recipesSearch])
 
   // Browser expiry notifications — fires once per day when app is opened.
@@ -2504,8 +2532,12 @@ function App() {
                   </div>
                 )}
                 <label className="inline-flex">
-                  <input type="file" accept="image/*" className="hidden" onChange={e => onFormImageChange(e.target.files?.[0])} />
-                  <span className="px-3 py-2 text-sm border rounded-md cursor-pointer hover:bg-slate-50">Upload photo</span>
+                  <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e => { onFormImageChange(e.target.files?.[0]); e.target.value = '' }} />
+                  <span className="px-3 py-2 text-sm border rounded-md cursor-pointer hover:bg-slate-50">📷 Take photo</span>
+                </label>
+                <label className="inline-flex">
+                  <input type="file" accept="image/*" className="hidden" onChange={e => { onFormImageChange(e.target.files?.[0]); e.target.value = '' }} />
+                  <span className="px-3 py-2 text-sm border rounded-md cursor-pointer hover:bg-slate-50">🖼️ From library</span>
                 </label>
                 {form.imageUrl && (
                   <Button variant="ghost" size="sm" type="button" onClick={() => setForm({ ...form, imageUrl: '' })}>Remove</Button>
@@ -2840,6 +2872,13 @@ function App() {
                 }}
               />
             </label>
+            <label className="block">
+              <input type="file" accept="image/*" className="hidden" disabled={aiBusy}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleAiFallbackPhoto(f); e.target.value = '' }} />
+              <div className="rounded-lg border border-dashed border-slate-300 hover:bg-slate-50 transition py-2.5 text-center cursor-pointer text-sm text-slate-600 font-medium">
+                🖼️ Or choose an existing photo from your library
+              </div>
+            </label>
             <p className="text-xs text-muted-foreground">
               💡 Tip: once we identify a product, next time you scan the same barcode we'll recognise it instantly from your history.
             </p>
@@ -3018,26 +3057,34 @@ function App() {
 
           {!scanItems.length && (
             <div className="space-y-4 py-2">
-              <label className="block">
-                <input type="file" accept="image/*" capture="environment" className="hidden"
-                  onChange={e => onScanFile(e.target.files?.[0])} />
-                <div className="border-2 border-dashed border-emerald-200 rounded-xl p-8 hover:border-emerald-400 hover:bg-emerald-50/40 transition cursor-pointer text-center">
-                  {scanImage ? (
-                    <div className="space-y-3">
-                      <img src={scanImage} alt="preview" className="max-h-72 mx-auto rounded-lg shadow-sm" />
-                      <p className="text-sm text-muted-foreground">Click to choose a different image</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <div className="h-14 w-14 mx-auto rounded-full bg-emerald-100 flex items-center justify-center">
-                        <Upload className="h-6 w-6 text-emerald-600" />
-                      </div>
-                      <p className="font-medium">Click to upload or take a photo</p>
-                      <p className="text-xs text-muted-foreground">PNG, JPG up to 10MB. We'll auto-resize for fast processing.</p>
-                    </div>
-                  )}
+              {scanImage && (
+                <div className="border rounded-xl p-3 text-center space-y-2">
+                  <img src={scanImage} alt="preview" className="max-h-72 mx-auto rounded-lg shadow-sm" />
+                  <p className="text-sm text-muted-foreground">Use the buttons below to swap the image</p>
                 </div>
-              </label>
+              )}
+              {/* BOTH options — some tablets only show a library picker for a
+                  plain file input, leaving no way to take a NEW photo (user bug) */}
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <input type="file" accept="image/*" capture="environment" className="hidden"
+                    onChange={e => { onScanFile(e.target.files?.[0]); e.target.value = '' }} />
+                  <div className="border-2 border-dashed border-emerald-300 rounded-xl p-6 hover:border-emerald-500 hover:bg-emerald-50/40 transition cursor-pointer text-center h-full">
+                    <div className="text-4xl mb-1">📷</div>
+                    <p className="font-semibold text-sm">Take photo</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Open the camera now</p>
+                  </div>
+                </label>
+                <label className="block">
+                  <input type="file" accept="image/*" className="hidden"
+                    onChange={e => { onScanFile(e.target.files?.[0]); e.target.value = '' }} />
+                  <div className="border-2 border-dashed border-blue-300 rounded-xl p-6 hover:border-blue-500 hover:bg-blue-50/40 transition cursor-pointer text-center h-full">
+                    <div className="text-4xl mb-1">🖼️</div>
+                    <p className="font-semibold text-sm">Choose from library</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">PNG, JPG up to 10MB</p>
+                  </div>
+                </label>
+              </div>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setScanOpen(false)}>Cancel</Button>
                 <Button onClick={runScan} disabled={!scanImage || scanLoading} className="bg-emerald-600 hover:bg-emerald-700">
@@ -3182,30 +3229,24 @@ function App() {
                     </div>
                   )}
                   {recipeImages.length < 5 && (
-                    <label className="block">
-                      <input type="file" accept="image/*" multiple className="hidden" onChange={e => { onRecipeImages(e.target.files); e.target.value = '' }} />
-                      <div className="border-2 border-dashed border-purple-200 rounded-xl p-6 hover:border-purple-400 hover:bg-purple-50/40 transition cursor-pointer text-center">
-                        {recipeImages.length > 0 ? (
-                          <div className="flex items-center justify-center gap-2 text-purple-700">
-                            <div className="h-9 w-9 rounded-full bg-purple-100 flex items-center justify-center">
-                              <Upload className="h-4 w-4 text-purple-600" />
-                            </div>
-                            <div className="text-left">
-                              <p className="font-medium text-sm">Add another page</p>
-                              <p className="text-xs text-muted-foreground">{recipeImages.length}/5 pages added — for 2-page recipes just snap both pages</p>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            <div className="h-14 w-14 mx-auto rounded-full bg-purple-100 flex items-center justify-center">
-                              <Upload className="h-6 w-6 text-purple-600" />
-                            </div>
-                            <p className="font-medium">Upload recipe photo(s)</p>
-                            <p className="text-xs text-muted-foreground">A cookbook page, recipe card, or screenshot. Got a 2-page recipe? Add up to 5 pages — AI merges them into one recipe.</p>
-                          </div>
-                        )}
-                      </div>
-                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="block">
+                        <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e => { onRecipeImages(e.target.files); e.target.value = '' }} />
+                        <div className="border-2 border-dashed border-purple-300 rounded-xl p-5 hover:border-purple-500 hover:bg-purple-50/40 transition cursor-pointer text-center h-full">
+                          <div className="text-3xl mb-1">📷</div>
+                          <p className="font-semibold text-sm">{recipeImages.length > 0 ? 'Snap another page' : 'Take photo'}</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">{recipeImages.length > 0 ? `${recipeImages.length}/5 pages added` : 'Open the camera now'}</p>
+                        </div>
+                      </label>
+                      <label className="block">
+                        <input type="file" accept="image/*" multiple className="hidden" onChange={e => { onRecipeImages(e.target.files); e.target.value = '' }} />
+                        <div className="border-2 border-dashed border-blue-300 rounded-xl p-5 hover:border-blue-500 hover:bg-blue-50/40 transition cursor-pointer text-center h-full">
+                          <div className="text-3xl mb-1">🖼️</div>
+                          <p className="font-semibold text-sm">Choose from library</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">{recipeImages.length > 0 ? `${recipeImages.length}/5 pages added` : 'Cookbook page, recipe card, or screenshot — up to 5 pages, AI merges them'}</p>
+                        </div>
+                      </label>
+                    </div>
                   )}
                 </div>
               )}

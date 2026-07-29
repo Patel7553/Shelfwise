@@ -4668,3 +4668,23 @@ agent_communication:
         **Test file:** /app/backend_test_attribution.py
         
         No critical issues found. Feature is production-ready.
+
+  - task: "Push re-bind to active account + Take Photo option in all image flows"
+    implemented: true
+    working: true
+    file: "app/page.js, lib/apiClient.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: |
+            FRONTEND-ONLY changes (no backend edits):
+            1. Push re-bind effect in page.js: on login, existing browser push subscription is re-POSTed to
+               /api/push/subscribe so it binds to the CURRENT kitchen (fixes Demo notifications arriving on
+               the Kitchen account device). signOutAll() now calls /api/push/unsubscribe before clearing tokens.
+            2. Dual "Take photo" (capture=environment) + "Choose from library" inputs added to: Scan Logbook
+               dialog, Scan Recipe dialog, product form photo, barcode AI fallback.
+            Verified via mocked-session Playwright screenshots (Scan Recipe dialog shows both tiles; app
+            compiles clean). Real push routing must be validated on production after redeploy.

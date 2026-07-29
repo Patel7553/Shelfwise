@@ -53,3 +53,14 @@ Next.js App Router PWA (Supabase Postgres) for professional kitchen management: 
 - NOTE: production (https://kitchen-stock-39.emergent.host) needs REDEPLOY to get this fix. If a kitchen's
   owner entry was already saved with the wrong name, correct it in Settings → Staff → "Your name" —
   items added AFTER the fix use the corrected name; old items keep the name stamped at creation time.
+
+## Session (Aug 2026, cont. 2) — Push routing + camera option fixes
+1. PUSH ROUTING: browser push subscription now RE-BINDS to the active account on every login
+   (page.js effect posts existing subscription to /api/push/subscribe, throttled 12h per kitchen via
+   sw_push_bound localStorage key). signOutAll() (apiClient.js) detaches the device's push registration
+   (POST /api/push/unsubscribe) BEFORE clearing tokens, so a signed-out account's notifications stop.
+   Backend upsert by endpoint already reassigns kitchen_id — no backend change needed.
+2. TAKE PHOTO OPTION: all image-upload flows now offer BOTH "📷 Take photo" (input capture=environment)
+   and "🖼️ Choose from library" (no capture): Scan Logbook dialog, Scan Recipe dialog (multi-page),
+   product form photo, barcode AI fallback (page.js). scanners.jsx + haccp.jsx already had both.
+3. Verified via mocked-session screenshots (Scan Recipe dialog shows both tiles). Production needs REDEPLOY.
