@@ -64,3 +64,15 @@ Next.js App Router PWA (Supabase Postgres) for professional kitchen management: 
    and "🖼️ Choose from library" (no capture): Scan Logbook dialog, Scan Recipe dialog (multi-page),
    product form photo, barcode AI fallback (page.js). scanners.jsx + haccp.jsx already had both.
 3. Verified via mocked-session screenshots (Scan Recipe dialog shows both tiles). Production needs REDEPLOY.
+
+## Session (Aug 2026, cont. 3) — Staff rename feature
+- POST /api/staff/rename {oldName,newName} (owner/admin only): renames a NON-owner staff entry keeping
+  pin/role/perms; stores oldName in entry.prevNames (max 10); BACKFILLS past records (activity_logs.person,
+  products.prepared_by + custom_fields->>_addedBy, haccp_temperature_logs.recorded_by,
+  haccp_cleaning_log.completed_by, haccp_deliveries.checked_by, waste_log.disposed_by); returns updatedRecords.
+- resolveStaffName(sb,ctx,raw) helper: old staff JWTs (name embedded at login) resolve to CURRENT name via
+  prevNames — used in validatedPersonFromRequest step 1 + auth/me chef personName.
+- UI: pencil icon on each staff name in Settings → Staff (settings-auth.jsx renameStaff, prompt-based),
+  distinct from regenerate-code + delete. Updates local sw_person_name/sw_kiosk_user if renamed person active.
+- Verified: 5/5 unit tests (old-token resolution), 10/10 backend wiring tests, screenshot of Staff screen.
+- Production needs REDEPLOY.
