@@ -2084,6 +2084,35 @@ export function StaffActivityCard() {
     } catch (err) { toast.error(err.message || 'Could not save your name') } finally { setRemoving('') }
   }
 
+  // Rename a staff member — code, access and history stay untouched; the
+  // backend also rewrites past records so old entries show the corrected name.
+  const renameStaff = async (s) => {
+    const next = window.prompt(`New name for ${s.name} (their code and access stay the same):`, s.name)
+    if (next === null) return
+    const name = next.trim().slice(0, 40)
+    if (!name) { toast.error('Name cannot be empty'); return }
+    if (name === s.name) return
+    setRemoving(s.name)
+    try {
+      const res = await fetch('/api/staff/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldName: s.name, newName: name }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Could not rename')
+      setStaff(prev => prev.map(x => x.name === s.name ? { ...x, name } : x))
+      // Keep this device's identity in sync if the renamed person is active here
+      try {
+        if ((localStorage.getItem('sw_person_name') || '').toLowerCase() === s.name.toLowerCase()) localStorage.setItem('sw_person_name', name)
+        const ku = JSON.parse(localStorage.getItem('sw_kiosk_user') || 'null')
+        if (ku && String(ku.name || '').toLowerCase() === s.name.toLowerCase()) localStorage.setItem('sw_kiosk_user', JSON.stringify({ ...ku, name }))
+      } catch {}
+      const n = Number(data.updatedRecords || 0)
+      toast.success(`Renamed to ${name}${n ? ` — ${n} past record${n === 1 ? '' : 's'} updated too` : ''}`)
+    } catch (err) { toast.error(err.message || 'Could not rename') } finally { setRemoving('') }
+  }
+
   const regeneratePin = async (s) => {
     if (!window.confirm(`Generate a NEW staff code for "${s.name}"?\n\nTheir old code stops working immediately — tell them the new one.`)) return
     setRemoving(s.name)
@@ -2257,7 +2286,11 @@ export function StaffActivityCard() {
               <div key={s.name} className="bg-white rounded-lg border px-3 py-2.5">
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold capitalize truncate">{s.name}</p>
+                    <button type="button" onClick={() => renameStaff(s)} disabled={removing === s.name}
+                      className="flex items-center gap-1.5 max-w-full group" title={`Edit ${s.name}'s name`}>
+                      <p className="text-sm font-semibold capitalize truncate group-hover:underline underline-offset-2">{s.name}</p>
+                      <Pencil className="h-3 w-3 text-slate-400 group-hover:text-indigo-600 shrink-0" />
+                    </button>
                     <p className={`text-[11px] font-medium ${s.role === 'manager' ? 'text-emerald-700' : 'text-muted-foreground'}`}>{accessSummary(s)}</p>
                     <p className="text-[10px] text-muted-foreground">Last active: {s.lastSeen ? fmtTime(s.lastSeen) : 'never logged in'}</p>
                   </div>

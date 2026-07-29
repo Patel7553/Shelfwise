@@ -2063,7 +2063,9 @@ function personFromRequest(request, ctx) {
 //    accepted ONLY if it matches a real (non-owner) staff member of this kitchen.
 async function validatedPersonFromRequest(sb, request, ctx) {
   // 1) Name embedded in the staff-code JWT — verified at login, always trusted.
-  if (ctx?.person) return String(ctx.person).slice(0, 40)
+  //    Resolved through the staff list so a RENAMED person's old token still
+  //    attributes to their CURRENT name.
+  if (ctx?.person) return await resolveStaffName(sb, ctx, ctx.person)
   // 2) Owner/admin session → the owner's display name, from THIS session's kitchen.
   if (ctx?.role === 'owner' || ctx?.role === 'admin') return await ownerDisplayName(sb, ctx)
   // 3) Legacy chef logins — header must match a real staff member (never the owner).
@@ -2104,6 +2106,28 @@ async function ownerDisplayName(sb, ctx) {
     if (n) return n.slice(0, 40)
   } catch {}
   return 'Owner'
+}
+
+// Resolve a (possibly outdated) staff name to the CURRENT one. Staff-code JWTs
+// embed the name at login time — if the person was later renamed (Settings →
+// Staff → pencil icon), their old token would keep stamping the old name.
+// Each staff entry keeps `prevNames` so old tokens map to the new name.
+async function resolveStaffName(sb, ctx, raw) {
+  const p = String(raw || '').slice(0, 40)
+  try {
+    let list = Array.isArray(ctx?.kitchen?.staff_names) ? ctx.kitchen.staff_names : null
+    const kId = ctx?.kitchenId || ctx?.kitchen?.id
+    if (!list && kId) {
+      const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', kId).maybeSingle()
+      list = Array.isArray(k?.staff_names) ? k.staff_names : []
+    }
+    const lower = p.toLowerCase()
+    const exact = (list || []).find(e => String(e?.name || '').toLowerCase() === lower)
+    if (exact) return String(exact.name).slice(0, 40)
+    const renamed = (list || []).find(e => Array.isArray(e?.prevNames) && e.prevNames.some(n => String(n).toLowerCase() === lower))
+    if (renamed) return String(renamed.name).slice(0, 40)
+  } catch {}
+  return p
 }
 
 // DPDP: record a person's consent ONCE (first code login) — a timestamped
@@ -2404,7 +2428,7 @@ export async function GET(request, { params }) {
       let personPerms = []
       // Staff-PIN tokens embed the person (authoritative); header is fallback
       // for legacy daily-code logins.
-      if (ctx.person) personName = ctx.person
+      if (ctx.person) personName = await resolveStaffName(sb, ctx, ctx.person)
       if (!personName) {
         try {
           const h = request.headers.get('x-person-name')
@@ -3180,6 +3204,64 @@ export async function POST(request, { params }) {
       const { error: uErr } = await sb.from('kitchens').update({ staff_names: next }).eq('id', kId)
       if (uErr) return json({ error: 'Could not save' }, 500)
       return json({ ok: true, name })
+    }
+
+    // ------- Staff: rename a person — code, access level and history are
+    //         preserved; ONLY the name changes, and past records are updated
+    //         to show the corrected name (user request, Aug 2026) -------
+    if (path === 'staff/rename') {
+      const { ctx, error } = await requireAuth(request)
+      if (error) return error
+      if (ctx.role !== 'owner' && ctx.role !== 'admin') return json({ error: 'Owner only' }, 403)
+      const kId = ctx.kitchenId || ctx.kitchen?.id
+      if (!kId) return json({ error: 'No kitchen' }, 403)
+      const body = await request.json()
+      const oldName = String(body.oldName || '').trim()
+      const newName = String(body.newName || '').trim().slice(0, 40)
+      if (!oldName || !newName) return json({ error: 'oldName and newName required' }, 400)
+      const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', kId).maybeSingle()
+      const { list } = ensureStaffPins(k?.staff_names)
+      const entry = list.find(e => String(e?.name || '').toLowerCase() === oldName.toLowerCase())
+      if (!entry) return json({ error: `No staff member called "${oldName}"` }, 404)
+      if (entry.isOwner) return json({ error: 'Use the "Your name" setting on the owner card to rename the owner' }, 400)
+      const clash = list.find(e => e !== entry && String(e?.name || '').toLowerCase() === newName.toLowerCase())
+      if (clash) return json({ error: `"${newName}" is already used by another person — pick a different name` }, 409)
+      // Rename IN PLACE — pin/role/perms untouched. prevNames lets devices still
+      // logged in under the old name keep attributing to the NEW name.
+      const prev = Array.isArray(entry.prevNames) ? entry.prevNames : []
+      const next = list.map(e => e === entry
+        ? { ...e, name: newName, prevNames: [...prev.filter(n => String(n).toLowerCase() !== newName.toLowerCase()), oldName].slice(-10) }
+        : e)
+      const { error: uErr } = await sb.from('kitchens').update({ staff_names: next }).eq('id', kId)
+      if (uErr) return json({ error: 'Could not save' }, 500)
+
+      // BACKFILL history (best-effort) — past entries show the corrected name.
+      let updatedRecords = 0
+      const renameCol = async (table, col) => {
+        try {
+          const { data, error: rcErr } = await sb.from(table).update({ [col]: newName })
+            .eq('kitchen_id', kId).eq(col, oldName).select('id')
+          if (!rcErr) updatedRecords += (data || []).length
+        } catch { /* legacy DBs may miss some tables — ignore */ }
+      }
+      await renameCol('activity_logs', 'person')
+      await renameCol('products', 'prepared_by')
+      await renameCol('haccp_temperature_logs', 'recorded_by')
+      await renameCol('haccp_cleaning_log', 'completed_by')
+      await renameCol('haccp_deliveries', 'checked_by')
+      await renameCol('waste_log', 'disposed_by')
+      // "Added by" lives inside the products.custom_fields json blob
+      try {
+        const { data: prods } = await sb.from('products').select('id, custom_fields')
+          .eq('kitchen_id', kId).filter('custom_fields->>_addedBy', 'eq', oldName).limit(5000)
+        for (const p of (prods || [])) {
+          const cf = { ...(p.custom_fields || {}), _addedBy: newName }
+          const { error: pe } = await sb.from('products').update({ custom_fields: cf }).eq('id', p.id).eq('kitchen_id', kId)
+          if (!pe) updatedRecords++
+        }
+      } catch { /* ignore */ }
+      await logActivity(sb, kId, await validatedPersonFromRequest(sb, request, ctx), 'staff_renamed', `${oldName} → ${newName} (${updatedRecords} past records updated)`)
+      return json({ ok: true, name: newName, updatedRecords })
     }
 
     if (path === 'staff/add') {
