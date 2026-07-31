@@ -2226,6 +2226,7 @@ function receiptFromDb(r, fileUrl = '') {
     status: r.status || 'pending',
     color: r.color || '',
     notes: r.notes || '',
+    ocrText: r.ocr_text || '',
     fileType: r.file_type || '',
     hasFile: !!r.image_path,
     fileUrl,
@@ -2234,6 +2235,31 @@ function receiptFromDb(r, fileUrl = '') {
     editedAt: r.edited_at || null,
     createdAt: r.created_at,
   }
+}
+
+// GPT-4o vision transcribes ALL readable text from the receipt (OCR)
+async function ocrReceiptText(imageRef) {
+  const key = process.env.EMERGENT_LLM_KEY
+  if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+  const body = {
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: 'You are an OCR engine. Transcribe ALL readable printed text from the receipt image, preserving the line order. Output plain text only — no commentary, no markdown. If nothing is readable output an empty string.' },
+      { role: 'user', content: [
+        { type: 'text', text: 'Transcribe this receipt.' },
+        { type: 'image_url', image_url: { url: imageRef, detail: 'high' } },
+      ]},
+    ],
+    temperature: 0,
+  }
+  const res = await fetch(EMERGENT_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`Emergent LLM ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  return String(data?.choices?.[0]?.message?.content || '').trim().slice(0, 8000)
 }
 
 // GPT-4o vision reads the supplier, date and total straight off the photo
@@ -4347,7 +4373,7 @@ Output strictly valid JSON with no other text.`
     }
 
     // -------- Kitchen-scoped mutations --------
-    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract'].some(p => path === p)
+    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract','receipts/ocr'].some(p => path === p)
       || (path.startsWith('recipes/') && path.endsWith('/favorite'))
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
@@ -4411,8 +4437,15 @@ Output strictly valid JSON with no other text.`
           image_path: imagePath,
           file_type: fileType,
           added_by: person,
+          ocr_text: String(body.ocrText || '').slice(0, 8000),
         }
-        const { data, error } = await sb.from('receipts').insert(row).select().single()
+        let ins = await sb.from('receipts').insert(row).select().single()
+        if (ins.error && /ocr_text/i.test(ins.error.message || '')) {
+          // DB not migrated for OCR yet (migration-24) — save without the text
+          delete row.ocr_text
+          ins = await sb.from('receipts').insert(row).select().single()
+        }
+        const { data, error } = ins
         if (error) {
           if (imagePath) await sb.storage.from('receipts').remove([imagePath]).catch(() => {})
           if (/relation .* does not exist/i.test(error.message || '')) {
@@ -4429,6 +4462,19 @@ Output strictly valid JSON with no other text.`
           } catch {}
         }
         return json(receiptFromDb(data, fileUrl), 201)
+      }
+
+      // ------- RECEIPTS: OCR — transcribe all readable text from the scan -------
+      if (path === 'receipts/ocr') {
+        if (!(await chefHasPerm(sb, ctx, 'receipts'))) return json({ error: 'No access to receipts — ask the owner to enable it for you' }, 403)
+        const body = await request.json()
+        const ref = body.dataUrl || body.url
+        if (!ref) return json({ error: 'dataUrl or url required' }, 400)
+        try {
+          return json({ text: await ocrReceiptText(ref) })
+        } catch (e) {
+          return json({ error: e.message || 'OCR failed' }, 500)
+        }
       }
 
       // ------- RECEIPTS: AI reads supplier / date / total from the photo -------
@@ -5467,9 +5513,15 @@ export async function PUT(request, { params }) {
       if (body.status !== undefined && ['pending', 'submitted', 'reviewed'].includes(body.status)) patch.status = body.status
       if (body.color !== undefined) patch.color = String(body.color || '').slice(0, 20)
       if (body.notes !== undefined) patch.notes = String(body.notes || '').trim().slice(0, 500)
+      if (body.ocrText !== undefined) patch.ocr_text = String(body.ocrText || '').slice(0, 8000)
       patch.edited_by = await validatedPersonFromRequest(sb, request, ctx)
       patch.edited_at = new Date().toISOString()
-      const { data, error: e2 } = await sb.from('receipts').update(patch).eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).select().single()
+      let upd = await sb.from('receipts').update(patch).eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).select().single()
+      if (upd.error && /ocr_text/i.test(upd.error.message || '')) {
+        delete patch.ocr_text
+        upd = await sb.from('receipts').update(patch).eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).select().single()
+      }
+      const { data, error: e2 } = upd
       if (e2) return json({ error: e2.message }, 500)
       let fileUrl = ''
       if (data?.image_path) {

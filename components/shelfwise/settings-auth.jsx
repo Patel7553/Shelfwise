@@ -2216,6 +2216,24 @@ export function StaffActivityCard() {
     return extra.length ? `Standard + ${extra.join(', ')}` : 'Standard access'
   }
 
+  // ---- ACCESS AUDIT — who can reach which features, at a glance ----
+  const [showAudit, setShowAudit] = useState(false)
+  const AUDIT_FEATURES = [
+    { key: 'items',    label: 'Items',    emoji: '📦', baseline: true },
+    { key: 'recipes',  label: 'Recipes',  emoji: '🍲', baseline: true },
+    { key: 'temps',    label: 'Temp logs', emoji: '🌡️', baseline: true },
+    { key: 'waste',    label: 'Waste',    emoji: '🗑️', baseline: true },
+    { key: 'orders',   label: 'Orders',   emoji: '🚚', baseline: false },
+    { key: 'logbook',  label: 'Logbook',  emoji: '📒', baseline: false },
+    { key: 'receipts', label: 'Receipts', emoji: '🧾', baseline: false },
+    { key: 'settings', label: 'Settings', emoji: '⚙️', baseline: false },
+  ]
+  const hasFeature = (person, f) => {
+    if (person.isOwner || person.role === 'manager') return true
+    if (f.baseline) return true
+    return Array.isArray(person.perms) && person.perms.includes(f.key)
+  }
+
   const fmtTime = (t) => {
     try {
       const d = new Date(t)
@@ -2347,6 +2365,59 @@ export function StaffActivityCard() {
                 )}
               </div>
             ))}
+          </div>
+        )}
+      </div>
+
+      {/* ---- ACCESS AUDIT — feature-by-feature matrix ---- */}
+      <div className="mt-4">
+        <Button variant="outline" size="sm" type="button" onClick={() => setShowAudit(v => !v)} className="bg-white w-full">
+          🔍 {showAudit ? 'Hide access audit' : 'Access audit — who can reach what'}
+        </Button>
+        {showAudit && (
+          <div className="mt-2 rounded-lg border bg-white overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b bg-slate-50">
+                    <th className="text-left font-bold text-slate-600 px-3 py-2 sticky left-0 bg-slate-50 min-w-[110px]">Person</th>
+                    {AUDIT_FEATURES.map(f => (
+                      <th key={f.key} className="font-semibold text-slate-500 px-1.5 py-2 text-center min-w-[62px]">
+                        <span className="block text-sm">{f.emoji}</span>
+                        <span className="text-[10px] font-bold">{f.label}</span>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...(ownerEntry ? [ownerEntry] : []), ...staffOnly].map(p => (
+                    <tr key={p.name} className="border-b last:border-0 hover:bg-slate-50/60">
+                      <td className="px-3 py-2 sticky left-0 bg-white">
+                        <p className="font-semibold capitalize truncate max-w-[130px]">{p.name || 'Owner'}</p>
+                        <p className={`text-[9px] font-bold uppercase tracking-wide ${p.isOwner ? 'text-emerald-600' : p.role === 'manager' ? 'text-blue-600' : 'text-slate-400'}`}>
+                          {p.isOwner ? 'Owner' : p.role === 'manager' ? 'Full access' : 'Staff'}
+                        </p>
+                      </td>
+                      {AUDIT_FEATURES.map(f => {
+                        const ok = hasFeature(p, f)
+                        return (
+                          <td key={f.key} className="px-1.5 py-2 text-center">
+                            {ok
+                              ? <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-bold ${f.baseline && !p.isOwner && p.role !== 'manager' ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-700'}`}>✓</span>
+                              : <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-red-50 text-red-300 text-[11px]">—</span>}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 px-3 py-2 bg-slate-50 border-t text-[10px] text-slate-500">
+              <span><span className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 font-bold mr-1 text-[9px]">✓</span>Granted extra / full access</span>
+              <span><span className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-slate-100 text-slate-500 font-bold mr-1 text-[9px]">✓</span>Standard (everyone has it)</span>
+              <span><span className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-50 text-red-300 mr-1 text-[9px]">—</span>No access</span>
+            </div>
           </div>
         )}
       </div>

@@ -1,9 +1,9 @@
 'use client'
 
 // ============================================================================
-// RECEIPTS — scan supplier receipts (auto edge-detect + crop), tag them,
-// and export as PDF (combined or separate) for the finance department.
-// (Aug 2026, user request)
+// RECEIPTS — professional document scanner (edge-detect, deskew, enhancement
+// filters, multi-page, stamps, OCR), colour tags, and PDF export for finance.
+// (Aug 2026, user request — CamScanner/Adobe Scan quality benchmark)
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -14,7 +14,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { toast } from 'sonner'
-import { Loader2, ReceiptText, Download, Trash2, Sparkles, RefreshCw, Check, X, FileText } from 'lucide-react'
+import { Loader2, ReceiptText, Download, Trash2, Sparkles, RefreshCw, Check, X, FileText, RotateCcw, RotateCw, ScanText, ArrowLeft, ArrowRight, Search } from 'lucide-react'
 import { apiFetch } from '@/lib/apiClient'
 import { CURRENCY_SYMBOL } from '@/components/shelfwise/shared'
 
@@ -56,7 +56,6 @@ function loadOpenCV() {
     s.src = 'https://docs.opencv.org/4.10.0/opencv.js'
     s.async = true
     s.onload = () => {
-      // opencv 4.x exposes cv as a thenable Module until the WASM runtime is up
       if (window.cv?.then) window.cv.then((m) => { window.cv = m; resolve(m) })
       else {
         const check = () => (window.cv?.Mat ? resolve(window.cv) : setTimeout(check, 100))
@@ -71,7 +70,6 @@ function loadOpenCV() {
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
 
-// Order 4 points: top-left, top-right, bottom-right, bottom-left
 function orderCorners(pts) {
   const bySum = [...pts].sort((a, b) => (a.x + a.y) - (b.x + b.y))
   const tl = bySum[0], br = bySum[3]
@@ -80,7 +78,6 @@ function orderCorners(pts) {
   return [tl, tr, br, bl]
 }
 
-// Find the receipt outline (largest 4-corner contour) — like a doc-scanner app
 function detectDocumentCorners(cv, canvas) {
   let src, gray, blur, edges, kernel, contours, hierarchy
   try {
@@ -115,7 +112,6 @@ function detectDocumentCorners(cv, canvas) {
   }
 }
 
-// Straighten + crop using the 4 corners (perspective transform)
 function warpPerspective(cv, canvas, corners) {
   const [tl, tr, br, bl] = corners
   const W = Math.max(32, Math.round(Math.max(dist(tl, tr), dist(bl, br))))
@@ -132,8 +128,9 @@ function warpPerspective(cv, canvas, corners) {
   return out
 }
 
-// Downscale + re-encode any picked image to JPEG (keeps uploads small and
-// guarantees pdf-lib can embed every stored image)
+// ---------------------------------------------------------------------------
+// Image utilities
+// ---------------------------------------------------------------------------
 function fileToJpegDataUrl(file, maxSide = 2000, quality = 0.85) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file)
@@ -158,20 +155,242 @@ const fileToDataUrl = (file) => new Promise((resolve, reject) => {
   r.readAsDataURL(file)
 })
 
+const dataUrlToCanvas = (dataUrl) => new Promise((resolve, reject) => {
+  const img = new Image()
+  img.onload = () => {
+    const c = document.createElement('canvas')
+    c.width = img.width; c.height = img.height
+    c.getContext('2d').drawImage(img, 0, 0)
+    resolve(c)
+  }
+  img.onerror = () => reject(new Error('Could not load image'))
+  img.src = dataUrl
+})
+
+function scaleCanvas(src, maxSide) {
+  const s = Math.min(1, maxSide / Math.max(src.width, src.height))
+  if (s === 1) return src
+  const c = document.createElement('canvas')
+  c.width = Math.round(src.width * s); c.height = Math.round(src.height * s)
+  c.getContext('2d').drawImage(src, 0, 0, c.width, c.height)
+  return c
+}
+
+function rotateCanvas(src, dir) { // dir: 1 = clockwise, -1 = counter-clockwise
+  const c = document.createElement('canvas')
+  c.width = src.height; c.height = src.width
+  const ctx = c.getContext('2d')
+  ctx.translate(c.width / 2, c.height / 2)
+  ctx.rotate(dir * Math.PI / 2)
+  ctx.drawImage(src, -src.width / 2, -src.height / 2)
+  return c
+}
+
+// ---------------------------------------------------------------------------
+// ENHANCEMENT FILTER ENGINE — CamScanner-style, all client-side canvas math
+// ---------------------------------------------------------------------------
+// Divide-by-background: the classic doc-scanner trick — estimate the paper
+// background with a heavy blur, divide the image by it. Kills shadows and
+// uneven lighting while keeping ink crisp.
+function flattenIllumination(canvas, keepColor = true) {
+  const w = canvas.width, h = canvas.height
+  const bg = document.createElement('canvas')
+  bg.width = w; bg.height = h
+  const bctx = bg.getContext('2d')
+  const radius = Math.max(8, Math.round(Math.max(w, h) / 40))
+  bctx.filter = `blur(${radius}px)`
+  bctx.drawImage(canvas, 0, 0)
+  const out = document.createElement('canvas')
+  out.width = w; out.height = h
+  const octx = out.getContext('2d')
+  octx.drawImage(canvas, 0, 0)
+  const imgD = octx.getImageData(0, 0, w, h)
+  const bgD = bctx.getImageData(0, 0, w, h)
+  const d = imgD.data, b = bgD.data
+  for (let i = 0; i < d.length; i += 4) {
+    if (keepColor) {
+      d[i] = Math.min(255, (d[i] / Math.max(1, b[i])) * 232)
+      d[i + 1] = Math.min(255, (d[i + 1] / Math.max(1, b[i + 1])) * 232)
+      d[i + 2] = Math.min(255, (d[i + 2] / Math.max(1, b[i + 2])) * 232)
+    } else {
+      const y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
+      const by = Math.max(1, 0.299 * b[i] + 0.587 * b[i + 1] + 0.114 * b[i + 2])
+      const v = Math.min(255, (y / by) * 232)
+      d[i] = d[i + 1] = d[i + 2] = v
+    }
+  }
+  octx.putImageData(imgD, 0, 0)
+  return out
+}
+
+function mapPixels(canvas, fn) {
+  const c = document.createElement('canvas')
+  c.width = canvas.width; c.height = canvas.height
+  const ctx = c.getContext('2d')
+  ctx.drawImage(canvas, 0, 0)
+  const img = ctx.getImageData(0, 0, c.width, c.height)
+  fn(img.data)
+  ctx.putImageData(img, 0, 0)
+  return c
+}
+
+function meanLuma(canvas) {
+  const s = scaleCanvas(canvas, 200)
+  const ctx = s.getContext('2d')
+  const d = ctx.getImageData(0, 0, s.width, s.height).data
+  let sum = 0
+  for (let i = 0; i < d.length; i += 4) sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
+  return sum / (d.length / 4)
+}
+
+// Auto levels: stretch each channel between its 2nd and 98th percentile
+function autoLevels(canvas) {
+  const s = scaleCanvas(canvas, 300)
+  const sd = s.getContext('2d').getImageData(0, 0, s.width, s.height).data
+  const hist = [new Array(256).fill(0), new Array(256).fill(0), new Array(256).fill(0)]
+  for (let i = 0; i < sd.length; i += 4) { hist[0][sd[i]]++; hist[1][sd[i + 1]]++; hist[2][sd[i + 2]]++ }
+  const n = sd.length / 4
+  const lo = [], hi = []
+  for (let ch = 0; ch < 3; ch++) {
+    let acc = 0, l = 0, h = 255
+    for (let v = 0; v < 256; v++) { acc += hist[ch][v]; if (acc >= n * 0.02) { l = v; break } }
+    acc = 0
+    for (let v = 255; v >= 0; v--) { acc += hist[ch][v]; if (acc >= n * 0.02) { h = v; break } }
+    lo[ch] = l; hi[ch] = Math.max(h, l + 20)
+  }
+  return mapPixels(canvas, (d) => {
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = Math.max(0, Math.min(255, ((d[i] - lo[0]) / (hi[0] - lo[0])) * 255))
+      d[i + 1] = Math.max(0, Math.min(255, ((d[i + 1] - lo[1]) / (hi[1] - lo[1])) * 255))
+      d[i + 2] = Math.max(0, Math.min(255, ((d[i + 2] - lo[2]) / (hi[2] - lo[2])) * 255))
+    }
+  })
+}
+
+export const RECEIPT_FILTERS = [
+  { key: 'enhance', label: 'Enhance', emoji: '✨', hint: 'Recommended' },
+  { key: 'original', label: 'Original', emoji: '🎞️', hint: 'True colour' },
+  { key: 'magic', label: 'Magic Color', emoji: '🪄', hint: 'Auto colour fix' },
+  { key: 'shadow', label: 'Shadow Fix', emoji: '💡', hint: 'Removes shadows' },
+  { key: 'lighten', label: 'Lighten', emoji: '🌤️', hint: 'Brightens dark scans' },
+  { key: 'grayscale', label: 'Grayscale', emoji: '⚪', hint: 'Full grayscale' },
+  { key: 'bw', label: 'B&W', emoji: '⬛', hint: 'High contrast' },
+  { key: 'eco', label: 'Eco', emoji: '🌿', hint: 'Low-ink print' },
+  { key: 'nohand', label: 'No Handwriting', emoji: '🖨️', hint: 'Print only' },
+]
+
+function applyReceiptFilter(canvas, key) {
+  switch (key) {
+    case 'original': return canvas
+    case 'grayscale':
+      return mapPixels(canvas, (d) => {
+        for (let i = 0; i < d.length; i += 4) {
+          const y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
+          d[i] = d[i + 1] = d[i + 2] = y
+        }
+      })
+    case 'lighten':
+      return mapPixels(canvas, (d) => {
+        for (let i = 0; i < d.length; i += 4) {
+          d[i] = 255 * Math.pow(d[i] / 255, 0.62)
+          d[i + 1] = 255 * Math.pow(d[i + 1] / 255, 0.62)
+          d[i + 2] = 255 * Math.pow(d[i + 2] / 255, 0.62)
+        }
+      })
+    case 'shadow':
+      return flattenIllumination(canvas, true)
+    case 'magic':
+      return autoLevels(canvas)
+    case 'enhance': {
+      // shadow-flatten + gentle contrast stretch = crisp, finance-ready scan
+      const flat = flattenIllumination(canvas, true)
+      return mapPixels(flat, (d) => {
+        for (let i = 0; i < d.length; i += 4) {
+          d[i] = Math.max(0, Math.min(255, (d[i] - 40) * (255 / 175)))
+          d[i + 1] = Math.max(0, Math.min(255, (d[i + 1] - 40) * (255 / 175)))
+          d[i + 2] = Math.max(0, Math.min(255, (d[i + 2] - 40) * (255 / 175)))
+        }
+      })
+    }
+    case 'bw': {
+      const flat = flattenIllumination(canvas, false)
+      const thr = Math.min(215, Math.max(120, meanLuma(flat) * 0.82))
+      return mapPixels(flat, (d) => {
+        for (let i = 0; i < d.length; i += 4) {
+          const v = d[i] < thr ? 0 : 255
+          d[i] = d[i + 1] = d[i + 2] = v
+        }
+      })
+    }
+    case 'eco': {
+      const flat = flattenIllumination(canvas, false)
+      const thr = Math.min(215, Math.max(120, meanLuma(flat) * 0.85))
+      return mapPixels(flat, (d) => {
+        for (let i = 0; i < d.length; i += 4) {
+          const v = d[i] < thr ? Math.min(140, d[i] + 70) : 255
+          d[i] = d[i + 1] = d[i + 2] = v
+        }
+      })
+    }
+    case 'nohand': {
+      // keep only strong printed ink; faint pen/pencil marks drop to white
+      const flat = flattenIllumination(canvas, false)
+      const thr = Math.min(160, Math.max(70, meanLuma(flat) * 0.5))
+      return mapPixels(flat, (d) => {
+        for (let i = 0; i < d.length; i += 4) {
+          const v = d[i] < thr ? 0 : 255
+          d[i] = d[i + 1] = d[i + 2] = v
+        }
+      })
+    }
+    default: return canvas
+  }
+}
+
+// Stamp overlay (Reviewed / Approved / Paid) drawn on the top-right corner
+const STAMP_OPTIONS = [
+  { key: '', label: 'No stamp' },
+  { key: 'REVIEWED', label: '✓ Reviewed', color: '#2563eb' },
+  { key: 'APPROVED', label: '✓ Approved', color: '#059669' },
+  { key: 'PAID', label: 'PAID', color: '#dc2626' },
+]
+function drawStamp(canvas, stampKey) {
+  const meta = STAMP_OPTIONS.find(s => s.key === stampKey)
+  if (!meta || !meta.key) return canvas
+  const c = document.createElement('canvas')
+  c.width = canvas.width; c.height = canvas.height
+  const ctx = c.getContext('2d')
+  ctx.drawImage(canvas, 0, 0)
+  const fs = Math.max(18, Math.round(canvas.width / 12))
+  ctx.save()
+  ctx.translate(canvas.width - fs * 3.1, fs * 1.6)
+  ctx.rotate(-0.16)
+  ctx.globalAlpha = 0.8
+  ctx.font = `bold ${fs}px Arial, sans-serif`
+  ctx.textAlign = 'center'
+  const tw = ctx.measureText(meta.key).width
+  ctx.strokeStyle = meta.color
+  ctx.lineWidth = Math.max(2, fs / 9)
+  ctx.strokeRect(-tw / 2 - fs * 0.45, -fs * 0.95, tw + fs * 0.9, fs * 1.45)
+  ctx.fillStyle = meta.color
+  ctx.fillText(meta.key, 0, 0)
+  ctx.restore()
+  return c
+}
+
 // ---------------------------------------------------------------------------
 // Crop editor — image + 4 draggable corner handles over an auto-detected quad
 // ---------------------------------------------------------------------------
 function CropEditor({ dataUrl, onDone, onRetake }) {
   const wrapRef = useRef(null)
   const canvasRef = useRef(null)
-  const imgRef = useRef(null)          // full-res source canvas
-  const [corners, setCorners] = useState(null)   // in IMAGE coordinates
+  const imgRef = useRef(null)
+  const [corners, setCorners] = useState(null)
   const [scale, setScale] = useState(1)
   const [detecting, setDetecting] = useState(true)
   const [cvReady, setCvReady] = useState(false)
   const dragIdx = useRef(-1)
 
-  // Load image → draw preview → auto-detect corners
   useEffect(() => {
     let cancelled = false
     const img = new Image()
@@ -181,14 +400,12 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
       full.width = img.width; full.height = img.height
       full.getContext('2d').drawImage(img, 0, 0)
       imgRef.current = full
-      // preview scale to fit container width (max 640px tall)
       const w = wrapRef.current?.clientWidth || 340
-      const s = Math.min(w / img.width, 520 / img.height, 1)
+      const s = Math.min(w / img.width, 480 / img.height, 1)
       setScale(s)
       const cv2 = canvasRef.current
       cv2.width = Math.round(img.width * s); cv2.height = Math.round(img.height * s)
       cv2.getContext('2d').drawImage(img, 0, 0, cv2.width, cv2.height)
-      // default corners (5% inset) so the UI never blocks on OpenCV
       const inset = 0.05
       const def = [
         { x: img.width * inset, y: img.height * inset },
@@ -201,7 +418,6 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
         const cv = await loadOpenCV()
         if (cancelled) return
         setCvReady(true)
-        // detect on a downscaled copy for speed, then scale points back up
         const small = document.createElement('canvas')
         const ds = Math.min(1, 900 / Math.max(img.width, img.height))
         small.width = Math.round(img.width * ds); small.height = Math.round(img.height * ds)
@@ -235,7 +451,6 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
       if (cvReady && window.cv?.Mat && corners) {
         out = warpPerspective(window.cv, img, orderCorners(corners))
       } else {
-        // fallback: plain bounding-box crop (no perspective correction)
         const xs = corners.map(p => p.x), ys = corners.map(p => p.y)
         const x0 = Math.min(...xs), y0 = Math.min(...ys)
         const w = Math.max(...xs) - x0, h = Math.max(...ys) - y0
@@ -243,7 +458,7 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
         out.width = Math.max(32, w); out.height = Math.max(32, h)
         out.getContext('2d').drawImage(img, x0, y0, w, h, 0, 0, out.width, out.height)
       }
-      onDone(out.toDataURL('image/jpeg', 0.85))
+      onDone(out.toDataURL('image/jpeg', 0.92))
     } catch {
       toast.error('Crop failed — using the full photo instead')
       onDone(dataUrl)
@@ -282,7 +497,129 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
       <div className="flex flex-wrap justify-center gap-2">
         <Button variant="outline" size="sm" onClick={onRetake}><RefreshCw className="h-4 w-4 mr-1.5" /> Retake</Button>
         <Button variant="outline" size="sm" onClick={() => onDone(dataUrl)}>Use full photo</Button>
-        <Button size="sm" onClick={apply} className="bg-emerald-600 hover:bg-emerald-700"><Check className="h-4 w-4 mr-1.5" /> Use this crop</Button>
+        <Button size="sm" onClick={apply} className="bg-emerald-600 hover:bg-emerald-700"><Check className="h-4 w-4 mr-1.5" /> Next: enhance</Button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Enhance panel — filters, rotate, stamp, confirm (per page)
+// ---------------------------------------------------------------------------
+function EnhancePanel({ dataUrl, onDone, onBackToCrop, onRetake }) {
+  const [baseCanvas, setBaseCanvas] = useState(null)   // rotated, full-res
+  const [filter, setFilter] = useState('enhance')
+  const [stamp, setStamp] = useState('')
+  const [previewUrl, setPreviewUrl] = useState('')
+  const [thumbs, setThumbs] = useState({})
+  const [working, setWorking] = useState(true)
+
+  // Load source
+  useEffect(() => {
+    let cancelled = false
+    dataUrlToCanvas(dataUrl).then(c => { if (!cancelled) setBaseCanvas(c) }).catch(() => toast.error('Could not load the scan'))
+    return () => { cancelled = true }
+  }, [dataUrl])
+
+  // Filter thumbnails (small, computed once per rotation)
+  useEffect(() => {
+    if (!baseCanvas) return
+    let cancelled = false
+    const t = setTimeout(() => {
+      const small = scaleCanvas(baseCanvas, 140)
+      const out = {}
+      for (const f of RECEIPT_FILTERS) {
+        try { out[f.key] = applyReceiptFilter(small, f.key).toDataURL('image/jpeg', 0.7) } catch { out[f.key] = small.toDataURL('image/jpeg', 0.7) }
+        if (cancelled) return
+      }
+      if (!cancelled) setThumbs(out)
+    }, 30)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [baseCanvas])
+
+  // Main preview (medium res so filters feel instant)
+  useEffect(() => {
+    if (!baseCanvas) return
+    let cancelled = false
+    setWorking(true)
+    const t = setTimeout(() => {
+      try {
+        const mid = scaleCanvas(baseCanvas, 900)
+        let out = applyReceiptFilter(mid, filter)
+        out = drawStamp(out, stamp)
+        if (!cancelled) setPreviewUrl(out.toDataURL('image/jpeg', 0.85))
+      } catch { if (!cancelled) setPreviewUrl(dataUrl) }
+      if (!cancelled) setWorking(false)
+    }, 30)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [baseCanvas, filter, stamp]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const rotate = (dir) => { if (baseCanvas) setBaseCanvas(rotateCanvas(baseCanvas, dir)) }
+
+  const confirm = () => {
+    if (!baseCanvas) return
+    setWorking(true)
+    setTimeout(() => {
+      try {
+        let out = applyReceiptFilter(baseCanvas, filter)   // FULL resolution
+        out = drawStamp(out, stamp)
+        onDone(out.toDataURL('image/jpeg', 0.88))
+      } catch {
+        toast.error('Enhancement failed — keeping the plain scan')
+        onDone(dataUrl)
+      }
+    }, 30)
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="relative mx-auto w-fit max-w-full">
+        {previewUrl
+          ? <img src={previewUrl} alt="preview" className="max-h-[380px] max-w-full rounded-lg border shadow-sm bg-slate-50" />
+          : <div className="h-64 w-48 rounded-lg border bg-slate-50" />}
+        {working && (
+          <div className="absolute inset-0 bg-black/30 rounded-lg flex items-center justify-center">
+            <Loader2 className="h-6 w-6 animate-spin text-white" />
+          </div>
+        )}
+      </div>
+
+      {/* Filter strip */}
+      <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+        {RECEIPT_FILTERS.map(f => (
+          <button key={f.key} type="button" onClick={() => setFilter(f.key)}
+            className={`shrink-0 rounded-lg border-2 p-1 transition ${filter === f.key ? 'border-emerald-500 bg-emerald-50' : 'border-transparent hover:border-slate-300'}`}>
+            {thumbs[f.key]
+              ? <img src={thumbs[f.key]} alt={f.label} className="h-14 w-12 object-cover rounded" />
+              : <div className="h-14 w-12 rounded bg-slate-100 flex items-center justify-center text-lg">{f.emoji}</div>}
+            <p className="text-[9px] font-semibold text-center mt-0.5 w-12 leading-tight">{f.label}</p>
+          </button>
+        ))}
+      </div>
+
+      {/* Rotate + stamp */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex gap-1.5">
+          <Button variant="outline" size="sm" onClick={() => rotate(-1)} title="Rotate left"><RotateCcw className="h-4 w-4" /></Button>
+          <Button variant="outline" size="sm" onClick={() => rotate(1)} title="Rotate right"><RotateCw className="h-4 w-4" /></Button>
+        </div>
+        <div className="flex gap-1.5 flex-wrap">
+          {STAMP_OPTIONS.map(s => (
+            <button key={s.key} type="button" onClick={() => setStamp(s.key)}
+              className={`text-[11px] font-bold rounded-full border px-2.5 py-1 transition ${stamp === s.key ? 'ring-2 ring-emerald-400 ring-offset-1' : ''}`}
+              style={s.key ? { color: s.color, borderColor: s.color } : {}}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap justify-center gap-2 pt-1">
+        <Button variant="outline" size="sm" onClick={onRetake}><RefreshCw className="h-4 w-4 mr-1.5" /> Retake</Button>
+        <Button variant="outline" size="sm" onClick={onBackToCrop}>✂️ Crop</Button>
+        <Button size="sm" onClick={confirm} disabled={working} className="bg-emerald-600 hover:bg-emerald-700">
+          <Check className="h-4 w-4 mr-1.5" /> Keep this page
+        </Button>
       </div>
     </div>
   )
@@ -303,7 +640,7 @@ async function addReceiptToPdf(pdfDoc, r, helv) {
       const pages = await pdfDoc.copyPages(src, src.getPageIndices())
       pages.forEach(p => pdfDoc.addPage(p))
       return
-    } catch { /* fall through to a text page */ }
+    } catch { /* fall through */ }
   }
   if (r.hasFile && r.fileUrl && r.fileType === 'image') {
     try {
@@ -318,9 +655,8 @@ async function addReceiptToPdf(pdfDoc, r, helv) {
       page.drawImage(img, { x: (A4.w - w) / 2, y: A4.h - margin - h, width: w, height: h })
       page.drawText(caption.slice(0, 110), { x: margin, y: margin - 6, size: 10, font: helv })
       return
-    } catch { /* fall through to a text page */ }
+    } catch { /* fall through */ }
   }
-  // Details-only record (or the file couldn't be fetched)
   const page = pdfDoc.addPage([A4.w, A4.h])
   let y = A4.h - 90
   page.drawText('Receipt record (no image)', { x: 50, y, size: 18, font: helv }); y -= 40
@@ -343,6 +679,20 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 4000)
 }
 
+// Build a multi-page PDF from scanned page images (client-side)
+async function pagesToPdfDataUrl(pages) {
+  const { PDFDocument } = await import('pdf-lib')
+  const doc = await PDFDocument.create()
+  for (const p of pages) {
+    const bytes = await (await window.fetch(p)).arrayBuffer()
+    const img = await doc.embedJpg(bytes)
+    const page = doc.addPage([img.width, img.height])
+    page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height })
+  }
+  const b64 = await doc.saveAsBase64()
+  return `data:application/pdf;base64,${b64}`
+}
+
 // ---------------------------------------------------------------------------
 // Main view
 // ---------------------------------------------------------------------------
@@ -351,15 +701,19 @@ export function ReceiptsView({ currency }) {
   const [receipts, setReceipts] = useState([])
   const [loading, setLoading] = useState(true)
   const [statusFilter, setStatusFilter] = useState('all')
+  const [query, setQuery] = useState('')
   const [migrationMsg, setMigrationMsg] = useState('')
 
   // Add flow
   const [addOpen, setAddOpen] = useState(false)
-  const [step, setStep] = useState('source')        // source | crop | details
+  const [step, setStep] = useState('source')        // source | crop | enhance | details
   const [rawImage, setRawImage] = useState('')       // pre-crop dataUrl
-  const [finalFile, setFinalFile] = useState('')     // dataUrl to upload ('' = details only)
-  const [finalType, setFinalType] = useState('')     // 'image' | 'pdf' | ''
+  const [croppedImage, setCroppedImage] = useState('') // post-crop, pre-enhance
+  const [pages, setPages] = useState([])             // finished page dataUrls
+  const [pdfFile, setPdfFile] = useState('')         // uploaded PDF dataUrl
   const [aiBusy, setAiBusy] = useState(false)
+  const [ocrBusy, setOcrBusy] = useState(false)
+  const [ocrText, setOcrText] = useState('')
   const [saving, setSaving] = useState(false)
   const blankDetails = { supplier: '', receiptDate: todayStr(), amount: '', currency: currency || 'GBP', status: 'pending', color: '', notes: '' }
   const [details, setDetails] = useState(blankDetails)
@@ -368,6 +722,7 @@ export function ReceiptsView({ currency }) {
   const [viewing, setViewing] = useState(null)
   const [editForm, setEditForm] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [viewOcrBusy, setViewOcrBusy] = useState(false)
 
   // Export flow
   const [exportOpen, setExportOpen] = useState(false)
@@ -390,10 +745,36 @@ export function ReceiptsView({ currency }) {
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filtered = useMemo(() => statusFilter === 'all' ? receipts : receipts.filter(r => r.status === statusFilter), [receipts, statusFilter])
+  const filtered = useMemo(() => {
+    let list = statusFilter === 'all' ? receipts : receipts.filter(r => r.status === statusFilter)
+    const q = query.trim().toLowerCase()
+    if (q) list = list.filter(r => `${r.supplier} ${r.notes} ${r.ocrText || ''}`.toLowerCase().includes(q))
+    return list
+  }, [receipts, statusFilter, query])
+
+  // ---- Monthly totals (this month + last month + per-supplier) ----
+  const totals = useMemo(() => {
+    const now = new Date()
+    const ym = (d) => (d || '').slice(0, 7)
+    const thisM = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+    const lastM = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}`
+    const sum = (list) => list.reduce((a, r) => a + (Number(r.amount) || 0), 0)
+    const ofMonth = (m) => receipts.filter(r => ym(r.receiptDate || (r.createdAt || '')) === m)
+    const cur = ofMonth(thisM)
+    const bySupplier = {}
+    for (const r of cur) {
+      const k = r.supplier || 'Unknown'
+      bySupplier[k] = (bySupplier[k] || 0) + (Number(r.amount) || 0)
+    }
+    const top = Object.entries(bySupplier).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, 4)
+    return { thisTotal: sum(cur), thisCount: cur.length, lastTotal: sum(ofMonth(lastM)), top,
+      monthLabel: now.toLocaleDateString('en-GB', { month: 'long' }), lastLabel: prev.toLocaleDateString('en-GB', { month: 'long' }) }
+  }, [receipts])
 
   // ---- Add flow handlers ----
-  const openAdd = () => { setStep('source'); setRawImage(''); setFinalFile(''); setFinalType(''); setDetails({ ...blankDetails, currency: currency || 'GBP' }); setAddOpen(true) }
+  const resetAdd = () => { setStep('source'); setRawImage(''); setCroppedImage(''); setPages([]); setPdfFile(''); setOcrText(''); setDetails({ ...blankDetails, currency: currency || 'GBP' }) }
+  const openAdd = () => { resetAdd(); setAddOpen(true) }
   const onImagePicked = async (file) => {
     if (!file) return
     try {
@@ -407,16 +788,20 @@ export function ReceiptsView({ currency }) {
     try {
       const dataUrl = await fileToDataUrl(file)
       if (!String(dataUrl).startsWith('data:application/pdf')) { toast.error('That file is not a PDF'); return }
-      setFinalFile(dataUrl); setFinalType('pdf'); setStep('details')
+      setPdfFile(dataUrl); setStep('details')
     } catch (e) { toast.error(e.message) }
   }
-  const onCropped = async (dataUrl) => {
-    setFinalFile(dataUrl); setFinalType('image'); setStep('details')
-    // AI reads supplier/date/total automatically
+  const onCropped = (dataUrl) => { setCroppedImage(dataUrl); setStep('enhance') }
+  const onPageDone = async (pageUrl) => {
+    const isFirst = pages.length === 0
+    setPages(prev => [...prev, pageUrl])
+    setStep('details')
+    if (!isFirst) return
+    // AI reads the FIRST page's details automatically
     setAiBusy(true)
     try {
       const res = await fetch('/api/receipts/ai-extract', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataUrl }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataUrl: pageUrl }),
       })
       const d = await res.json().catch(() => ({}))
       if (res.ok) {
@@ -429,27 +814,56 @@ export function ReceiptsView({ currency }) {
         }))
         if (d.supplier || d.total != null) toast.success('AI read the receipt — check the details below')
       }
-    } catch { /* silent; manual entry still works */ } finally { setAiBusy(false) }
+    } catch { /* silent */ } finally { setAiBusy(false) }
   }
+  const movePage = (i, dir) => {
+    setPages(prev => {
+      const next = [...prev]
+      const j = i + dir
+      if (j < 0 || j >= next.length) return prev
+      ;[next[i], next[j]] = [next[j], next[i]]
+      return next
+    })
+  }
+  const removePage = (i) => setPages(prev => prev.filter((_, idx) => idx !== i))
+
+  const runOcr = async () => {
+    if (!pages.length) return
+    setOcrBusy(true)
+    try {
+      const res = await fetch('/api/receipts/ocr', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataUrl: pages[0] }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'OCR failed')
+      setOcrText(d.text || '')
+      toast.success(d.text ? 'Text extracted — receipts are now searchable by content' : 'No readable text found')
+    } catch (e) { toast.error(e.message) } finally { setOcrBusy(false) }
+  }
+
   const saveNew = async () => {
-    if (!finalFile && !details.supplier.trim() && details.amount === '') {
-      toast.error('Add a photo/PDF, or at least a supplier name or amount'); return
+    if (!pages.length && !pdfFile && !details.supplier.trim() && details.amount === '') {
+      toast.error('Add a scan/PDF, or at least a supplier name or amount'); return
     }
     setSaving(true)
     try {
+      let dataUrl
+      if (pdfFile) dataUrl = pdfFile
+      else if (pages.length > 1) dataUrl = await pagesToPdfDataUrl(pages)
+      else if (pages.length === 1) dataUrl = pages[0]
       const res = await fetch('/api/receipts', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataUrl: finalFile || undefined, ...details, amount: details.amount === '' ? null : Number(details.amount) }),
+        body: JSON.stringify({ dataUrl, ...details, amount: details.amount === '' ? null : Number(details.amount), ocrText }),
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d.error || 'Could not save the receipt')
       setReceipts(prev => [d, ...prev])
       setAddOpen(false)
-      toast.success('Receipt saved 🧾')
+      toast.success(pages.length > 1 ? `Receipt saved (${pages.length} pages) 🧾` : 'Receipt saved 🧾')
     } catch (e) { toast.error(e.message) } finally { setSaving(false) }
   }
 
-  // ---- Edit / delete ----
+  // ---- Edit / delete / OCR on existing ----
   const openView = (r) => { setViewing(r); setEditForm({ supplier: r.supplier, receiptDate: r.receiptDate || '', amount: r.amount != null ? String(r.amount) : '', status: r.status, color: r.color, notes: r.notes }) }
   const saveEdit = async () => {
     setBusy(true)
@@ -476,6 +890,26 @@ export function ReceiptsView({ currency }) {
       toast.success('Receipt deleted')
     } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
+  const ocrExisting = async () => {
+    if (!viewing?.fileUrl) return
+    setViewOcrBusy(true)
+    try {
+      const res = await fetch('/api/receipts/ocr', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: viewing.fileUrl }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'OCR failed')
+      const put = await fetch(`/api/receipts/${viewing.id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ocrText: d.text || '' }),
+      })
+      const upd = await put.json().catch(() => ({}))
+      if (put.ok) {
+        setReceipts(prev => prev.map(x => x.id === upd.id ? upd : x))
+        setViewing(v => v ? { ...v, ocrText: d.text || '' } : v)
+      }
+      toast.success(d.text ? 'Text extracted and saved' : 'No readable text found')
+    } catch (e) { toast.error(e.message) } finally { setViewOcrBusy(false) }
+  }
 
   // ---- Export ----
   const setQuickRange = (kind) => {
@@ -483,7 +917,7 @@ export function ReceiptsView({ currency }) {
     const iso = (d) => d.toISOString().slice(0, 10)
     if (kind === 'today') { setExpFrom(iso(now)); setExpTo(iso(now)) }
     if (kind === 'week') {
-      const day = (now.getDay() + 6) % 7 // Monday start
+      const day = (now.getDay() + 6) % 7
       const mon = new Date(now); mon.setDate(now.getDate() - day)
       setExpFrom(iso(mon)); setExpTo(iso(now))
     }
@@ -552,19 +986,47 @@ export function ReceiptsView({ currency }) {
       </div>
 
       {migrationMsg && (
-        <div className="text-sm bg-amber-50 border border-amber-300 text-amber-900 rounded-lg p-3">
-          ⚠️ {migrationMsg}
+        <div className="text-sm bg-amber-50 border border-amber-300 text-amber-900 rounded-lg p-3">⚠️ {migrationMsg}</div>
+      )}
+
+      {/* ---- MONTHLY TOTALS ---- */}
+      {receipts.length > 0 && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2.5">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">{totals.monthLabel} total</p>
+            <p className="text-lg font-bold text-emerald-900">{sym}{totals.thisTotal.toFixed(2)}</p>
+            <p className="text-[10px] text-emerald-700">{totals.thisCount} receipt{totals.thisCount === 1 ? '' : 's'}</p>
+          </div>
+          <div className="bg-slate-50 border rounded-xl px-3 py-2.5">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{totals.lastLabel} total</p>
+            <p className="text-lg font-bold text-slate-800">{sym}{totals.lastTotal.toFixed(2)}</p>
+            <p className="text-[10px] text-slate-500">{totals.thisTotal > totals.lastTotal ? '▲' : totals.thisTotal < totals.lastTotal ? '▼' : '—'} vs {totals.monthLabel}</p>
+          </div>
+          <div className="col-span-2 bg-white border rounded-xl px-3 py-2.5">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Top suppliers · {totals.monthLabel}</p>
+            {totals.top.length ? (
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {totals.top.map(([name, amt]) => (
+                  <span key={name} className="text-[11px] font-semibold bg-slate-100 rounded-full px-2 py-0.5">{name} <b className="text-emerald-700">{sym}{amt.toFixed(2)}</b></span>
+                ))}
+              </div>
+            ) : <p className="text-xs text-muted-foreground mt-1">No amounts recorded this month yet</p>}
+          </div>
         </div>
       )}
 
-      {/* Status filter chips */}
-      <div className="flex flex-wrap gap-1.5">
+      {/* Filters + search */}
+      <div className="flex flex-wrap items-center gap-1.5">
         {[{ key: 'all', label: `All (${receipts.length})` }, ...STATUS_OPTIONS.map(s => ({ key: s.key, label: `${s.label} (${receipts.filter(r => r.status === s.key).length})` }))].map(f => (
           <button key={f.key} onClick={() => setStatusFilter(f.key)}
             className={`text-xs font-semibold rounded-full px-3 py-1.5 border transition ${statusFilter === f.key ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white hover:border-emerald-400'}`}>
             {f.label}
           </button>
         ))}
+        <div className="relative flex-1 min-w-[140px] max-w-[260px] ml-auto">
+          <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+          <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search supplier, notes, text…" className="h-8 pl-8 text-xs" />
+        </div>
       </div>
 
       {/* List */}
@@ -573,8 +1035,8 @@ export function ReceiptsView({ currency }) {
       ) : !filtered.length ? (
         <Card><CardContent className="py-12 text-center text-muted-foreground">
           <ReceiptText className="h-10 w-10 mx-auto mb-2 opacity-30" />
-          <p className="font-medium">No receipts yet</p>
-          <p className="text-xs mt-1">Tap "Scan receipt" when a delivery arrives — no more paper piles for finance.</p>
+          <p className="font-medium">{receipts.length ? 'No receipts match' : 'No receipts yet'}</p>
+          <p className="text-xs mt-1">{receipts.length ? 'Try a different filter or search' : 'Tap "Scan receipt" when a delivery arrives — no more paper piles for finance.'}</p>
         </CardContent></Card>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -594,6 +1056,7 @@ export function ReceiptsView({ currency }) {
                   <p className="text-xs text-muted-foreground">{fmtD(r.receiptDate)}{r.amount != null ? ` · ${CURRENCY_SYMBOL[r.currency] || sym}${Number(r.amount).toFixed(2)}` : ''}</p>
                   <div className="flex items-center gap-1.5 mt-1">
                     <span className={`text-[10px] font-bold rounded-full border px-1.5 py-0.5 ${statusMeta(r.status).cls}`}>{statusMeta(r.status).label}</span>
+                    {r.ocrText ? <span className="text-[10px] text-slate-400" title="Text extracted">🔍</span> : null}
                     {r.addedBy && <span className="text-[10px] text-slate-400 truncate">👤 {r.addedBy}</span>}
                   </div>
                 </div>
@@ -607,7 +1070,10 @@ export function ReceiptsView({ currency }) {
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="sm:max-w-[640px] max-h-[92vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><ReceiptText className="h-5 w-5 text-emerald-600" /> Add receipt</DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              <ReceiptText className="h-5 w-5 text-emerald-600" /> Add receipt
+              {pages.length > 0 && <span className="text-xs font-bold bg-emerald-100 text-emerald-800 rounded-full px-2 py-0.5">{pages.length} page{pages.length === 1 ? '' : 's'}</span>}
+            </DialogTitle>
           </DialogHeader>
 
           {step === 'source' && (
@@ -618,7 +1084,7 @@ export function ReceiptsView({ currency }) {
                   <div className="border-2 border-dashed border-emerald-300 rounded-xl p-5 hover:border-emerald-500 hover:bg-emerald-50/40 transition cursor-pointer text-center h-full">
                     <div className="text-4xl mb-1">📷</div>
                     <p className="font-semibold text-sm">Take photo</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">Auto edge-detect & straighten</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Auto edge-detect, deskew & enhance</p>
                   </div>
                 </label>
                 <label className="block">
@@ -629,21 +1095,28 @@ export function ReceiptsView({ currency }) {
                     <p className="text-xs text-muted-foreground mt-0.5">An existing photo of the receipt</p>
                   </div>
                 </label>
-                <label className="block">
-                  <input type="file" accept="application/pdf" className="hidden" onChange={e => { onPdfPicked(e.target.files?.[0]); e.target.value = '' }} />
-                  <div className="border-2 border-dashed border-purple-300 rounded-xl p-5 hover:border-purple-500 hover:bg-purple-50/40 transition cursor-pointer text-center h-full">
-                    <div className="text-4xl mb-1">📄</div>
-                    <p className="font-semibold text-sm">Upload PDF</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">Digital invoice / emailed receipt</p>
-                  </div>
-                </label>
-                <button type="button" onClick={() => { setFinalFile(''); setFinalType(''); setStep('details') }}
-                  className="border-2 border-dashed border-slate-300 rounded-xl p-5 hover:border-slate-500 hover:bg-slate-50 transition text-center h-full">
-                  <div className="text-4xl mb-1">✍️</div>
-                  <p className="font-semibold text-sm">Details only</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">Damaged / missing receipt — record it anyway</p>
-                </button>
+                {pages.length === 0 && (
+                  <>
+                    <label className="block">
+                      <input type="file" accept="application/pdf" className="hidden" onChange={e => { onPdfPicked(e.target.files?.[0]); e.target.value = '' }} />
+                      <div className="border-2 border-dashed border-purple-300 rounded-xl p-5 hover:border-purple-500 hover:bg-purple-50/40 transition cursor-pointer text-center h-full">
+                        <div className="text-4xl mb-1">📄</div>
+                        <p className="font-semibold text-sm">Upload PDF</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">Digital invoice / emailed receipt</p>
+                      </div>
+                    </label>
+                    <button type="button" onClick={() => { setStep('details') }}
+                      className="border-2 border-dashed border-slate-300 rounded-xl p-5 hover:border-slate-500 hover:bg-slate-50 transition text-center h-full">
+                      <div className="text-4xl mb-1">✍️</div>
+                      <p className="font-semibold text-sm">Details only</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Damaged / missing receipt — record it anyway</p>
+                    </button>
+                  </>
+                )}
               </div>
+              {pages.length > 0 && (
+                <Button variant="ghost" className="w-full" onClick={() => setStep('details')}><ArrowLeft className="h-4 w-4 mr-1.5" /> Back to details ({pages.length} page{pages.length === 1 ? '' : 's'} kept)</Button>
+              )}
             </div>
           )}
 
@@ -651,19 +1124,48 @@ export function ReceiptsView({ currency }) {
             <CropEditor dataUrl={rawImage} onDone={onCropped} onRetake={() => setStep('source')} />
           )}
 
+          {step === 'enhance' && croppedImage && (
+            <EnhancePanel dataUrl={croppedImage} onDone={onPageDone} onBackToCrop={() => setStep('crop')} onRetake={() => setStep('source')} />
+          )}
+
           {step === 'details' && (
             <div className="space-y-3 py-1">
-              {finalFile && finalType === 'image' && (
-                <div className="flex items-start gap-3">
-                  <img src={finalFile} alt="receipt" className="h-28 w-24 object-cover rounded-lg border shadow-sm" />
-                  <div className="text-xs text-muted-foreground pt-1">
-                    {aiBusy ? <span className="inline-flex items-center gap-1.5 text-emerald-700 font-medium"><Loader2 className="h-3.5 w-3.5 animate-spin" /> AI is reading the receipt…</span>
-                      : <span className="inline-flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 text-emerald-600" /> Check the AI-filled details below</span>}
-                    <button type="button" onClick={() => setStep('crop')} className="block mt-2 underline underline-offset-2 hover:text-slate-700">Adjust crop</button>
+              {/* Page strip — counter, reorder, remove, add */}
+              {pages.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {pages.map((p, i) => (
+                      <div key={i} className="shrink-0 relative group">
+                        <img src={p} alt={`page ${i + 1}`} className="h-24 w-20 object-cover rounded-lg border shadow-sm" />
+                        <span className="absolute top-1 left-1 text-[9px] font-bold bg-black/60 text-white rounded px-1">{i + 1}/{pages.length}</span>
+                        <div className="absolute bottom-1 inset-x-1 flex justify-between">
+                          <button type="button" onClick={() => movePage(i, -1)} disabled={i === 0} className="h-5 w-5 rounded bg-white/90 border text-[10px] disabled:opacity-30 flex items-center justify-center"><ArrowLeft className="h-3 w-3" /></button>
+                          <button type="button" onClick={() => removePage(i)} className="h-5 w-5 rounded bg-white/90 border text-red-500 flex items-center justify-center"><X className="h-3 w-3" /></button>
+                          <button type="button" onClick={() => movePage(i, 1)} disabled={i === pages.length - 1} className="h-5 w-5 rounded bg-white/90 border text-[10px] disabled:opacity-30 flex items-center justify-center"><ArrowRight className="h-3 w-3" /></button>
+                        </div>
+                      </div>
+                    ))}
+                    <button type="button" onClick={() => setStep('source')} className="shrink-0 h-24 w-20 rounded-lg border-2 border-dashed border-emerald-300 hover:border-emerald-500 hover:bg-emerald-50/40 flex flex-col items-center justify-center text-emerald-700">
+                      <span className="text-xl leading-none">＋</span>
+                      <span className="text-[10px] font-semibold mt-0.5">Add page</span>
+                    </button>
                   </div>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    {aiBusy ? <span className="inline-flex items-center gap-1.5 text-emerald-700 font-medium"><Loader2 className="h-3.5 w-3.5 animate-spin" /> AI is reading the receipt…</span>
+                      : <span className="inline-flex items-center gap-1.5"><Sparkles className="h-3.5 w-3.5 text-emerald-600" /> Check the AI-filled details</span>}
+                    <button type="button" onClick={runOcr} disabled={ocrBusy} className="ml-auto inline-flex items-center gap-1 text-emerald-700 font-semibold underline-offset-2 hover:underline disabled:opacity-50">
+                      {ocrBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ScanText className="h-3.5 w-3.5" />} {ocrText ? 'Re-extract text' : 'Extract text (OCR)'}
+                    </button>
+                  </div>
+                  {ocrText && (
+                    <details className="bg-slate-50 border rounded-lg px-3 py-2 text-xs">
+                      <summary className="font-semibold cursor-pointer">🔍 Extracted text (saved with the receipt)</summary>
+                      <pre className="mt-1.5 whitespace-pre-wrap max-h-32 overflow-y-auto text-[11px] text-slate-600">{ocrText}</pre>
+                    </details>
+                  )}
                 </div>
               )}
-              {finalFile && finalType === 'pdf' && (
+              {pdfFile && (
                 <p className="text-xs bg-purple-50 border border-purple-200 text-purple-900 rounded-lg px-3 py-2">📄 PDF attached — fill in the details below</p>
               )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -732,6 +1234,18 @@ export function ReceiptsView({ currency }) {
                 <a href={viewing.fileUrl} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 border-2 border-dashed border-purple-300 rounded-xl py-6 text-purple-700 font-semibold text-sm hover:bg-purple-50">
                   <FileText className="h-5 w-5" /> Open PDF receipt
                 </a>
+              )}
+              {viewing.hasFile && viewing.fileType === 'image' && (
+                viewing.ocrText ? (
+                  <details className="bg-slate-50 border rounded-lg px-3 py-2 text-xs">
+                    <summary className="font-semibold cursor-pointer">🔍 Extracted text</summary>
+                    <pre className="mt-1.5 whitespace-pre-wrap max-h-36 overflow-y-auto text-[11px] text-slate-600">{viewing.ocrText}</pre>
+                  </details>
+                ) : (
+                  <Button variant="outline" size="sm" onClick={ocrExisting} disabled={viewOcrBusy} className="w-full">
+                    {viewOcrBusy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <ScanText className="h-4 w-4 mr-2" />} Extract text (OCR) — makes this receipt searchable
+                  </Button>
+                )
               )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
