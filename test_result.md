@@ -5184,3 +5184,16 @@ frontend:
         - working: true
           agent: "main"
           comment: "User's iPhone: flatten-based filters (Enhance/Shadow/B&W/Eco) blank-white while Magic/Lighten/Grayscale fine -> Safari REFLECTS ctx.filter but silently doesn't apply it, defeating property-based feature detection. Fix: removed ctx.filter usage entirely; flattenIllumination now ALWAYS uses portableBlur (works identically everywhere). Also B&W/Eco threshold rewritten: lumaMedian-16 (median robust vs dark table borders; old mean*0.82 and mean-k*std both wiped faint pencil). VERIFIED: synthetic faint handwritten note (202 vs 238 paper, dark table bg) -> B&W preview shows all 6 text lines preserved on clean white; edge detect + deskew still working (1.1s). USER MUST REDEPLOY."
+
+frontend:
+  - task: "Scanner quality rebuild: robust detection + loud warp fallback + CamScanner-grade filters"
+    implemented: true
+    working: true
+    file: "components/shelfwise/receipts.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "User: detection fails on real docs, manual crop still skewed, Enhance worse than original, blurry thumbs. Fixes: (1) worker detect rewritten multi-strategy (Canny 50/150 + Canny 25/80 + Otsu, convexHull, approxPolyDP eps 0.02..0.08, top-5 contours, minArea 8%); (2) warp: source pre-downscaled to 1600px, 15s budget, and fallback-to-simple-crop is now a VISIBLE toast with reason (was silent -> user saw skew with no warning); (3) filters rebuilt with new helpers lumaPercentilesOf/stretchLevels(LUT)/unsharp/whiteBalance: enhance = flatten->percentile stretch (p1..median->5..252)->unsharp 0.85; magic = whiteBalance->stretch->saturation 1.3->sharpen; shadow = flatten+gentle stretch; grayscale = gray+stretch+sharpen; (4) thumbnails 140->280px. VERIFIED on realistic synthetic photo (angled receipt, wood table, lighting gradient, noise): detection matched ground truth corners, page straightened upright, Enhance = crisp dark text on white. USER MUST REDEPLOY."

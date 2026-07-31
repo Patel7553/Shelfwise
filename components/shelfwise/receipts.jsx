@@ -77,38 +77,68 @@ function orderCorners(pts) {
   const tr = byDiff[0], bl = byDiff[3];
   return [tl, tr, br, bl];
 }
-function detect(imageData) {
+function findQuad(edges, imgArea) {
   const cv = self.cv;
-  let src, gray, blur, edges, kernel, contours, hierarchy;
-  try {
-    src = cv.matFromImageData(imageData);
-    gray = new cv.Mat(); blur = new cv.Mat(); edges = new cv.Mat();
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-    cv.Canny(blur, edges, 60, 180);
-    kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-    cv.dilate(edges, edges, kernel);
-    contours = new cv.MatVector(); hierarchy = new cv.Mat();
-    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-    const minArea = imageData.width * imageData.height * 0.15;
-    let best = null, bestArea = 0;
-    for (let i = 0; i < contours.size(); i++) {
-      const c = contours.get(i);
-      const area = cv.contourArea(c);
-      if (area < minArea || area <= bestArea) { c.delete(); continue; }
-      const peri = cv.arcLength(c, true);
+  const contours = new cv.MatVector(), hierarchy = new cv.Mat();
+  cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  const cands = [];
+  for (let i = 0; i < contours.size(); i++) {
+    const c = contours.get(i);
+    const area = cv.contourArea(c);
+    if (area >= imgArea * 0.08) cands.push({ c: c, area: area }); else c.delete();
+  }
+  cands.sort(function (a, b) { return b.area - a.area; });
+  let result = null;
+  for (let k = 0; k < Math.min(5, cands.length) && !result; k++) {
+    const hull = new cv.Mat();
+    cv.convexHull(cands[k].c, hull);
+    const peri = cv.arcLength(hull, true);
+    const epsList = [0.02, 0.035, 0.05, 0.08];
+    for (let e = 0; e < epsList.length; e++) {
       const approx = new cv.Mat();
-      cv.approxPolyDP(c, approx, 0.02 * peri, true);
+      cv.approxPolyDP(hull, approx, epsList[e] * peri, true);
       if (approx.rows === 4) {
         const pts = [];
         for (let j = 0; j < 4; j++) pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] });
-        best = pts; bestArea = area;
+        approx.delete();
+        result = pts;
+        break;
       }
-      approx.delete(); c.delete();
+      approx.delete();
     }
-    return best ? orderCorners(best) : null;
+    hull.delete();
+  }
+  for (let k = 0; k < cands.length; k++) cands[k].c.delete();
+  contours.delete(); hierarchy.delete();
+  return result;
+}
+function detect(imageData) {
+  const cv = self.cv;
+  const imgArea = imageData.width * imageData.height;
+  let src, gray, blur, kernel;
+  try {
+    src = cv.matFromImageData(imageData);
+    gray = new cv.Mat(); blur = new cv.Mat();
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+    // Several strategies — real photos vary hugely in lighting/contrast
+    const attempts = [
+      function (edges) { cv.Canny(blur, edges, 50, 150); },
+      function (edges) { cv.Canny(blur, edges, 25, 80); },
+      function (edges) { cv.threshold(blur, edges, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU); },
+    ];
+    for (let a = 0; a < attempts.length; a++) {
+      const edges = new cv.Mat();
+      attempts[a](edges);
+      cv.dilate(edges, edges, kernel);
+      const quad = findQuad(edges, imgArea);
+      edges.delete();
+      if (quad) return orderCorners(quad);
+    }
+    return null;
   } finally {
-    [src, gray, blur, edges, kernel, contours, hierarchy].forEach(function (m) { try { m && m.delete(); } catch (e) {} });
+    [src, gray, blur, kernel].forEach(function (m) { try { m && m.delete(); } catch (e) {} });
   }
 }
 function dist2(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
@@ -402,6 +432,66 @@ function autoLevels(canvas) {
   })
 }
 
+// Brightness values at the given percentiles (0-100), from a small sample.
+function lumaPercentilesOf(canvas, pcts) {
+  const s = scaleCanvas(canvas, 200)
+  const d = s.getContext('2d').getImageData(0, 0, s.width, s.height).data
+  const hist = new Array(256).fill(0)
+  const n = d.length / 4
+  for (let i = 0; i < d.length; i += 4) {
+    hist[Math.min(255, Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]))]++
+  }
+  return pcts.map(p => {
+    const target = n * p / 100
+    let acc = 0
+    for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= target) return v }
+    return 255
+  })
+}
+
+// Linear contrast stretch through a lookup table: [lo..hi] -> [outLo..outHi].
+// This is what makes a scan look "scanned" — ink towards black, paper to white.
+function stretchLevels(canvas, lo, hi, outLo = 10, outHi = 251) {
+  const lut = new Uint8ClampedArray(256)
+  const range = Math.max(8, hi - lo)
+  for (let v = 0; v < 256; v++) lut[v] = Math.max(0, Math.min(255, outLo + ((v - lo) * (outHi - outLo)) / range))
+  return mapPixels(canvas, (d) => {
+    for (let i = 0; i < d.length; i += 4) { d[i] = lut[d[i]]; d[i + 1] = lut[d[i + 1]]; d[i + 2] = lut[d[i + 2]] }
+  })
+}
+
+// Unsharp mask — sharpens text edges (the core of CamScanner's crispness).
+function unsharp(canvas, radius = 2, amount = 0.8) {
+  const blur = portableBlur(canvas, Math.max(2, radius))
+  const bd = blur.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data
+  return mapPixels(canvas, (d) => {
+    for (let i = 0; i < d.length; i += 4) {
+      d[i] = Math.max(0, Math.min(255, d[i] + amount * (d[i] - bd[i])))
+      d[i + 1] = Math.max(0, Math.min(255, d[i + 1] + amount * (d[i + 1] - bd[i + 1])))
+      d[i + 2] = Math.max(0, Math.min(255, d[i + 2] + amount * (d[i + 2] - bd[i + 2])))
+    }
+  })
+}
+
+// Neutralise colour cast: assume the paper is the median tone per channel and
+// scale each channel so the paper becomes near-white.
+function whiteBalance(canvas) {
+  const s = scaleCanvas(canvas, 200)
+  const d = s.getContext('2d').getImageData(0, 0, s.width, s.height).data
+  const hists = [new Array(256).fill(0), new Array(256).fill(0), new Array(256).fill(0)]
+  const n = d.length / 4
+  for (let i = 0; i < d.length; i += 4) { hists[0][d[i]]++; hists[1][d[i + 1]]++; hists[2][d[i + 2]]++ }
+  const med = hists.map(h => { let acc = 0; for (let v = 0; v < 256; v++) { acc += h[v]; if (acc >= n / 2) return v } return 255 })
+  const f = med.map(m => Math.max(0.85, Math.min(1.7, 245 / Math.max(60, m))))
+  return mapPixels(canvas, (dd) => {
+    for (let i = 0; i < dd.length; i += 4) {
+      dd[i] = Math.min(255, dd[i] * f[0])
+      dd[i + 1] = Math.min(255, dd[i + 1] * f[1])
+      dd[i + 2] = Math.min(255, dd[i + 2] * f[2])
+    }
+  })
+}
+
 export const RECEIPT_FILTERS = [
   { key: 'enhance', label: 'Enhance', emoji: '✨', hint: 'Recommended' },
   { key: 'original', label: 'Original', emoji: '🎞️', hint: 'True colour' },
@@ -417,13 +507,16 @@ export const RECEIPT_FILTERS = [
 function applyReceiptFilter(canvas, key) {
   switch (key) {
     case 'original': return canvas
-    case 'grayscale':
-      return mapPixels(canvas, (d) => {
+    case 'grayscale': {
+      const g = mapPixels(canvas, (d) => {
         for (let i = 0; i < d.length; i += 4) {
           const y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
           d[i] = d[i + 1] = d[i + 2] = y
         }
       })
+      const [p2, p90] = lumaPercentilesOf(g, [2, 90])
+      return unsharp(stretchLevels(g, Math.min(p2, p90 - 40), Math.max(p90, p2 + 40), 5, 250), 2, 0.5)
+    }
     case 'lighten':
       return mapPixels(canvas, (d) => {
         for (let i = 0; i < d.length; i += 4) {
@@ -432,20 +525,35 @@ function applyReceiptFilter(canvas, key) {
           d[i + 2] = 255 * Math.pow(d[i + 2] / 255, 0.62)
         }
       })
-    case 'shadow':
-      return flattenIllumination(canvas, true)
-    case 'magic':
-      return autoLevels(canvas)
-    case 'enhance': {
-      // shadow-flatten + gentle contrast stretch = crisp, finance-ready scan
+    case 'shadow': {
+      // Even out lighting but stay natural: flatten + gentle stretch
       const flat = flattenIllumination(canvas, true)
-      return mapPixels(flat, (d) => {
+      const [p1, med] = lumaPercentilesOf(flat, [1, 55])
+      return stretchLevels(flat, Math.min(p1, med - 30), med - 2, 6, 248)
+    }
+    case 'magic': {
+      // CamScanner-style "Magic Color": neutralise cast so paper goes white,
+      // punch contrast, restore colour, sharpen text
+      const wb = whiteBalance(canvas)
+      const [p2, p60] = lumaPercentilesOf(wb, [2, 60])
+      const stretched = stretchLevels(wb, Math.min(p2, p60 - 40), Math.min(252, p60 + 6), 8, 251)
+      const sat = mapPixels(stretched, (d) => {
         for (let i = 0; i < d.length; i += 4) {
-          d[i] = Math.max(0, Math.min(255, (d[i] - 40) * (255 / 175)))
-          d[i + 1] = Math.max(0, Math.min(255, (d[i + 1] - 40) * (255 / 175)))
-          d[i + 2] = Math.max(0, Math.min(255, (d[i + 2] - 40) * (255 / 175)))
+          const y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
+          d[i] = Math.max(0, Math.min(255, y + (d[i] - y) * 1.3))
+          d[i + 1] = Math.max(0, Math.min(255, y + (d[i + 1] - y) * 1.3))
+          d[i + 2] = Math.max(0, Math.min(255, y + (d[i + 2] - y) * 1.3))
         }
       })
+      return unsharp(sat, 2, 0.55)
+    }
+    case 'enhance': {
+      // Flagship scan look: flatten shadows -> anchor paper (median) to white
+      // and ink (1st percentile) towards black -> sharpen the text edges
+      const flat = flattenIllumination(canvas, true)
+      const [p1, med] = lumaPercentilesOf(flat, [1, 55])
+      const stretched = stretchLevels(flat, Math.min(p1, med - 35), med - 3, 5, 252)
+      return unsharp(stretched, 2, 0.85)
     }
     case 'bw': {
       const flat = flattenIllumination(canvas, false)
@@ -593,19 +701,30 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
     setApplying(true)
     try {
       let out = null
-      // Perspective straighten in the worker (12s budget) — UI never freezes
+      // Perspective straighten in the worker — UI never freezes.
+      // Downscale to 1600px first: quicker + far more reliable on phones.
       try {
-        const ictx = img.getContext('2d')
-        const idata = ictx.getImageData(0, 0, img.width, img.height)
+        let srcCanvas = img
+        let sCorners = orderCorners(corners)
+        const sc = Math.min(1, 1600 / Math.max(img.width, img.height))
+        if (sc < 1) {
+          srcCanvas = scaleCanvas(img, 1600)
+          sCorners = sCorners.map(p => ({ x: p.x * sc, y: p.y * sc }))
+        }
+        const ictx = srcCanvas.getContext('2d')
+        const idata = ictx.getImageData(0, 0, srcCanvas.width, srcCanvas.height)
         const res = await cvCall('warp',
-          { imageData: { data: idata.data, width: idata.width, height: idata.height }, corners: orderCorners(corners) },
-          [idata.data.buffer], 12000)
+          { imageData: { data: idata.data, width: idata.width, height: idata.height }, corners: sCorners },
+          [idata.data.buffer], 15000)
         if (res.ok && res.out?.data) {
           out = document.createElement('canvas')
           out.width = res.out.width; out.height = res.out.height
           out.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(res.out.data), res.out.width, res.out.height), 0, 0)
+        } else {
+          // NEVER silent — the user must know the page was not straightened
+          toast.warning('Couldn\'t straighten the page (' + (res.error || 'unknown') + ') — used a simple crop')
         }
-      } catch { /* fall through to simple crop */ }
+      } catch { toast.warning('Couldn\'t straighten the page — used a simple crop') }
       if (!out) {
         // Simple bounding-box crop fallback (no perspective correction)
         const xs = corners.map(p => p.x), ys = corners.map(p => p.y)
@@ -699,7 +818,7 @@ function EnhancePanel({ dataUrl, onDone, onBackToCrop, onRetake }) {
     if (!baseCanvas) return
     let cancelled = false
     const t = setTimeout(() => {
-      const small = scaleCanvas(baseCanvas, 140)
+      const small = scaleCanvas(baseCanvas, 280)   // 2x display size = crisp previews
       const plain = canvasToJpegSafe(small, 0.7, dataUrl)
       const out = {}
       for (const f of RECEIPT_FILTERS) {
