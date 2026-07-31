@@ -220,6 +220,12 @@ export function InventoryView({ products, loading, statusFilter, setStatusFilter
                       {p.addedBy && (
                         <div className="text-[10px] text-slate-400 mt-0.5">👤 Added by <span className="capitalize font-medium text-slate-500">{p.addedBy}</span></div>
                       )}
+                      {p.editedBy && (
+                        <div className="text-[10px] text-slate-400 mt-0.5">✏️ Last edited by <span className="capitalize font-medium text-slate-500">{p.editedBy}</span>{p.editedAt ? <span> — {new Date(p.editedAt).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span> : null}</div>
+                      )}
+                      {p.note && (
+                        <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 mt-1 max-w-[260px] whitespace-normal break-words">📝 {p.note}</div>
+                      )}
                     </TableCell>
                     <TableCell>{p.quantity} {p.unit}</TableCell>
                     <TableCell>{formatDate(p.expiryDate)}</TableCell>

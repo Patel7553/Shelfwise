@@ -16,6 +16,7 @@ export const EMPTY_FORM = {
   dateReceived: '',
   unitCost: '', reorderPoint: '', supplier: '',
   allergens: [],
+  note: '',
   customFields: {}
 }
 

@@ -213,6 +213,9 @@ function fromDb(row) {
     sourceMeta: row.source_meta || null,
     customFields: cf,
     addedBy: cf._addedBy || '',
+    editedBy: cf._editedBy || '',
+    editedAt: cf._editedAt || null,
+    note: cf._note || '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -221,6 +224,7 @@ function fromDb(row) {
 function toDb(body) {
   const cf = body.customFields && typeof body.customFields === 'object' ? { ...body.customFields } : {}
   if (body.dateReceived) cf._dateReceived = body.dateReceived
+  if (body.note !== undefined) cf._note = String(body.note || '').trim().slice(0, 500)
   const row = {
     name: body.name || '',
     quantity: Number(body.quantity) || 0,
@@ -2187,6 +2191,68 @@ async function logActivity(sb, kitchenId, person, action, detail) {
 }
 
 // ============================================================================
+// RECEIPTS (Aug 2026) — scan/upload supplier receipts, tag them, export PDFs
+// ============================================================================
+function receiptFromDb(r, fileUrl = '') {
+  return {
+    id: r.id,
+    receiptDate: r.receipt_date || null,
+    supplier: r.supplier || '',
+    amount: r.amount != null ? Number(r.amount) : null,
+    currency: r.currency || '',
+    status: r.status || 'pending',
+    color: r.color || '',
+    notes: r.notes || '',
+    fileType: r.file_type || '',
+    hasFile: !!r.image_path,
+    fileUrl,
+    addedBy: r.added_by || '',
+    editedBy: r.edited_by || '',
+    editedAt: r.edited_at || null,
+    createdAt: r.created_at,
+  }
+}
+
+// GPT-4o vision reads the supplier, date and total straight off the photo
+async function extractReceiptDetails(base64DataUrl) {
+  const key = process.env.EMERGENT_LLM_KEY
+  if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+  const today = new Date().toISOString().slice(0, 10)
+  const body = {
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: `You read photos of supplier receipts/invoices from UK food wholesalers. Return ONLY valid JSON: {"supplier": string, "date": "YYYY-MM-DD" or null, "total": number or null, "currency": "GBP" | "EUR" | "USD" | ""}.
+- supplier: the business name at the top of the receipt ("" if unreadable).
+- date: the receipt/invoice date. UK printed dates are DAY FIRST ("03/09/2026" = 3 September). Today is ${today}. If unreadable, null — never invent one.
+- total: the FINAL amount paid (incl. VAT). Prefer labels like "Total", "Amount Due", "Balance", "Card". Plain number, no symbols.
+- currency: from the symbol (£=GBP, €=EUR, $=USD), "" if unclear.` },
+      { role: 'user', content: [
+        { type: 'text', text: 'Extract the supplier, date and total from this receipt as JSON.' },
+        { type: 'image_url', image_url: { url: base64DataUrl, detail: 'high' } },
+      ]},
+    ],
+    temperature: 0,
+    response_format: { type: 'json_object' },
+  }
+  const res = await fetch(EMERGENT_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`Emergent LLM ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  const content = data?.choices?.[0]?.message?.content || '{}'
+  let parsed = {}
+  try { parsed = JSON.parse(content) } catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : {} }
+  return {
+    supplier: String(parsed.supplier || '').slice(0, 120),
+    date: /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.date || '')) ? parsed.date : null,
+    total: parsed.total != null && Number.isFinite(Number(parsed.total)) ? Number(parsed.total) : null,
+    currency: ['GBP', 'EUR', 'USD'].includes(parsed.currency) ? parsed.currency : '',
+  }
+}
+
+// ============================================================================
 // GET
 // ============================================================================
 export async function GET(request, { params }) {
@@ -2741,6 +2807,36 @@ export async function GET(request, { params }) {
           })
         }
         return json({ groups, total: low.length })
+      }
+
+      // ------- RECEIPTS: list scanned supplier receipts (Aug 2026) -------
+      if (path === 'receipts') {
+        const url = new URL(request.url)
+        const from = url.searchParams.get('from')
+        const to = url.searchParams.get('to')
+        const status = url.searchParams.get('status')
+        let q = sb.from('receipts').select('*').eq('kitchen_id', kid)
+          .order('receipt_date', { ascending: false }).order('created_at', { ascending: false }).limit(2000)
+        if (from) q = q.gte('receipt_date', from)
+        if (to) q = q.lte('receipt_date', to)
+        if (status && status !== 'all') q = q.eq('status', status)
+        const { data, error } = await q
+        if (error) {
+          if (/relation .* does not exist/i.test(error.message || '')) {
+            return json({ error: 'Receipts table missing — run supabase/migration-23-receipts.sql in the Supabase SQL Editor first.' }, 500)
+          }
+          throw error
+        }
+        // Signed URLs (1h) so the private files can be viewed and exported
+        const paths = (data || []).filter(r => r.image_path).map(r => r.image_path)
+        const urlMap = {}
+        if (paths.length) {
+          try {
+            const { data: signed } = await sb.storage.from('receipts').createSignedUrls(paths, 3600)
+            for (const s of (signed || [])) if (s?.path && s?.signedUrl) urlMap[s.path] = s.signedUrl
+          } catch { /* bucket may not exist yet */ }
+        }
+        return json((data || []).map(r => receiptFromDb(r, urlMap[r.image_path] || '')))
       }
 
       if (path === 'products') {
@@ -4226,7 +4322,7 @@ Output strictly valid JSON with no other text.`
     }
 
     // -------- Kitchen-scoped mutations --------
-    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect'].some(p => path === p)
+    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract'].some(p => path === p)
       || (path.startsWith('recipes/') && path.endsWith('/favorite'))
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
@@ -4247,6 +4343,76 @@ Output strictly valid JSON with no other text.`
           return json({ ok: true, expiry: exp, haccp, email })
         } catch (e) {
           return json({ ok: false, error: e.message })
+        }
+      }
+
+      // ------- RECEIPTS: save a scanned / uploaded / manual receipt -------
+      if (path === 'receipts') {
+        const body = await request.json()
+        const person = await validatedPersonFromRequest(sb, request, ctx)
+        const id = uuidv4()
+        let imagePath = ''
+        let fileType = ''
+        if (body.dataUrl) {
+          const m = String(body.dataUrl).match(/^data:(image\/jpeg|image\/png|image\/webp|application\/pdf);base64,(.+)$/)
+          if (!m) return json({ error: 'Unsupported file type — use JPG, PNG, WEBP or PDF' }, 400)
+          const mime = m[1]
+          const buf = Buffer.from(m[2], 'base64')
+          if (buf.length > 15 * 1024 * 1024) return json({ error: 'File too large (max 15MB)' }, 400)
+          const ext = mime === 'application/pdf' ? 'pdf' : mime.split('/')[1]
+          fileType = ext === 'pdf' ? 'pdf' : 'image'
+          imagePath = `${kid}/${id}.${ext}`
+          let up = await sb.storage.from('receipts').upload(imagePath, buf, { contentType: mime, upsert: true })
+          if (up.error && /not found/i.test(up.error.message || '')) {
+            await sb.storage.createBucket('receipts', { public: false }).catch(() => {})
+            up = await sb.storage.from('receipts').upload(imagePath, buf, { contentType: mime, upsert: true })
+          }
+          if (up.error) return json({ error: `Could not store the file — ${up.error.message}` }, 500)
+        }
+        if (!imagePath && !String(body.supplier || '').trim() && (body.amount == null || body.amount === '')) {
+          return json({ error: 'Add a photo/PDF, or at least a supplier name or amount' }, 400)
+        }
+        const row = {
+          id,
+          kitchen_id: kid,
+          receipt_date: body.receiptDate || new Date().toISOString().slice(0, 10),
+          supplier: String(body.supplier || '').trim().slice(0, 120),
+          amount: body.amount === '' || body.amount == null ? null : Number(body.amount),
+          currency: String(body.currency || '').slice(0, 8),
+          status: ['pending', 'submitted', 'reviewed'].includes(body.status) ? body.status : 'pending',
+          color: String(body.color || '').slice(0, 20),
+          notes: String(body.notes || '').trim().slice(0, 500),
+          image_path: imagePath,
+          file_type: fileType,
+          added_by: person,
+        }
+        const { data, error } = await sb.from('receipts').insert(row).select().single()
+        if (error) {
+          if (imagePath) await sb.storage.from('receipts').remove([imagePath]).catch(() => {})
+          if (/relation .* does not exist/i.test(error.message || '')) {
+            return json({ error: 'Receipts table missing — run supabase/migration-23-receipts.sql in the Supabase SQL Editor first.' }, 500)
+          }
+          throw error
+        }
+        await logActivity(sb, kid, person, 'receipt_added', `${row.supplier || 'Receipt'}${row.amount != null ? ` ${row.amount}` : ''}`)
+        let fileUrl = ''
+        if (imagePath) {
+          try {
+            const { data: s } = await sb.storage.from('receipts').createSignedUrl(imagePath, 3600)
+            fileUrl = s?.signedUrl || ''
+          } catch {}
+        }
+        return json(receiptFromDb(data, fileUrl), 201)
+      }
+
+      // ------- RECEIPTS: AI reads supplier / date / total from the photo -------
+      if (path === 'receipts/ai-extract') {
+        const body = await request.json()
+        if (!body.dataUrl) return json({ error: 'dataUrl required' }, 400)
+        try {
+          return json(await extractReceiptDetails(body.dataUrl))
+        } catch (e) {
+          return json({ error: e.message || 'AI could not read the receipt' }, 500)
         }
       }
 
@@ -5225,6 +5391,19 @@ export async function PUT(request, { params }) {
       const id = segs[1]
       const body = await request.json()
       const patch = toDb(body)
+      // EDIT ATTRIBUTION (Aug 2026 user request): stamp WHO made this change
+      // and WHEN — kept alongside the original "_addedBy" record, which is
+      // re-applied from the DB so it can never be lost or tampered via edits.
+      try {
+        const person = await validatedPersonFromRequest(sb, request, ctx)
+        const { data: existing } = await sb.from('products').select('custom_fields').eq('id', id).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+        patch.custom_fields = {
+          ...(patch.custom_fields || {}),
+          _editedBy: person,
+          _editedAt: new Date().toISOString(),
+        }
+        if (existing?.custom_fields?._addedBy) patch.custom_fields._addedBy = existing.custom_fields._addedBy
+      } catch { /* attribution is best-effort */ }
       let { data, error: e2 } = await sb.from('products').update(patch).eq('id', id).eq('kitchen_id', ctx.kitchenId).select().single()
       if (e2 && /column .* does not exist|schema cache/i.test(e2.message || '')) {
         // Migration 8 not run yet — retry without new columns
@@ -5246,6 +5425,34 @@ export async function PUT(request, { params }) {
       return json(enrichWith(await fetchAlertDays(sb, ctx.kitchenId, ctx.kitchen))(fromDb(data)))
     }
 
+    // ------- RECEIPTS: edit details / tag colour / status (with attribution) -------
+    if (segs[0] === 'receipts' && segs[1]) {
+      const { ctx, error } = await requireOwnerOrChef(request)
+      if (error) return error
+      if (ctx.kitchen && ctx.kitchen.account_type === 'supplier') return json({ error: 'Supplier accounts cannot access kitchen tools' }, 403)
+      const body = await request.json()
+      const patch = {}
+      if (body.supplier !== undefined) patch.supplier = String(body.supplier || '').trim().slice(0, 120)
+      if (body.receiptDate !== undefined) patch.receipt_date = body.receiptDate || null
+      if (body.amount !== undefined) patch.amount = body.amount === '' || body.amount == null ? null : Number(body.amount)
+      if (body.currency !== undefined) patch.currency = String(body.currency || '').slice(0, 8)
+      if (body.status !== undefined && ['pending', 'submitted', 'reviewed'].includes(body.status)) patch.status = body.status
+      if (body.color !== undefined) patch.color = String(body.color || '').slice(0, 20)
+      if (body.notes !== undefined) patch.notes = String(body.notes || '').trim().slice(0, 500)
+      patch.edited_by = await validatedPersonFromRequest(sb, request, ctx)
+      patch.edited_at = new Date().toISOString()
+      const { data, error: e2 } = await sb.from('receipts').update(patch).eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).select().single()
+      if (e2) return json({ error: e2.message }, 500)
+      let fileUrl = ''
+      if (data?.image_path) {
+        try {
+          const { data: s } = await sb.storage.from('receipts').createSignedUrl(data.image_path, 3600)
+          fileUrl = s?.signedUrl || ''
+        } catch {}
+      }
+      return json(receiptFromDb(data, fileUrl))
+    }
+
     // ------- HACCP: edit a temperature reading -------
     if (segs[0] === 'haccp' && segs[1] === 'temperatures' && segs[2]) {
       const { ctx, error } = await requireOwnerOrChef(request)
@@ -5260,6 +5467,8 @@ export async function PUT(request, { params }) {
       if (typeof body.notes === 'string') patch.notes = body.notes.trim()
       const { data, error: e2 } = await sb.from('haccp_temperature_logs').update(patch).eq('id', id).eq('kitchen_id', ctx.kitchenId).select().single()
       if (e2) return json({ error: e2.message }, 500)
+      // Edit attribution (Aug 2026): temp-log corrections show who changed them
+      await logActivity(sb, ctx.kitchenId, await validatedPersonFromRequest(sb, request, ctx), 'temp_updated', `${data?.location || ''}: ${data?.temperature_c}°C (edited)`)
       return json(haccpTempFromDb(data))
     }
     return json({ error: 'Not found' }, 404)
@@ -5276,6 +5485,18 @@ export async function DELETE(request, { params }) {
   try {
     const segs = params?.path || []
     const sb = supabaseAdmin
+
+    // ------- RECEIPTS: delete a receipt (removes the stored file too) -------
+    if (segs[0] === 'receipts' && segs[1]) {
+      const { ctx, error } = await requireOwnerOrChef(request)
+      if (error) return error
+      const { data: r } = await sb.from('receipts').select('image_path, supplier').eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+      const { error: e2 } = await sb.from('receipts').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
+      if (e2) return json({ error: e2.message }, 500)
+      if (r?.image_path) await sb.storage.from('receipts').remove([r.image_path]).catch(() => {})
+      await logActivity(sb, ctx.kitchenId, await validatedPersonFromRequest(sb, request, ctx), 'receipt_deleted', r?.supplier || segs[1])
+      return json({ ok: true })
+    }
 
     // ------- SUPPLIER: remove a catalog product / revoke a connection code -------
     if (segs[0] === 'supplier') {

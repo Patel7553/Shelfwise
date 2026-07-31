@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useCallback, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -12,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, ArrowLeft, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe, Users, Lock, Delete, Eye, EyeOff } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, ArrowLeft, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe, Users, Lock, Delete, Eye, EyeOff, ReceiptText } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken, setChefToken, clearChefToken } from '@/lib/apiClient'
 import { getBrowserSupabase } from '@/lib/supabaseBrowser'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
@@ -33,6 +34,7 @@ import { SetupWizardV2, SetupWizard, ChefCodeCard, SettingsDialog, LoginGate, No
 import { RotaView, RotaShiftDialog } from '@/components/shelfwise/rota'
 import { AnalyticsView } from '@/components/shelfwise/analytics'
 import { OrdersView } from '@/components/shelfwise/orders'
+import { ReceiptsView } from '@/components/shelfwise/receipts'
 import SupplierDashboard from '@/components/shelfwise/supplier'
 import { QuickCheckDialog, TempLogbookView, HaccpView } from '@/components/shelfwise/haccp'
 
@@ -966,6 +968,7 @@ function App() {
       reorderPoint: p.reorderPoint != null ? String(p.reorderPoint) : '',
       supplier: p.supplier || '',
       allergens: Array.isArray(p.allergens) ? p.allergens : [],
+      note: p.note || '',
       customFields: p.customFields || {}
     })
     setDialogOpen(true)
@@ -2124,9 +2127,13 @@ function App() {
               <h1 className="text-base sm:text-lg font-bold tracking-tight truncate text-emerald-900 uppercase">
                 {settings.kitchenName || 'ShelfWise'}
               </h1>
-              {settings.kitchenType && (
+              {/* WHO is logged in right now — always visible so staff on a
+                  shared tablet can confirm the active session (Aug 2026) */}
+              {me?.personName ? (
+                <p className="text-[10px] sm:text-[11px] -mt-0.5 truncate font-semibold text-indigo-700 capitalize">👤 {me.personName}</p>
+              ) : settings.kitchenType ? (
                 <p className="text-[10px] sm:text-[11px] text-emerald-700/70 -mt-0.5 truncate">{settings.kitchenType}</p>
-              )}
+              ) : null}
             </div>
           </div>
 
@@ -2151,6 +2158,11 @@ function App() {
             {hasStock && can('orders') && (
               <Button variant={view === 'orders' ? 'default' : 'ghost'} size="sm" onClick={() => setView('orders')} title="Orders" className="shrink-0">
                 <Truck className="h-4 w-4 xl:mr-2" /> <span className="hidden xl:inline">Orders</span>
+              </Button>
+            )}
+            {hasStock && (
+              <Button variant={view === 'receipts' ? 'default' : 'ghost'} size="sm" onClick={() => setView('receipts')} title="Receipts" className="shrink-0">
+                <ReceiptText className="h-4 w-4 xl:mr-2" /> <span className="hidden xl:inline">Receipts</span>
               </Button>
             )}
             {hasRota && (
@@ -2232,6 +2244,11 @@ function App() {
             {hasStock && can('orders') && (
               <Button variant={view === 'orders' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('orders'); setMobileNav(false) }}>
                 <Truck className="h-4 w-4 mr-2" /> Orders
+              </Button>
+            )}
+            {hasStock && (
+              <Button variant={view === 'receipts' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('receipts'); setMobileNav(false) }}>
+                <ReceiptText className="h-4 w-4 mr-2" /> Receipts
               </Button>
             )}
             {hasRota && (
@@ -2356,6 +2373,9 @@ function App() {
         )}
         {view === 'orders' && can('orders') && (
           <OrdersView />
+        )}
+        {view === 'receipts' && (
+          <ReceiptsView currency={settings.currency} />
         )}
         {view === 'analytics' && (
           <AnalyticsView products={products} />
@@ -2521,6 +2541,12 @@ function App() {
               </div>
             </div>
 
+            <div className="sm:col-span-2">
+              <Label htmlFor="note">Note (optional)</Label>
+              <Textarea id="note" value={form.note || ''} onChange={e => setForm({ ...form, note: e.target.value })}
+                placeholder='e.g. "opened early due to delivery mix-up" or "double-check supplier batch"'
+                maxLength={500} rows={2} className="mt-1" />
+            </div>
             <div className="sm:col-span-2">
               <Label>Photo (optional)</Label>
               <div className="flex items-center gap-3 mt-1">
