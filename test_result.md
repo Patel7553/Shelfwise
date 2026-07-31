@@ -5158,3 +5158,16 @@ frontend:
         - working: true
           agent: "main"
           comment: "User reported 'Detecting edges…' hanging 5+ min on their phone (production build predates the loader fixes — old code polled a dead CDN forever). Hardened further: (1) Promise.race 12s overall budget on load+detect, then graceful fallback to manual corners with toast; (2) script-load timeout reduced 25s->10s per source; (3) full-canvas blocking overlay replaced with a non-blocking pill badge (pointer-events-none) so corners are draggable DURING detection; (4) userMoved ref — auto-detect never overrides corners the user already dragged. VERIFIED via Playwright with an infinitely-hanging opencv.js route: spinner cleared at 12.5s, toast shown, manual corners + Next:enhance usable. Happy path (self-hosted /opencv.js) loads in ~1.2s, detection finds receipt quad (proven headlessly). USER MUST REDEPLOY to get all scanner fixes in production."
+
+frontend:
+  - task: "OpenCV moved to Web Worker (iPhone freeze fix) — full scanner pipeline verified"
+    implemented: true
+    working: true
+    file: "components/shelfwise/receipts.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "User's iPhone froze completely (no taps/close) during 'Detecting edges' — root cause: 10.9MB OpenCV compiled ON the main thread, which locks iOS Safari (timeouts can't even fire). Rewrote: OpenCV now loads+compiles inside a Blob Web Worker (CV_WORKER_CODE); detect + perspective warp both run in worker via cvCall() with 15s/12s budgets; worker pre-warmed on Receipts mount; main-thread detectDocumentCorners/warpPerspective/loadOpenCV removed. VERIFIED end-to-end in-app: badge appeared 0.1s, detection finished 1.1s, corners snapped EXACTLY to skewed test receipt ([[20,9],[82,11],[78,91],[16,88]] vs fallback 5/95), enhance preview shows deskewed straightened receipt with Enhance filter, all thumbnails real content, UI fully responsive throughout (screenshots no longer stall = main thread free). USER MUST REDEPLOY."

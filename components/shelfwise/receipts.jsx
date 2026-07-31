@@ -46,44 +46,147 @@ const todayStr = () => new Date().toISOString().slice(0, 10)
 // ---------------------------------------------------------------------------
 // OpenCV loader (lazy, only when the crop editor opens) + document detection
 // ---------------------------------------------------------------------------
-let cvPromise = null
-function loadScriptOnce(src, timeoutMs = 10000) {
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script')
-    const timer = setTimeout(() => { s.remove(); reject(new Error('OpenCV load timed out')) }, timeoutMs)
-    s.src = src
-    s.async = true
-    s.onload = () => {
-      const t0 = Date.now()
-      const check = () => {
-        if (window.cv?.Mat) { clearTimeout(timer); resolve(window.cv) }
-        else if (window.cv?.then && !window.cv.__swWaiting) {
-          // Emscripten "thenable" — NOT a real Promise (no .catch), only .then
-          window.cv.__swWaiting = true
-          try { window.cv.then((m) => { window.cv = m; clearTimeout(timer); resolve(m) }) }
-          catch { /* fall back to polling below */ setTimeout(check, 150) }
-        }
-        else if (Date.now() - t0 > timeoutMs) { clearTimeout(timer); reject(new Error('OpenCV never became ready')) }
-        else setTimeout(check, 100)
-      }
-      check()
-    }
-    s.onerror = () => { clearTimeout(timer); s.remove(); reject(new Error('OpenCV failed to load')) }
-    document.head.appendChild(s)
-  })
+// ---------------------------------------------------------------------------
+// OpenCV in a WEB WORKER — the 10MB engine compiles OFF the main thread.
+// (Compiling it on the main thread froze the entire UI on iPhones: no taps,
+// no close button. A worker keeps the screen fully responsive.)
+// ---------------------------------------------------------------------------
+const CV_WORKER_CODE = `
+let readyPromise = null;
+function ensureReady(origin) {
+  if (!readyPromise) {
+    readyPromise = new Promise((resolve, reject) => {
+      try {
+        try { importScripts(origin + '/opencv.js'); }
+        catch (e) { importScripts('https://docs.opencv.org/4.x/opencv.js'); }
+        const chk = () => {
+          if (self.cv && self.cv.Mat) resolve();
+          else if (self.cv && self.cv.then) self.cv.then(function (m) { self.cv = m; resolve(); });
+          else setTimeout(chk, 50);
+        };
+        chk();
+      } catch (e) { reject(e); }
+    });
+  }
+  return readyPromise;
 }
-function loadOpenCV() {
-  if (typeof window === 'undefined') return Promise.reject(new Error('no window'))
-  if (window.cv?.Mat) return Promise.resolve(window.cv)
-  if (cvPromise) return cvPromise
-  // Self-hosted copy first (reliable, service-worker cacheable); CDN as backup.
-  cvPromise = loadScriptOnce('/opencv.js')
-    .catch(() => loadScriptOnce('https://docs.opencv.org/4.x/opencv.js'))
-    .catch((e) => { cvPromise = null; throw e })
-  return cvPromise
+function orderCorners(pts) {
+  const bySum = pts.slice().sort(function (a, b) { return (a.x + a.y) - (b.x + b.y); });
+  const tl = bySum[0], br = bySum[3];
+  const byDiff = pts.slice().sort(function (a, b) { return (a.y - a.x) - (b.y - b.x); });
+  const tr = byDiff[0], bl = byDiff[3];
+  return [tl, tr, br, bl];
+}
+function detect(imageData) {
+  const cv = self.cv;
+  let src, gray, blur, edges, kernel, contours, hierarchy;
+  try {
+    src = cv.matFromImageData(imageData);
+    gray = new cv.Mat(); blur = new cv.Mat(); edges = new cv.Mat();
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+    cv.Canny(blur, edges, 60, 180);
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+    cv.dilate(edges, edges, kernel);
+    contours = new cv.MatVector(); hierarchy = new cv.Mat();
+    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+    const minArea = imageData.width * imageData.height * 0.15;
+    let best = null, bestArea = 0;
+    for (let i = 0; i < contours.size(); i++) {
+      const c = contours.get(i);
+      const area = cv.contourArea(c);
+      if (area < minArea || area <= bestArea) { c.delete(); continue; }
+      const peri = cv.arcLength(c, true);
+      const approx = new cv.Mat();
+      cv.approxPolyDP(c, approx, 0.02 * peri, true);
+      if (approx.rows === 4) {
+        const pts = [];
+        for (let j = 0; j < 4; j++) pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] });
+        best = pts; bestArea = area;
+      }
+      approx.delete(); c.delete();
+    }
+    return best ? orderCorners(best) : null;
+  } finally {
+    [src, gray, blur, edges, kernel, contours, hierarchy].forEach(function (m) { try { m && m.delete(); } catch (e) {} });
+  }
+}
+function dist2(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function warp(imageData, corners) {
+  const cv = self.cv;
+  const tl = corners[0], tr = corners[1], br = corners[2], bl = corners[3];
+  let W = Math.max(32, Math.round(Math.max(dist2(tl, tr), dist2(bl, br))));
+  let H = Math.max(32, Math.round(Math.max(dist2(tl, bl), dist2(tr, br))));
+  const cap = 2200, s = Math.min(1, cap / Math.max(W, H));
+  W = Math.round(W * s); H = Math.round(H * s);
+  let src, dst, M, srcTri, dstTri;
+  try {
+    src = cv.matFromImageData(imageData);
+    srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y]);
+    dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, W, 0, W, H, 0, H]);
+    M = cv.getPerspectiveTransform(srcTri, dstTri);
+    dst = new cv.Mat();
+    cv.warpPerspective(src, M, dst, new cv.Size(W, H), cv.INTER_LINEAR, cv.BORDER_REPLICATE);
+    return { data: new Uint8ClampedArray(dst.data), width: W, height: H };
+  } finally {
+    [src, dst, M, srcTri, dstTri].forEach(function (m) { try { m && m.delete(); } catch (e) {} });
+  }
+}
+self.onmessage = async function (e) {
+  const d = e.data;
+  try {
+    await ensureReady(d.origin);
+    if (d.type === 'warm') { self.postMessage({ id: d.id, ok: true }); return; }
+    if (d.type === 'detect') { self.postMessage({ id: d.id, ok: true, corners: detect(d.imageData) }); return; }
+    if (d.type === 'warp') {
+      const out = warp(d.imageData, d.corners);
+      self.postMessage({ id: d.id, ok: true, out: out }, [out.data.buffer]);
+      return;
+    }
+  } catch (err) {
+    self.postMessage({ id: d.id, ok: false, error: String((err && err.message) || err) });
+  }
+};
+`
+
+let _cvWorker = null
+let _cvWorkerBroken = false
+let _msgId = 0
+const _pending = new Map()
+
+function getCvWorker() {
+  if (typeof window === 'undefined' || _cvWorkerBroken) return null
+  if (_cvWorker) return _cvWorker
+  try {
+    const blob = new Blob([CV_WORKER_CODE], { type: 'application/javascript' })
+    _cvWorker = new Worker(URL.createObjectURL(blob))
+    _cvWorker.onmessage = (e) => {
+      const p = _pending.get(e.data.id)
+      if (p) { _pending.delete(e.data.id); p(e.data) }
+    }
+    _cvWorker.onerror = () => {
+      for (const [, p] of _pending) p({ ok: false, error: 'worker crashed' })
+      _pending.clear()
+    }
+  } catch { _cvWorker = null; _cvWorkerBroken = true }
+  return _cvWorker
 }
 
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y)
+function cvCall(type, payload = {}, transfer = [], timeoutMs = 15000) {
+  const w = getCvWorker()
+  if (!w) return Promise.resolve({ ok: false, error: 'no worker support' })
+  const id = ++_msgId
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { _pending.delete(id); resolve({ ok: false, error: 'timeout' }) }, timeoutMs)
+    _pending.set(id, (d) => { clearTimeout(timer); resolve(d) })
+    try { w.postMessage({ id, type, origin: window.location.origin, ...payload }, transfer) }
+    catch (e) { clearTimeout(timer); _pending.delete(id); resolve({ ok: false, error: String(e) }) }
+  })
+}
+
+// Start compiling the engine in the background the moment Receipts opens, so
+// it's usually ready before the user has even taken the photo.
+function warmCvWorker() { cvCall('warm', {}, [], 60000) }
 
 function orderCorners(pts) {
   const bySum = [...pts].sort((a, b) => (a.x + a.y) - (b.x + b.y))
@@ -93,59 +196,8 @@ function orderCorners(pts) {
   return [tl, tr, br, bl]
 }
 
-function detectDocumentCorners(cv, canvas) {
-  let src, gray, blur, edges, kernel, contours, hierarchy
-  try {
-    src = cv.imread(canvas)
-    gray = new cv.Mat(); blur = new cv.Mat(); edges = new cv.Mat()
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY)
-    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0)
-    cv.Canny(blur, edges, 60, 180)
-    kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5))
-    cv.dilate(edges, edges, kernel)
-    contours = new cv.MatVector(); hierarchy = new cv.Mat()
-    cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
-    const minArea = canvas.width * canvas.height * 0.15
-    let best = null; let bestArea = 0
-    for (let i = 0; i < contours.size(); i++) {
-      const c = contours.get(i)
-      const area = cv.contourArea(c)
-      if (area < minArea || area <= bestArea) { c.delete(); continue }
-      const peri = cv.arcLength(c, true)
-      const approx = new cv.Mat()
-      cv.approxPolyDP(c, approx, 0.02 * peri, true)
-      if (approx.rows === 4) {
-        const pts = []
-        for (let j = 0; j < 4; j++) pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] })
-        best = pts; bestArea = area
-      }
-      approx.delete(); c.delete()
-    }
-    return best ? orderCorners(best) : null
-  } catch { return null } finally {
-    for (const m of [src, gray, blur, edges, kernel, contours, hierarchy]) { try { m?.delete() } catch {} }
-  }
-}
-
-function warpPerspective(cv, canvas, corners) {
-  const [tl, tr, br, bl] = corners
-  let W = Math.max(32, Math.round(Math.max(dist(tl, tr), dist(bl, br))))
-  let H = Math.max(32, Math.round(Math.max(dist(tl, bl), dist(tr, br))))
-  // Cap the output size — huge canvases fail silently on iOS Safari
-  const cap = 2200
-  const s = Math.min(1, cap / Math.max(W, H))
-  W = Math.round(W * s); H = Math.round(H * s)
-  const src = cv.imread(canvas)
-  const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y])
-  const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, W, 0, W, H, 0, H])
-  const M = cv.getPerspectiveTransform(srcTri, dstTri)
-  const dst = new cv.Mat()
-  cv.warpPerspective(src, M, dst, new cv.Size(W, H), cv.INTER_LINEAR, cv.BORDER_REPLICATE)
-  const out = document.createElement('canvas')
-  cv.imshow(out, dst)
-  for (const m of [src, dst, M, srcTri, dstTri]) { try { m.delete() } catch {} }
-  return out
-}
+// Detection + perspective warp now run INSIDE the worker (see CV_WORKER_CODE)
+// so the main thread — and the UI — never freezes.
 
 // ---------------------------------------------------------------------------
 // Image utilities
@@ -475,7 +527,7 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
   const [corners, setCorners] = useState(null)
   const [scale, setScale] = useState(1)
   const [detecting, setDetecting] = useState(true)
-  const [cvReady, setCvReady] = useState(false)
+  const [applying, setApplying] = useState(false)
   const dragIdx = useRef(-1)
   const userMoved = useRef(false)   // once the user drags a corner, auto-detect must not override
 
@@ -503,23 +555,24 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
       ]
       setCorners(def)
       try {
-        // HARD BUDGET: auto-detect gets 12s total (load + warm-up + detect).
-        // After that we silently keep the draggable manual corners.
-        const cv = await Promise.race([
-          loadOpenCV(),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('detect-budget-exceeded')), 12000)),
-        ])
-        if (cancelled) return
-        setCvReady(true)
+        // Detection runs in the background worker — UI stays fully responsive.
+        // 15s budget, then we silently keep the manual corners.
         const small = document.createElement('canvas')
         const ds = Math.min(1, 900 / Math.max(img.width, img.height))
         small.width = Math.round(img.width * ds); small.height = Math.round(img.height * ds)
         small.getContext('2d').drawImage(img, 0, 0, small.width, small.height)
-        const found = detectDocumentCorners(cv, small)
-        if (found && !cancelled && !userMoved.current) setCorners(found.map(p => ({ x: p.x / ds, y: p.y / ds })))
-        else if (!found && !cancelled && !userMoved.current) toast.info('Couldn\'t auto-detect the edges — drag the corners to fit the receipt')
+        const idata = small.getContext('2d').getImageData(0, 0, small.width, small.height)
+        const res = await cvCall('detect', { imageData: idata }, [], 15000)
+        if (cancelled) return
+        if (res.ok && res.corners && !userMoved.current) {
+          setCorners(res.corners.map(p => ({ x: p.x / ds, y: p.y / ds })))
+        } else if (res.ok && !res.corners && !userMoved.current) {
+          toast.info('Couldn\'t auto-detect the edges — drag the corners to fit the receipt')
+        } else if (!res.ok && !userMoved.current) {
+          toast.info('Auto edge-detect took too long — drag the corners manually, or use the full photo')
+        }
       } catch {
-        if (!cancelled && !userMoved.current) toast.info('Auto edge-detect took too long — drag the corners manually, or use the full photo')
+        if (!cancelled && !userMoved.current) toast.info('Auto edge-detect unavailable — drag the corners manually, or use the full photo')
       } finally { if (!cancelled) setDetecting(false) }
     }
     img.src = dataUrl
@@ -538,12 +591,25 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
 
   const apply = async () => {
     const img = imgRef.current
-    if (!img) return
+    if (!img || !corners) return
+    setApplying(true)
     try {
-      let out
-      if (cvReady && window.cv?.Mat && corners) {
-        out = warpPerspective(window.cv, img, orderCorners(corners))
-      } else {
+      let out = null
+      // Perspective straighten in the worker (12s budget) — UI never freezes
+      try {
+        const ictx = img.getContext('2d')
+        const idata = ictx.getImageData(0, 0, img.width, img.height)
+        const res = await cvCall('warp',
+          { imageData: { data: idata.data, width: idata.width, height: idata.height }, corners: orderCorners(corners) },
+          [idata.data.buffer], 12000)
+        if (res.ok && res.out?.data) {
+          out = document.createElement('canvas')
+          out.width = res.out.width; out.height = res.out.height
+          out.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(res.out.data), res.out.width, res.out.height), 0, 0)
+        }
+      } catch { /* fall through to simple crop */ }
+      if (!out) {
+        // Simple bounding-box crop fallback (no perspective correction)
         const xs = corners.map(p => p.x), ys = corners.map(p => p.y)
         const x0 = Math.min(...xs), y0 = Math.min(...ys)
         const w = Math.max(...xs) - x0, h = Math.max(...ys) - y0
@@ -557,7 +623,7 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
     } catch {
       toast.error('Crop failed — using the full photo instead')
       onDone(dataUrl)
-    }
+    } finally { setApplying(false) }
   }
 
   return (
@@ -590,9 +656,11 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
       </div>
       <p className="text-xs text-center text-muted-foreground">Drag the green corners to fit the receipt exactly — it'll be straightened automatically.</p>
       <div className="flex flex-wrap justify-center gap-2">
-        <Button variant="outline" size="sm" onClick={onRetake}><RefreshCw className="h-4 w-4 mr-1.5" /> Retake</Button>
-        <Button variant="outline" size="sm" onClick={() => onDone(dataUrl)}>Use full photo</Button>
-        <Button size="sm" onClick={apply} className="bg-emerald-600 hover:bg-emerald-700"><Check className="h-4 w-4 mr-1.5" /> Next: enhance</Button>
+        <Button variant="outline" size="sm" onClick={onRetake} disabled={applying}><RefreshCw className="h-4 w-4 mr-1.5" /> Retake</Button>
+        <Button variant="outline" size="sm" onClick={() => onDone(dataUrl)} disabled={applying}>Use full photo</Button>
+        <Button size="sm" onClick={apply} disabled={applying} className="bg-emerald-600 hover:bg-emerald-700">
+          {applying ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <Check className="h-4 w-4 mr-1.5" />} Next: enhance
+        </Button>
       </div>
     </div>
   )
@@ -869,7 +937,7 @@ export function ReceiptsView({ currency }) {
       } else { setReceipts(Array.isArray(data) ? data : []); setMigrationMsg('') }
     } catch { toast.error('Could not load receipts') } finally { setLoading(false) }
   }
-  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); warmCvWorker() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const filtered = useMemo(() => {
     let list = statusFilter === 'all' ? receipts : receipts.filter(r => r.status === statusFilter)
