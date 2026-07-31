@@ -47,24 +47,39 @@ const todayStr = () => new Date().toISOString().slice(0, 10)
 // OpenCV loader (lazy, only when the crop editor opens) + document detection
 // ---------------------------------------------------------------------------
 let cvPromise = null
+function loadScriptOnce(src, timeoutMs = 25000) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script')
+    const timer = setTimeout(() => { s.remove(); reject(new Error('OpenCV load timed out')) }, timeoutMs)
+    s.src = src
+    s.async = true
+    s.onload = () => {
+      const t0 = Date.now()
+      const check = () => {
+        if (window.cv?.Mat) { clearTimeout(timer); resolve(window.cv) }
+        else if (window.cv?.then && !window.cv.__swWaiting) {
+          // Emscripten "thenable" — NOT a real Promise (no .catch), only .then
+          window.cv.__swWaiting = true
+          try { window.cv.then((m) => { window.cv = m; clearTimeout(timer); resolve(m) }) }
+          catch { /* fall back to polling below */ setTimeout(check, 150) }
+        }
+        else if (Date.now() - t0 > timeoutMs) { clearTimeout(timer); reject(new Error('OpenCV never became ready')) }
+        else setTimeout(check, 100)
+      }
+      check()
+    }
+    s.onerror = () => { clearTimeout(timer); s.remove(); reject(new Error('OpenCV failed to load')) }
+    document.head.appendChild(s)
+  })
+}
 function loadOpenCV() {
   if (typeof window === 'undefined') return Promise.reject(new Error('no window'))
   if (window.cv?.Mat) return Promise.resolve(window.cv)
   if (cvPromise) return cvPromise
-  cvPromise = new Promise((resolve, reject) => {
-    const s = document.createElement('script')
-    s.src = 'https://docs.opencv.org/4.10.0/opencv.js'
-    s.async = true
-    s.onload = () => {
-      if (window.cv?.then) window.cv.then((m) => { window.cv = m; resolve(m) })
-      else {
-        const check = () => (window.cv?.Mat ? resolve(window.cv) : setTimeout(check, 100))
-        check()
-      }
-    }
-    s.onerror = () => { cvPromise = null; reject(new Error('OpenCV failed to load')) }
-    document.head.appendChild(s)
-  })
+  // Self-hosted copy first (reliable, service-worker cacheable); CDN as backup.
+  cvPromise = loadScriptOnce('/opencv.js')
+    .catch(() => loadScriptOnce('https://docs.opencv.org/4.x/opencv.js'))
+    .catch((e) => { cvPromise = null; throw e })
   return cvPromise
 }
 
@@ -114,8 +129,12 @@ function detectDocumentCorners(cv, canvas) {
 
 function warpPerspective(cv, canvas, corners) {
   const [tl, tr, br, bl] = corners
-  const W = Math.max(32, Math.round(Math.max(dist(tl, tr), dist(bl, br))))
-  const H = Math.max(32, Math.round(Math.max(dist(tl, bl), dist(tr, br))))
+  let W = Math.max(32, Math.round(Math.max(dist(tl, tr), dist(bl, br))))
+  let H = Math.max(32, Math.round(Math.max(dist(tl, bl), dist(tr, br))))
+  // Cap the output size — huge canvases fail silently on iOS Safari
+  const cap = 2200
+  const s = Math.min(1, cap / Math.max(W, H))
+  W = Math.round(W * s); H = Math.round(H * s)
   const src = cv.imread(canvas)
   const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y])
   const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, W, 0, W, H, 0, H])
@@ -131,19 +150,42 @@ function warpPerspective(cv, canvas, corners) {
 // ---------------------------------------------------------------------------
 // Image utilities
 // ---------------------------------------------------------------------------
+// A real JPEG dataUrl is always > ~200 chars; iOS returns "data:," when a
+// canvas export fails (memory/size limits) — treat that as a failure.
+const isValidImageDataUrl = (s) => typeof s === 'string' && /^data:image\//.test(s) && s.length > 200
+
+function canvasToJpegSafe(canvas, quality, fallback) {
+  try {
+    if (canvas && canvas.width > 0 && canvas.height > 0) {
+      const s = canvas.toDataURL('image/jpeg', quality)
+      if (isValidImageDataUrl(s)) return s
+    }
+  } catch { /* tainted / out-of-memory */ }
+  return fallback
+}
+
 function fileToJpegDataUrl(file, maxSide = 2000, quality = 0.85) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file)
     const img = new Image()
     img.onload = () => {
-      const scale = Math.min(1, maxSide / Math.max(img.width, img.height))
-      const c = document.createElement('canvas')
-      c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale)
-      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height)
-      URL.revokeObjectURL(url)
-      resolve(c.toDataURL('image/jpeg', quality))
+      try {
+        if (!img.width || !img.height) throw new Error('empty image')
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height))
+        const c = document.createElement('canvas')
+        c.width = Math.max(1, Math.round(img.width * scale)); c.height = Math.max(1, Math.round(img.height * scale))
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height)
+        URL.revokeObjectURL(url)
+        const out = canvasToJpegSafe(c, quality, null)
+        if (out) return resolve(out)
+        // Canvas export failed (e.g. iOS memory limits) — hand back the raw file
+        const r = new FileReader()
+        r.onload = () => isValidImageDataUrl(r.result) ? resolve(r.result) : reject(new Error('Could not read that image'))
+        r.onerror = () => reject(new Error('Could not read that image'))
+        r.readAsDataURL(file)
+      } catch { URL.revokeObjectURL(url); reject(new Error('Could not read that image')) }
     }
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that image')) }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that image — try a JPG or PNG photo')) }
     img.src = url
   })
 }
@@ -192,14 +234,59 @@ function rotateCanvas(src, dir) { // dir: 1 = clockwise, -1 = counter-clockwise
 // Divide-by-background: the classic doc-scanner trick — estimate the paper
 // background with a heavy blur, divide the image by it. Kills shadows and
 // uneven lighting while keeping ink crisp.
+//
+// IMPORTANT: iOS Safari < 18 silently ignores `ctx.filter = 'blur()'`, which
+// used to make this divide the image by an UNBLURRED copy of itself —
+// producing a uniform blank-grey scan. We feature-detect and fall back to a
+// downscale→upscale blur that works in every browser.
+let _ctxFilterSupport = null
+function supportsCtxFilter() {
+  if (_ctxFilterSupport !== null) return _ctxFilterSupport
+  try {
+    // Debug hook: force the portable-blur path (simulates iOS Safari < 18)
+    if (typeof window !== 'undefined' && window.localStorage?.getItem('sw_force_portable_blur') === '1') {
+      _ctxFilterSupport = false
+      return false
+    }
+    const ctx = document.createElement('canvas').getContext('2d')
+    ctx.filter = 'blur(2px)'
+    _ctxFilterSupport = ctx.filter === 'blur(2px)'
+  } catch { _ctxFilterSupport = false }
+  return _ctxFilterSupport
+}
+
+// Heavy blur that works everywhere: shrink hard (bilinear averaging), bounce
+// once at low-res, then scale back up with smoothing.
+function portableBlur(canvas, radius) {
+  const w = canvas.width, h = canvas.height
+  const factor = Math.max(2, radius)
+  const sw = Math.max(1, Math.round(w / factor)), sh = Math.max(1, Math.round(h / factor))
+  const a = document.createElement('canvas'); a.width = sw; a.height = sh
+  const actx = a.getContext('2d'); actx.imageSmoothingEnabled = true; actx.drawImage(canvas, 0, 0, sw, sh)
+  const b = document.createElement('canvas'); b.width = Math.max(1, sw >> 1); b.height = Math.max(1, sh >> 1)
+  const bctx2 = b.getContext('2d'); bctx2.imageSmoothingEnabled = true; bctx2.drawImage(a, 0, 0, b.width, b.height)
+  const out = document.createElement('canvas'); out.width = w; out.height = h
+  const octx = out.getContext('2d')
+  octx.imageSmoothingEnabled = true
+  try { octx.imageSmoothingQuality = 'high' } catch {}
+  octx.drawImage(b, 0, 0, w, h)
+  return out
+}
+
 function flattenIllumination(canvas, keepColor = true) {
   const w = canvas.width, h = canvas.height
-  const bg = document.createElement('canvas')
-  bg.width = w; bg.height = h
-  const bctx = bg.getContext('2d')
   const radius = Math.max(8, Math.round(Math.max(w, h) / 40))
-  bctx.filter = `blur(${radius}px)`
-  bctx.drawImage(canvas, 0, 0)
+  let bg
+  if (supportsCtxFilter()) {
+    bg = document.createElement('canvas')
+    bg.width = w; bg.height = h
+    const bctx = bg.getContext('2d')
+    bctx.filter = `blur(${radius}px)`
+    bctx.drawImage(canvas, 0, 0)
+  } else {
+    bg = portableBlur(canvas, radius)
+  }
+  const bctx = bg.getContext('2d')
   const out = document.createElement('canvas')
   out.width = w; out.height = h
   const octx = out.getContext('2d')
@@ -458,7 +545,9 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
         out.width = Math.max(32, w); out.height = Math.max(32, h)
         out.getContext('2d').drawImage(img, x0, y0, w, h, 0, 0, out.width, out.height)
       }
-      onDone(out.toDataURL('image/jpeg', 0.92))
+      const result = canvasToJpegSafe(out, 0.92, null)
+      if (!result) throw new Error('empty crop output')
+      onDone(result)
     } catch {
       toast.error('Crop failed — using the full photo instead')
       onDone(dataUrl)
@@ -508,6 +597,7 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
 // ---------------------------------------------------------------------------
 function EnhancePanel({ dataUrl, onDone, onBackToCrop, onRetake }) {
   const [baseCanvas, setBaseCanvas] = useState(null)   // rotated, full-res
+  const [loadFailed, setLoadFailed] = useState(false)  // canvas pipeline broke — pass raw photo through
   const [filter, setFilter] = useState('enhance')
   const [stamp, setStamp] = useState('')
   const [previewUrl, setPreviewUrl] = useState('')
@@ -517,7 +607,18 @@ function EnhancePanel({ dataUrl, onDone, onBackToCrop, onRetake }) {
   // Load source
   useEffect(() => {
     let cancelled = false
-    dataUrlToCanvas(dataUrl).then(c => { if (!cancelled) setBaseCanvas(c) }).catch(() => toast.error('Could not load the scan'))
+    setLoadFailed(false)
+    dataUrlToCanvas(dataUrl)
+      .then(c => {
+        if (cancelled) return
+        if (!c.width || !c.height) throw new Error('empty canvas')
+        setBaseCanvas(c)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setLoadFailed(true); setWorking(false); setPreviewUrl(dataUrl)
+        toast.info('Filters unavailable for this photo — it will be saved as-is')
+      })
     return () => { cancelled = true }
   }, [dataUrl])
 
@@ -527,15 +628,16 @@ function EnhancePanel({ dataUrl, onDone, onBackToCrop, onRetake }) {
     let cancelled = false
     const t = setTimeout(() => {
       const small = scaleCanvas(baseCanvas, 140)
+      const plain = canvasToJpegSafe(small, 0.7, dataUrl)
       const out = {}
       for (const f of RECEIPT_FILTERS) {
-        try { out[f.key] = applyReceiptFilter(small, f.key).toDataURL('image/jpeg', 0.7) } catch { out[f.key] = small.toDataURL('image/jpeg', 0.7) }
+        try { out[f.key] = canvasToJpegSafe(applyReceiptFilter(small, f.key), 0.7, plain) } catch { out[f.key] = plain }
         if (cancelled) return
       }
       if (!cancelled) setThumbs(out)
     }, 30)
     return () => { cancelled = true; clearTimeout(t) }
-  }, [baseCanvas])
+  }, [baseCanvas]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Main preview (medium res so filters feel instant)
   useEffect(() => {
@@ -547,7 +649,7 @@ function EnhancePanel({ dataUrl, onDone, onBackToCrop, onRetake }) {
         const mid = scaleCanvas(baseCanvas, 900)
         let out = applyReceiptFilter(mid, filter)
         out = drawStamp(out, stamp)
-        if (!cancelled) setPreviewUrl(out.toDataURL('image/jpeg', 0.85))
+        if (!cancelled) setPreviewUrl(canvasToJpegSafe(out, 0.85, dataUrl))
       } catch { if (!cancelled) setPreviewUrl(dataUrl) }
       if (!cancelled) setWorking(false)
     }, 30)
@@ -557,13 +659,15 @@ function EnhancePanel({ dataUrl, onDone, onBackToCrop, onRetake }) {
   const rotate = (dir) => { if (baseCanvas) setBaseCanvas(rotateCanvas(baseCanvas, dir)) }
 
   const confirm = () => {
-    if (!baseCanvas) return
+    if (loadFailed || !baseCanvas) { onDone(dataUrl); return }  // pass the raw photo through untouched
     setWorking(true)
     setTimeout(() => {
       try {
         let out = applyReceiptFilter(baseCanvas, filter)   // FULL resolution
         out = drawStamp(out, stamp)
-        onDone(out.toDataURL('image/jpeg', 0.88))
+        const result = canvasToJpegSafe(out, 0.88, null)
+        if (!result) throw new Error('empty output')
+        onDone(result)
       } catch {
         toast.error('Enhancement failed — keeping the plain scan')
         onDone(dataUrl)
@@ -584,8 +688,15 @@ function EnhancePanel({ dataUrl, onDone, onBackToCrop, onRetake }) {
         )}
       </div>
 
-      {/* Filter strip */}
-      <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+      {/* Filter strip — own contained horizontal scroll, isolated from page
+          swipe/back gestures (touch-action: pan-x + overscroll containment) */}
+      {!loadFailed && (
+      <div
+        className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1"
+        style={{ touchAction: 'pan-x', overscrollBehaviorX: 'contain', WebkitOverflowScrolling: 'touch' }}
+        onTouchStart={(e) => e.stopPropagation()}
+        onTouchMove={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}>
         {RECEIPT_FILTERS.map(f => (
           <button key={f.key} type="button" onClick={() => setFilter(f.key)}
             className={`shrink-0 rounded-lg border-2 p-1 transition ${filter === f.key ? 'border-emerald-500 bg-emerald-50' : 'border-transparent hover:border-slate-300'}`}>
@@ -596,8 +707,10 @@ function EnhancePanel({ dataUrl, onDone, onBackToCrop, onRetake }) {
           </button>
         ))}
       </div>
+      )}
 
       {/* Rotate + stamp */}
+      {!loadFailed && (
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex gap-1.5">
           <Button variant="outline" size="sm" onClick={() => rotate(-1)} title="Rotate left"><RotateCcw className="h-4 w-4" /></Button>
@@ -613,6 +726,13 @@ function EnhancePanel({ dataUrl, onDone, onBackToCrop, onRetake }) {
           ))}
         </div>
       </div>
+      )}
+
+      {loadFailed && (
+        <p className="text-xs text-center bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2">
+          This photo couldn't be processed by the enhancement engine on this device — it will be saved exactly as captured.
+        </p>
+      )}
 
       <div className="flex flex-wrap justify-center gap-2 pt-1">
         <Button variant="outline" size="sm" onClick={onRetake}><RefreshCw className="h-4 w-4 mr-1.5" /> Retake</Button>
@@ -1133,7 +1253,10 @@ export function ReceiptsView({ currency }) {
               {/* Page strip — counter, reorder, remove, add */}
               {pages.length > 0 && (
                 <div className="space-y-1.5">
-                  <div className="flex gap-2 overflow-x-auto pb-1">
+                  <div className="flex gap-2 overflow-x-auto pb-1"
+                    style={{ touchAction: 'pan-x', overscrollBehaviorX: 'contain' }}
+                    onTouchStart={(e) => e.stopPropagation()}
+                    onTouchMove={(e) => e.stopPropagation()}>
                     {pages.map((p, i) => (
                       <div key={i} className="shrink-0 relative group">
                         <img src={p} alt={`page ${i + 1}`} className="h-24 w-20 object-cover rounded-lg border shadow-sm" />

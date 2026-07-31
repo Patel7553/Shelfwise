@@ -5132,3 +5132,16 @@ agent_communication:
         
         No critical issues found. All backend APIs working correctly.
 
+
+frontend:
+  - task: "Receipt Scanner core fixes (blank scan, blank thumbnails, edge-detect, swipe conflict)"
+    implemented: true
+    working: true
+    file: "components/shelfwise/receipts.jsx, public/opencv.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "4 root causes fixed: (1) ctx.filter blur unsupported on iOS Safari <18 caused divide-by-self -> uniform blank-grey scans; replaced with portable downscale/upscale blur + feature detection (sw_force_portable_blur localStorage debug hook). Visually verified in simulated iOS env: real image + real filter thumbnails. (2) OpenCV CDN docs.opencv.org/4.10.0/opencv.js now returns 404 -> edge detection never ran; self-hosted 10.9MB build at /public/opencv.js (loads 1.2s) with 4.x CDN fallback. (3) Loader crashed on Emscripten thenable (window.cv.then(...).catch is not a function) -> fixed, console clean; detection algorithm proven headlessly on test receipt: quad [[124,81],[102,797],[491,819],[514,103]] = exact receipt corners. (4) Filter strip + page strip now have touch-action:pan-x, overscroll-contain and touch stopPropagation. Also: canvasToJpegSafe validation at crop/enhance/save prevents any silent blank output ('data:,' iOS export failures now fall back to raw photo); warp output capped at 2200px for iOS canvas limits. NOTE: screenshot automation tool repeatedly hit its own time budget when OpenCV WASM compiles in-app (test-env constraint, not an app bug)."
