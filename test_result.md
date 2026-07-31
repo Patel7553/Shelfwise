@@ -5197,3 +5197,16 @@ frontend:
         - working: true
           agent: "main"
           comment: "User: detection fails on real docs, manual crop still skewed, Enhance worse than original, blurry thumbs. Fixes: (1) worker detect rewritten multi-strategy (Canny 50/150 + Canny 25/80 + Otsu, convexHull, approxPolyDP eps 0.02..0.08, top-5 contours, minArea 8%); (2) warp: source pre-downscaled to 1600px, 15s budget, and fallback-to-simple-crop is now a VISIBLE toast with reason (was silent -> user saw skew with no warning); (3) filters rebuilt with new helpers lumaPercentilesOf/stretchLevels(LUT)/unsharp/whiteBalance: enhance = flatten->percentile stretch (p1..median->5..252)->unsharp 0.85; magic = whiteBalance->stretch->saturation 1.3->sharpen; shadow = flatten+gentle stretch; grayscale = gray+stretch+sharpen; (4) thumbnails 140->280px. VERIFIED on realistic synthetic photo (angled receipt, wood table, lighting gradient, noise): detection matched ground truth corners, page straightened upright, Enhance = crisp dark text on white. USER MUST REDEPLOY."
+
+frontend:
+  - task: "Straightening made unfailable (pure-JS homography warp) + legible zoomed filter thumbnails"
+    implemented: true
+    working: true
+    file: "components/shelfwise/receipts.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "User (production): 'Couldn't straighten the page' toast on every crop + illegible grey thumbnails. Fixes: (1) warp REWRITTEN as pure-JS Heckbert square->quad homography + bilinear sampling INSIDE the worker — no OpenCV dependency, no transferable buffers (plain structured clone like the proven detect path), and warp messages no longer wait on ensureReady so straightening works even if OpenCV never loads; (2) thumbnails now a zoomed centre-crop (60% of page width around upper-text region) rendered at 220px in h-16 w-16 tiles — filters visibly distinguishable. VERIFIED: angled realistic receipt -> upright rectangular Enhance preview, NO failure toast, thumbnails show readable text rows with clearly distinct filter looks. USER MUST REDEPLOY."

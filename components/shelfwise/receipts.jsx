@@ -142,37 +142,62 @@ function detect(imageData) {
   }
 }
 function dist2(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+// PURE-JS perspective warp (Heckbert square->quad homography + bilinear
+// sampling). No OpenCV, no transferable buffers — nothing device-specific
+// left to fail. Runs in this worker so the UI never blocks.
 function warp(imageData, corners) {
-  const cv = self.cv;
   const tl = corners[0], tr = corners[1], br = corners[2], bl = corners[3];
   let W = Math.max(32, Math.round(Math.max(dist2(tl, tr), dist2(bl, br))));
   let H = Math.max(32, Math.round(Math.max(dist2(tl, bl), dist2(tr, br))));
   const cap = 2200, s = Math.min(1, cap / Math.max(W, H));
   W = Math.round(W * s); H = Math.round(H * s);
-  let src, dst, M, srcTri, dstTri;
-  try {
-    src = cv.matFromImageData(imageData);
-    srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [tl.x, tl.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y]);
-    dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, W, 0, W, H, 0, H]);
-    M = cv.getPerspectiveTransform(srcTri, dstTri);
-    dst = new cv.Mat();
-    cv.warpPerspective(src, M, dst, new cv.Size(W, H), cv.INTER_LINEAR, cv.BORDER_REPLICATE);
-    return { data: new Uint8ClampedArray(dst.data), width: W, height: H };
-  } finally {
-    [src, dst, M, srcTri, dstTri].forEach(function (m) { try { m && m.delete(); } catch (e) {} });
+  // Homography mapping unit square -> source quad (q0=tl q1=tr q2=br q3=bl)
+  const q0 = tl, q1 = tr, q2 = br, q3 = bl;
+  const dx1 = q1.x - q2.x, dx2 = q3.x - q2.x, dy1 = q1.y - q2.y, dy2 = q3.y - q2.y;
+  const sx = q0.x - q1.x + q2.x - q3.x, sy = q0.y - q1.y + q2.y - q3.y;
+  const den = dx1 * dy2 - dx2 * dy1 || 1e-9;
+  const g = (sx * dy2 - dx2 * sy) / den;
+  const h = (dx1 * sy - sx * dy1) / den;
+  const a = q1.x - q0.x + g * q1.x, b = q3.x - q0.x + h * q3.x, c = q0.x;
+  const d = q1.y - q0.y + g * q1.y, e = q3.y - q0.y + h * q3.y, f = q0.y;
+  const sw = imageData.width, sh = imageData.height, sd = imageData.data;
+  const out = new Uint8ClampedArray(W * H * 4);
+  const maxX = sw - 2, maxY = sh - 2;
+  for (let y = 0; y < H; y++) {
+    const v = y / H;
+    const bv = b * v + c, ev = e * v + f, hv = h * v + 1;
+    for (let x = 0; x < W; x++) {
+      const u = x / W;
+      const denom = g * u + hv;
+      let sxf = (a * u + bv) / denom;
+      let syf = (d * u + ev) / denom;
+      if (sxf < 0) sxf = 0; else if (sxf > maxX) sxf = maxX;
+      if (syf < 0) syf = 0; else if (syf > maxY) syf = maxY;
+      const x0 = sxf | 0, y0 = syf | 0;
+      const fx = sxf - x0, fy = syf - y0;
+      const i00 = (y0 * sw + x0) * 4, i10 = i00 + 4, i01 = i00 + sw * 4, i11 = i01 + 4;
+      const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy), w01 = (1 - fx) * fy, w11 = fx * fy;
+      const o = (y * W + x) * 4;
+      out[o] = sd[i00] * w00 + sd[i10] * w10 + sd[i01] * w01 + sd[i11] * w11;
+      out[o + 1] = sd[i00 + 1] * w00 + sd[i10 + 1] * w10 + sd[i01 + 1] * w01 + sd[i11 + 1] * w11;
+      out[o + 2] = sd[i00 + 2] * w00 + sd[i10 + 2] * w10 + sd[i01 + 2] * w01 + sd[i11 + 2] * w11;
+      out[o + 3] = 255;
+    }
   }
+  return { data: out, width: W, height: H };
 }
 self.onmessage = async function (e) {
   const d = e.data;
   try {
+    // 'warp' is pure JS — it must NEVER wait on (or fail with) OpenCV
+    if (d.type === 'warp') {
+      const out = warp(d.imageData, d.corners);
+      self.postMessage({ id: d.id, ok: true, out: out });
+      return;
+    }
     await ensureReady(d.origin);
     if (d.type === 'warm') { self.postMessage({ id: d.id, ok: true }); return; }
     if (d.type === 'detect') { self.postMessage({ id: d.id, ok: true, corners: detect(d.imageData) }); return; }
-    if (d.type === 'warp') {
-      const out = warp(d.imageData, d.corners);
-      self.postMessage({ id: d.id, ok: true, out: out }, [out.data.buffer]);
-      return;
-    }
   } catch (err) {
     self.postMessage({ id: d.id, ok: false, error: String((err && err.message) || err) });
   }
@@ -713,9 +738,9 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
         }
         const ictx = srcCanvas.getContext('2d')
         const idata = ictx.getImageData(0, 0, srcCanvas.width, srcCanvas.height)
-        const res = await cvCall('warp',
-          { imageData: { data: idata.data, width: idata.width, height: idata.height }, corners: sCorners },
-          [idata.data.buffer], 15000)
+        // Plain structured clone (NO transferables) — identical to the proven
+        // detection path; transfer-list quirks were breaking Safari
+        const res = await cvCall('warp', { imageData: idata, corners: sCorners }, [], 15000)
         if (res.ok && res.out?.data) {
           out = document.createElement('canvas')
           out.width = res.out.width; out.height = res.out.height
@@ -813,16 +838,25 @@ function EnhancePanel({ dataUrl, onDone, onBackToCrop, onRetake }) {
     return () => { cancelled = true }
   }, [dataUrl])
 
-  // Filter thumbnails (small, computed once per rotation)
+  // Filter thumbnails (zoomed centre-crop of the page — small but READABLE,
+  // so each filter's effect on actual text is visible at a glance)
   useEffect(() => {
     if (!baseCanvas) return
     let cancelled = false
     const t = setTimeout(() => {
-      const small = scaleCanvas(baseCanvas, 280)   // 2x display size = crisp previews
-      const plain = canvasToJpegSafe(small, 0.7, dataUrl)
+      const side = Math.min(baseCanvas.width, baseCanvas.height) * 0.6
+      const sx = (baseCanvas.width - side) / 2
+      const sy = Math.max(0, Math.min(baseCanvas.height - side, baseCanvas.height * 0.30 - side / 2))
+      const small = document.createElement('canvas')
+      small.width = 220; small.height = 220
+      const sctx = small.getContext('2d')
+      sctx.imageSmoothingEnabled = true
+      try { sctx.imageSmoothingQuality = 'high' } catch {}
+      sctx.drawImage(baseCanvas, sx, sy, side, side, 0, 0, 220, 220)
+      const plain = canvasToJpegSafe(small, 0.8, dataUrl)
       const out = {}
       for (const f of RECEIPT_FILTERS) {
-        try { out[f.key] = canvasToJpegSafe(applyReceiptFilter(small, f.key), 0.7, plain) } catch { out[f.key] = plain }
+        try { out[f.key] = canvasToJpegSafe(applyReceiptFilter(small, f.key), 0.8, plain) } catch { out[f.key] = plain }
         if (cancelled) return
       }
       if (!cancelled) setThumbs(out)
@@ -892,9 +926,9 @@ function EnhancePanel({ dataUrl, onDone, onBackToCrop, onRetake }) {
           <button key={f.key} type="button" onClick={() => setFilter(f.key)}
             className={`shrink-0 rounded-lg border-2 p-1 transition ${filter === f.key ? 'border-emerald-500 bg-emerald-50' : 'border-transparent hover:border-slate-300'}`}>
             {thumbs[f.key]
-              ? <img src={thumbs[f.key]} alt={f.label} className="h-14 w-12 object-cover rounded" />
-              : <div className="h-14 w-12 rounded bg-slate-100 flex items-center justify-center text-lg">{f.emoji}</div>}
-            <p className="text-[9px] font-semibold text-center mt-0.5 w-12 leading-tight">{f.label}</p>
+              ? <img src={thumbs[f.key]} alt={f.label} className="h-16 w-16 object-cover rounded" />
+              : <div className="h-16 w-16 rounded bg-slate-100 flex items-center justify-center text-lg">{f.emoji}</div>}
+            <p className="text-[9px] font-semibold text-center mt-0.5 w-16 leading-tight">{f.label}</p>
           </button>
         ))}
       </div>
