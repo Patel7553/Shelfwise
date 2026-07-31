@@ -47,7 +47,7 @@ const todayStr = () => new Date().toISOString().slice(0, 10)
 // OpenCV loader (lazy, only when the crop editor opens) + document detection
 // ---------------------------------------------------------------------------
 let cvPromise = null
-function loadScriptOnce(src, timeoutMs = 25000) {
+function loadScriptOnce(src, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
     const s = document.createElement('script')
     const timer = setTimeout(() => { s.remove(); reject(new Error('OpenCV load timed out')) }, timeoutMs)
@@ -477,6 +477,7 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
   const [detecting, setDetecting] = useState(true)
   const [cvReady, setCvReady] = useState(false)
   const dragIdx = useRef(-1)
+  const userMoved = useRef(false)   // once the user drags a corner, auto-detect must not override
 
   useEffect(() => {
     let cancelled = false
@@ -502,7 +503,12 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
       ]
       setCorners(def)
       try {
-        const cv = await loadOpenCV()
+        // HARD BUDGET: auto-detect gets 12s total (load + warm-up + detect).
+        // After that we silently keep the draggable manual corners.
+        const cv = await Promise.race([
+          loadOpenCV(),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('detect-budget-exceeded')), 12000)),
+        ])
         if (cancelled) return
         setCvReady(true)
         const small = document.createElement('canvas')
@@ -510,10 +516,10 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
         small.width = Math.round(img.width * ds); small.height = Math.round(img.height * ds)
         small.getContext('2d').drawImage(img, 0, 0, small.width, small.height)
         const found = detectDocumentCorners(cv, small)
-        if (found && !cancelled) setCorners(found.map(p => ({ x: p.x / ds, y: p.y / ds })))
-        else if (!cancelled) toast.info('Couldn\'t auto-detect the edges — drag the corners to fit the receipt')
+        if (found && !cancelled && !userMoved.current) setCorners(found.map(p => ({ x: p.x / ds, y: p.y / ds })))
+        else if (!found && !cancelled && !userMoved.current) toast.info('Couldn\'t auto-detect the edges — drag the corners to fit the receipt')
       } catch {
-        if (!cancelled) toast.info('Auto edge-detect unavailable — drag the corners manually, or use the full photo')
+        if (!cancelled && !userMoved.current) toast.info('Auto edge-detect took too long — drag the corners manually, or use the full photo')
       } finally { if (!cancelled) setDetecting(false) }
     }
     img.src = dataUrl
@@ -571,14 +577,14 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
           const s = toScreen(p)
           return (
             <div key={i}
-              onPointerDown={(e) => { e.preventDefault(); e.target.setPointerCapture?.(e.pointerId); dragIdx.current = i }}
+              onPointerDown={(e) => { e.preventDefault(); e.target.setPointerCapture?.(e.pointerId); dragIdx.current = i; userMoved.current = true }}
               className="absolute h-8 w-8 -ml-4 -mt-4 rounded-full bg-white border-[3px] border-emerald-500 shadow-md cursor-grab active:cursor-grabbing"
               style={{ left: s.x, top: s.y }} />
           )
         })}
         {detecting && (
-          <div className="absolute inset-0 bg-black/40 rounded-lg flex items-center justify-center text-white text-sm font-medium gap-2">
-            <Loader2 className="h-5 w-5 animate-spin" /> Detecting edges…
+          <div className="pointer-events-none absolute top-2 left-1/2 -translate-x-1/2 bg-black/65 rounded-full px-3 py-1.5 flex items-center gap-2 text-white text-xs font-medium shadow-lg">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Detecting edges… you can drag the corners meanwhile
           </div>
         )}
       </div>

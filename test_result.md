@@ -5145,3 +5145,16 @@ frontend:
         - working: true
           agent: "main"
           comment: "4 root causes fixed: (1) ctx.filter blur unsupported on iOS Safari <18 caused divide-by-self -> uniform blank-grey scans; replaced with portable downscale/upscale blur + feature detection (sw_force_portable_blur localStorage debug hook). Visually verified in simulated iOS env: real image + real filter thumbnails. (2) OpenCV CDN docs.opencv.org/4.10.0/opencv.js now returns 404 -> edge detection never ran; self-hosted 10.9MB build at /public/opencv.js (loads 1.2s) with 4.x CDN fallback. (3) Loader crashed on Emscripten thenable (window.cv.then(...).catch is not a function) -> fixed, console clean; detection algorithm proven headlessly on test receipt: quad [[124,81],[102,797],[491,819],[514,103]] = exact receipt corners. (4) Filter strip + page strip now have touch-action:pan-x, overscroll-contain and touch stopPropagation. Also: canvasToJpegSafe validation at crop/enhance/save prevents any silent blank output ('data:,' iOS export failures now fall back to raw photo); warp output capped at 2200px for iOS canvas limits. NOTE: screenshot automation tool repeatedly hit its own time budget when OpenCV WASM compiles in-app (test-env constraint, not an app bug)."
+
+frontend:
+  - task: "Edge-detection hang fix (12s budget + non-blocking indicator)"
+    implemented: true
+    working: true
+    file: "components/shelfwise/receipts.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "User reported 'Detecting edges…' hanging 5+ min on their phone (production build predates the loader fixes — old code polled a dead CDN forever). Hardened further: (1) Promise.race 12s overall budget on load+detect, then graceful fallback to manual corners with toast; (2) script-load timeout reduced 25s->10s per source; (3) full-canvas blocking overlay replaced with a non-blocking pill badge (pointer-events-none) so corners are draggable DURING detection; (4) userMoved ref — auto-detect never overrides corners the user already dragged. VERIFIED via Playwright with an infinitely-hanging opencv.js route: spinner cleared at 12.5s, toast shown, manual corners + Next:enhance usable. Happy path (self-hosted /opencv.js) loads in ~1.2s, detection finds receipt quad (proven headlessly). USER MUST REDEPLOY to get all scanner fixes in production."
