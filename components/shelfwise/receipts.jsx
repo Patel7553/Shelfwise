@@ -291,21 +291,8 @@ function rotateCanvas(src, dir) { // dir: 1 = clockwise, -1 = counter-clockwise
 // used to make this divide the image by an UNBLURRED copy of itself —
 // producing a uniform blank-grey scan. We feature-detect and fall back to a
 // downscale→upscale blur that works in every browser.
-let _ctxFilterSupport = null
-function supportsCtxFilter() {
-  if (_ctxFilterSupport !== null) return _ctxFilterSupport
-  try {
-    // Debug hook: force the portable-blur path (simulates iOS Safari < 18)
-    if (typeof window !== 'undefined' && window.localStorage?.getItem('sw_force_portable_blur') === '1') {
-      _ctxFilterSupport = false
-      return false
-    }
-    const ctx = document.createElement('canvas').getContext('2d')
-    ctx.filter = 'blur(2px)'
-    _ctxFilterSupport = ctx.filter === 'blur(2px)'
-  } catch { _ctxFilterSupport = false }
-  return _ctxFilterSupport
-}
+// NOTE: we deliberately do NOT use ctx.filter='blur()' anywhere — Safari can
+// silently ignore it even when the property reflects the assigned value.
 
 // Heavy blur that works everywhere: shrink hard (bilinear averaging), bounce
 // once at low-res, then scale back up with smoothing.
@@ -328,16 +315,10 @@ function portableBlur(canvas, radius) {
 function flattenIllumination(canvas, keepColor = true) {
   const w = canvas.width, h = canvas.height
   const radius = Math.max(8, Math.round(Math.max(w, h) / 40))
-  let bg
-  if (supportsCtxFilter()) {
-    bg = document.createElement('canvas')
-    bg.width = w; bg.height = h
-    const bctx = bg.getContext('2d')
-    bctx.filter = `blur(${radius}px)`
-    bctx.drawImage(canvas, 0, 0)
-  } else {
-    bg = portableBlur(canvas, radius)
-  }
+  // ALWAYS use the portable blur. Native ctx.filter blur is unreliable on
+  // Safari (it can silently no-op even when the API "exists"), which made the
+  // image divide by itself -> pure-white "blank" scans on iPhone.
+  const bg = portableBlur(canvas, radius)
   const bctx = bg.getContext('2d')
   const out = document.createElement('canvas')
   out.width = w; out.height = h
@@ -380,6 +361,21 @@ function meanLuma(canvas) {
   let sum = 0
   for (let i = 0; i < d.length; i += 4) sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
   return sum / (d.length / 4)
+}
+
+// Median brightness — robust against dark table-edges left around the crop
+// (mean/std gets dragged down by borders and then wipes faint handwriting).
+function lumaMedian(canvas) {
+  const s = scaleCanvas(canvas, 200)
+  const d = s.getContext('2d').getImageData(0, 0, s.width, s.height).data
+  const hist = new Array(256).fill(0)
+  const n = d.length / 4
+  for (let i = 0; i < d.length; i += 4) {
+    hist[Math.min(255, Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]))]++
+  }
+  let acc = 0
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= n / 2) return v }
+  return 255
 }
 
 // Auto levels: stretch each channel between its 2nd and 98th percentile
@@ -453,7 +449,9 @@ function applyReceiptFilter(canvas, key) {
     }
     case 'bw': {
       const flat = flattenIllumination(canvas, false)
-      const thr = Math.min(215, Math.max(120, meanLuma(flat) * 0.82))
+      // Median = paper brightness (robust vs dark borders); anything clearly
+      // darker is ink — keeps faint pencil that fixed thresholds erased
+      const thr = Math.min(224, Math.max(140, lumaMedian(flat) - 16))
       return mapPixels(flat, (d) => {
         for (let i = 0; i < d.length; i += 4) {
           const v = d[i] < thr ? 0 : 255
@@ -463,7 +461,7 @@ function applyReceiptFilter(canvas, key) {
     }
     case 'eco': {
       const flat = flattenIllumination(canvas, false)
-      const thr = Math.min(215, Math.max(120, meanLuma(flat) * 0.85))
+      const thr = Math.min(224, Math.max(140, lumaMedian(flat) - 16))
       return mapPixels(flat, (d) => {
         for (let i = 0; i < d.length; i += 4) {
           const v = d[i] < thr ? Math.min(140, d[i] + 70) : 255

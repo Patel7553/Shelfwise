@@ -5171,3 +5171,16 @@ frontend:
         - working: true
           agent: "main"
           comment: "User's iPhone froze completely (no taps/close) during 'Detecting edges' — root cause: 10.9MB OpenCV compiled ON the main thread, which locks iOS Safari (timeouts can't even fire). Rewrote: OpenCV now loads+compiles inside a Blob Web Worker (CV_WORKER_CODE); detect + perspective warp both run in worker via cvCall() with 15s/12s budgets; worker pre-warmed on Receipts mount; main-thread detectDocumentCorners/warpPerspective/loadOpenCV removed. VERIFIED end-to-end in-app: badge appeared 0.1s, detection finished 1.1s, corners snapped EXACTLY to skewed test receipt ([[20,9],[82,11],[78,91],[16,88]] vs fallback 5/95), enhance preview shows deskewed straightened receipt with Enhance filter, all thumbnails real content, UI fully responsive throughout (screenshots no longer stall = main thread free). USER MUST REDEPLOY."
+
+frontend:
+  - task: "iPhone blank-filter fix v2: portableBlur ALWAYS + median-based adaptive B&W/Eco threshold"
+    implemented: true
+    working: true
+    file: "components/shelfwise/receipts.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "User's iPhone: flatten-based filters (Enhance/Shadow/B&W/Eco) blank-white while Magic/Lighten/Grayscale fine -> Safari REFLECTS ctx.filter but silently doesn't apply it, defeating property-based feature detection. Fix: removed ctx.filter usage entirely; flattenIllumination now ALWAYS uses portableBlur (works identically everywhere). Also B&W/Eco threshold rewritten: lumaMedian-16 (median robust vs dark table borders; old mean*0.82 and mean-k*std both wiped faint pencil). VERIFIED: synthetic faint handwritten note (202 vs 238 paper, dark table bg) -> B&W preview shows all 6 text lines preserved on clean white; edge detect + deskew still working (1.1s). USER MUST REDEPLOY."
