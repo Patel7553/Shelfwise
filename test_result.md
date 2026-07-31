@@ -5223,3 +5223,16 @@ frontend:
         - working: true
           agent: "main"
           comment: "User requested an established scanning library instead of custom logic. Assessment via integration playbook: Google ML Kit = Android-native only (impossible for web PWA); Genius Scan/Dynamsoft = commercial license keys needed; jscanify (MIT, opencv-based) = best fit. Integrated: yarn add jscanify, self-hosted at /public/jscanify.min.js, loaded in the CV worker via importScripts after opencv. detect() now tries jscanify findPaperContour+getCornerPoints first (with quadArea>=6% sanity check), falls back to custom multi-strategy detection. Pure-JS warp and filters unchanged. VERIFIED: realistic angled receipt -> detection 1.3s, corners match ground truth, straightened upright, crisp Enhance output, no failure toasts. USER MUST REDEPLOY."
+
+frontend:
+  - task: "Dynamsoft Mobile Document Scanner integration (live viewfinder, user trial license)"
+    implemented: true
+    working: true
+    file: "components/shelfwise/receipts.jsx, .env (NEXT_PUBLIC_DYNAMSOFT_LICENSE)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "User confirmed ML Kit impossible (Android-native only, web PWA incompatible) and provided Dynamsoft trial license. Integrated dynamsoft-document-scanner@1.3.1 (dds.bundle.js via jsdelivr, loaded on demand): new 'Live scan (recommended)' button at top of Add-receipt source step -> hides dialog -> scanner.launch() fullscreen viewfinder (real-time Detect Borders ON, Smart Capture ON, Auto Crop ON via scannerViewConfig) -> correctedImageResult.toCanvas() -> straight into existing enhance/filter step -> multi-page/OCR/PDF pipeline unchanged. Cancel returns to source step; any SDK/license failure shows toast and the free jscanify flow remains as full fallback. VERIFIED in sandbox: SDK loaded, license VALIDATED (no license errors), fullscreen viewfinder launched with fake camera, all three modes ON. NOTE: trial license expires after 30 days -> live-scan button will error but photo flow keeps working. USER MUST REDEPLOY."

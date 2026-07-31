@@ -279,6 +279,45 @@ function cvCall(type, payload = {}, transfer = [], timeoutMs = 15000) {
 // it's usually ready before the user has even taken the photo.
 function warmCvWorker() { cvCall('warm', {}, [], 60000) }
 
+// ---------------------------------------------------------------------------
+// Dynamsoft Mobile Document Scanner (commercial SDK, user-provided license):
+// fullscreen LIVE viewfinder with real-time edge detection, auto-capture and
+// auto perspective correction. Loaded on demand from CDN; the free scanner
+// flow remains the fallback if the SDK or license ever fails.
+// ---------------------------------------------------------------------------
+const DDS_SRC = 'https://cdn.jsdelivr.net/npm/dynamsoft-document-scanner@1.3.1/dist/dds.bundle.js'
+let _ddsPromise = null
+function getDynamsoftScanner() {
+  if (typeof window === 'undefined') return Promise.reject(new Error('no window'))
+  if (!process.env.NEXT_PUBLIC_DYNAMSOFT_LICENSE) return Promise.reject(new Error('no license configured'))
+  if (!_ddsPromise) {
+    _ddsPromise = new Promise((resolve, reject) => {
+      const done = () => {
+        try {
+          if (!window.__swDds) {
+            window.__swDds = new window.Dynamsoft.DocumentScanner({
+              license: process.env.NEXT_PUBLIC_DYNAMSOFT_LICENSE,
+              scannerViewConfig: {
+                enableAutoCropMode: true,      // auto-crop to detected borders
+                enableSmartCaptureMode: true,  // auto-capture when framed steady
+              },
+            })
+          }
+          resolve(window.__swDds)
+        } catch (e) { reject(e) }
+      }
+      if (window.Dynamsoft?.DocumentScanner) return done()
+      const s = document.createElement('script')
+      s.src = DDS_SRC
+      s.async = true
+      s.onload = done
+      s.onerror = () => { s.remove(); reject(new Error('scanner SDK failed to load')) }
+      document.head.appendChild(s)
+    }).catch((e) => { _ddsPromise = null; throw e })
+  }
+  return _ddsPromise
+}
+
 function orderCorners(pts) {
   const bySum = [...pts].sort((a, b) => (a.x + a.y) - (b.x + b.y))
   const tl = bySum[0], br = bySum[3]
@@ -1173,6 +1212,33 @@ export function ReceiptsView({ currency }) {
     } catch (e) { toast.error(e.message) }
   }
   const onCropped = (dataUrl) => { setCroppedImage(dataUrl); setStep('enhance') }
+
+  // Dynamsoft LIVE scan: fullscreen viewfinder -> auto-capture -> already
+  // cropped & straightened -> jump straight to our enhance/filter step
+  const [liveScanBusy, setLiveScanBusy] = useState(false)
+  const liveScan = async () => {
+    if (liveScanBusy) return
+    setLiveScanBusy(true)
+    setAddOpen(false)   // our dialog would fight the fullscreen scanner UI
+    try {
+      const scanner = await getDynamsoftScanner()
+      const result = await scanner.launch()
+      const img = result?.correctedImageResult
+      if (img) {
+        const canvas = img.toCanvas()
+        const dataUrl = canvasToJpegSafe(canvas, 0.9, null)
+        if (!dataUrl) throw new Error('empty scan output')
+        setCroppedImage(dataUrl)
+        setStep('enhance')
+      }
+      // user cancelled -> stay on source step
+    } catch (e) {
+      toast.error(`Live scanner unavailable (${e?.message || 'error'}) — use Take photo instead`)
+    } finally {
+      setLiveScanBusy(false)
+      setAddOpen(true)
+    }
+  }
   const onPageDone = async (pageUrl) => {
     const isFirst = pages.length === 0
     setPages(prev => [...prev, pageUrl])
@@ -1459,6 +1525,14 @@ export function ReceiptsView({ currency }) {
 
           {step === 'source' && (
             <div className="space-y-3 py-1">
+              {!!process.env.NEXT_PUBLIC_DYNAMSOFT_LICENSE && (
+                <button type="button" onClick={liveScan} disabled={liveScanBusy}
+                  className="w-full border-2 border-emerald-500 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 transition rounded-xl p-4 text-center text-white shadow-md">
+                  <div className="text-3xl mb-1">{liveScanBusy ? '⏳' : '🎯'}</div>
+                  <p className="font-bold text-sm">{liveScanBusy ? 'Opening live scanner…' : 'Live scan (recommended)'}</p>
+                  <p className="text-[11px] text-emerald-100 mt-0.5">Real-time edge detection · auto-capture · auto-straighten</p>
+                </button>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
                   <input type="file" accept="image/*" capture="environment" className="hidden" onChange={e => { onImagePicked(e.target.files?.[0]); e.target.value = '' }} />
