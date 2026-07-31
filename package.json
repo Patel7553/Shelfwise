@@ -22,6 +22,7 @@
     "clsx": "2.1.1",
     "dotenv": "^17.4.2",
     "html5-qrcode": "^2.3.8",
+    "jscanify": "^1.4.3",
     "jsonwebtoken": "^9.0.3",
     "jszip": "^3.10.1",
     "lucide-react": "0.516.0",

@@ -59,6 +59,8 @@ function ensureReady(origin) {
       try {
         try { importScripts(origin + '/opencv.js'); }
         catch (e) { importScripts('https://docs.opencv.org/4.x/opencv.js'); }
+        // jscanify (MIT) — proven document-detection library on top of OpenCV
+        try { importScripts(origin + '/jscanify.min.js'); } catch (e) { /* optional */ }
         const chk = () => {
           if (self.cv && self.cv.Mat) resolve();
           else if (self.cv && self.cv.then) self.cv.then(function (m) { self.cv = m; resolve(); });
@@ -112,7 +114,41 @@ function findQuad(edges, imgArea) {
   contours.delete(); hierarchy.delete();
   return result;
 }
+function quadArea(pts) {
+  let a = 0;
+  for (let i = 0; i < 4; i++) {
+    const p = pts[i], q = pts[(i + 1) % 4];
+    a += p.x * q.y - q.x * p.y;
+  }
+  return Math.abs(a) / 2;
+}
+// PRIMARY: jscanify (proven MIT document-detection library).
+function detectWithJscanify(imageData) {
+  if (!self.jscanify) return null;
+  const cv = self.cv;
+  let mat = null, contour = null;
+  try {
+    mat = cv.matFromImageData(imageData);
+    const scanner = new self.jscanify();
+    contour = scanner.findPaperContour(mat);
+    if (!contour) return null;
+    const cp = scanner.getCornerPoints(contour);
+    if (!cp || !cp.topLeftCorner || !cp.topRightCorner || !cp.bottomRightCorner || !cp.bottomLeftCorner) return null;
+    const pts = [cp.topLeftCorner, cp.topRightCorner, cp.bottomRightCorner, cp.bottomLeftCorner];
+    // sanity: the quad must cover a meaningful part of the photo
+    if (quadArea(pts) < imageData.width * imageData.height * 0.06) return null;
+    return pts.map(function (p) { return { x: p.x, y: p.y }; });
+  } catch (e) { return null; } finally {
+    try { contour && contour.delete && contour.delete(); } catch (e) {}
+    try { mat && mat.delete(); } catch (e) {}
+  }
+}
 function detect(imageData) {
+  const jq = detectWithJscanify(imageData);
+  if (jq) return orderCorners(jq);
+  return detectCustom(imageData);
+}
+function detectCustom(imageData) {
   const cv = self.cv;
   const imgArea = imageData.width * imageData.height;
   let src, gray, blur, kernel;

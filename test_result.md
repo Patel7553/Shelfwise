@@ -5210,3 +5210,16 @@ frontend:
         - working: true
           agent: "main"
           comment: "User (production): 'Couldn't straighten the page' toast on every crop + illegible grey thumbnails. Fixes: (1) warp REWRITTEN as pure-JS Heckbert square->quad homography + bilinear sampling INSIDE the worker — no OpenCV dependency, no transferable buffers (plain structured clone like the proven detect path), and warp messages no longer wait on ensureReady so straightening works even if OpenCV never loads; (2) thumbnails now a zoomed centre-crop (60% of page width around upper-text region) rendered at 220px in h-16 w-16 tiles — filters visibly distinguishable. VERIFIED: angled realistic receipt -> upright rectangular Enhance preview, NO failure toast, thumbnails show readable text rows with clearly distinct filter looks. USER MUST REDEPLOY."
+
+frontend:
+  - task: "jscanify integration (proven MIT document-scanner library as primary detector)"
+    implemented: true
+    working: true
+    file: "components/shelfwise/receipts.jsx, public/jscanify.min.js, package.json"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "User requested an established scanning library instead of custom logic. Assessment via integration playbook: Google ML Kit = Android-native only (impossible for web PWA); Genius Scan/Dynamsoft = commercial license keys needed; jscanify (MIT, opencv-based) = best fit. Integrated: yarn add jscanify, self-hosted at /public/jscanify.min.js, loaded in the CV worker via importScripts after opencv. detect() now tries jscanify findPaperContour+getCornerPoints first (with quadArea>=6% sanity check), falls back to custom multi-strategy detection. Pure-JS warp and filters unchanged. VERIFIED: realistic angled receipt -> detection 1.3s, corners match ground truth, straightened upright, crisp Enhance output, no failure toasts. USER MUST REDEPLOY."
