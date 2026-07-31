@@ -98,3 +98,14 @@ RECEIPTS (nav "Receipts", all inventory roles):
 - Verified: screenshots (receipts list, add dialog 4 tiles, crop editor auto-detect WORKS, AI details step),
   backend 12/12 after fixing missing 'receipts' in ownerOrChef GET array.
 - Production needs REDEPLOY + migration-23 run.
+
+## Session (Aug 2026, cont. 5) — Receipts access restriction + form reorder
+1. RECEIPTS OWNER-ONLY: nav + view gated by can('receipts') (owners/admins/managers pass; staff need
+   'receipts' in perms — default OFF). PERM_OPTIONS in settings-auth.jsx gained {key:'receipts'} checkbox
+   (Staff Management -> custom access). Server-side: new chefHasPerm(sb,ctx,perm) helper enforces on ALL
+   receipt endpoints (GET/POST/PUT/DELETE + ai-extract) -> 403 for staff without the perm.
+2. ADD PRODUCT FORM REORDER: Date Received now BEFORE Expiry Date. Final order: Name, Quantity, Unit,
+   Category, Storage, Shelf/Location, Date Received, Expiry Date, Prepared By, Note, Photo, Cost & Supply.
+3. migration-23-receipts.sql updated to the alter-based fixed version (user's DB had an old receipts table).
+Verified via screenshots: owner sees Receipts + correct form order; staff (perms:['orders']) has NO Receipts
+nav; header identity badge works for both. Production needs REDEPLOY.

@@ -2168,6 +2168,7 @@ export function StaffActivityCard() {
   const PERM_OPTIONS = [
     { key: 'orders', label: 'Orders', emoji: '🚚' },
     { key: 'logbook', label: 'Print & scan logbook', emoji: '📒' },
+    { key: 'receipts', label: 'Receipt scanner & export', emoji: '🧾' },
     { key: 'settings', label: 'Full kitchen settings', emoji: '⚙️' },
   ]
   const [choosing, setChoosing] = useState('')       // name whose access is being edited

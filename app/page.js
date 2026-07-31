@@ -2160,7 +2160,7 @@ function App() {
                 <Truck className="h-4 w-4 xl:mr-2" /> <span className="hidden xl:inline">Orders</span>
               </Button>
             )}
-            {hasStock && (
+            {hasStock && can('receipts') && (
               <Button variant={view === 'receipts' ? 'default' : 'ghost'} size="sm" onClick={() => setView('receipts')} title="Receipts" className="shrink-0">
                 <ReceiptText className="h-4 w-4 xl:mr-2" /> <span className="hidden xl:inline">Receipts</span>
               </Button>
@@ -2246,7 +2246,7 @@ function App() {
                 <Truck className="h-4 w-4 mr-2" /> Orders
               </Button>
             )}
-            {hasStock && (
+            {hasStock && can('receipts') && (
               <Button variant={view === 'receipts' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('receipts'); setMobileNav(false) }}>
                 <ReceiptText className="h-4 w-4 mr-2" /> Receipts
               </Button>
@@ -2374,7 +2374,7 @@ function App() {
         {view === 'orders' && can('orders') && (
           <OrdersView />
         )}
-        {view === 'receipts' && (
+        {view === 'receipts' && can('receipts') && (
           <ReceiptsView currency={settings.currency} />
         )}
         {view === 'analytics' && (
@@ -2434,10 +2434,6 @@ function App() {
               })()}
             </div>
             <div>
-              <Label htmlFor="expiry">Expiry Date</Label>
-              <Input id="expiry" type="date" value={form.expiryDate} onChange={e => setForm({ ...form, expiryDate: e.target.value })} />
-            </div>
-            <div>
               <Label htmlFor="category">Category</Label>
               <Input id="category" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} placeholder="Dairy, Produce..." />
             </div>
@@ -2483,6 +2479,10 @@ function App() {
                 }}
               />
               <p className="text-[10px] text-muted-foreground mt-0.5">Auto-set to today — change it and the expiry recalculates from this date</p>
+            </div>
+            <div>
+              <Label htmlFor="expiry">Expiry Date</Label>
+              <Input id="expiry" type="date" value={form.expiryDate} onChange={e => setForm({ ...form, expiryDate: e.target.value })} />
             </div>
             <div className="sm:col-span-2">
               <Label htmlFor="prep">Prepared By</Label>

@@ -1,25 +1,28 @@
 -- ============================================================
--- Migration 23 — Receipt Scanner & Export
+-- Migration 23 (fixed) — Receipt Scanner & Export
 -- Run this in the Supabase SQL editor.
+-- Works even if an old "receipts" table already exists:
+-- it adds any missing columns instead of failing.
 -- ============================================================
 
 create table if not exists receipts (
-  id uuid primary key,
-  kitchen_id uuid not null references kitchens(id) on delete cascade,
-  receipt_date date,
-  supplier text not null default '',
-  amount numeric,
-  currency text not null default '',
-  status text not null default 'pending',        -- pending | submitted | reviewed
-  color text not null default '',                -- optional colour tag
-  notes text not null default '',
-  image_path text not null default '',           -- path inside the private "receipts" storage bucket
-  file_type text not null default '',            -- 'image' | 'pdf' | '' (details-only record)
-  added_by text not null default '',
-  edited_by text not null default '',
-  edited_at timestamptz,
-  created_at timestamptz not null default now()
+  id uuid primary key
 );
+
+alter table receipts add column if not exists kitchen_id uuid references kitchens(id) on delete cascade;
+alter table receipts add column if not exists receipt_date date;
+alter table receipts add column if not exists supplier text not null default '';
+alter table receipts add column if not exists amount numeric;
+alter table receipts add column if not exists currency text not null default '';
+alter table receipts add column if not exists status text not null default 'pending';   -- pending | submitted | reviewed
+alter table receipts add column if not exists color text not null default '';           -- optional colour tag
+alter table receipts add column if not exists notes text not null default '';
+alter table receipts add column if not exists image_path text not null default '';      -- path in the private "receipts" bucket
+alter table receipts add column if not exists file_type text not null default '';       -- 'image' | 'pdf' | ''
+alter table receipts add column if not exists added_by text not null default '';
+alter table receipts add column if not exists edited_by text not null default '';
+alter table receipts add column if not exists edited_at timestamptz;
+alter table receipts add column if not exists created_at timestamptz not null default now();
 
 create index if not exists idx_receipts_kitchen_date on receipts (kitchen_id, receipt_date desc);
 

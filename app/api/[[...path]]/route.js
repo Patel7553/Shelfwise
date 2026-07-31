@@ -2134,6 +2134,29 @@ async function resolveStaffName(sb, ctx, raw) {
   return p
 }
 
+// Permission check for chef-token sessions (owners/admins always pass, and so
+// do managers — matching the frontend can() logic). Staff need the specific
+// perm in their entry. Used to keep restricted features (e.g. receipts)
+// server-side safe, not just hidden in the UI.
+async function chefHasPerm(sb, ctx, perm) {
+  if (ctx?.role !== 'chef') return true
+  try {
+    let list = Array.isArray(ctx?.kitchen?.staff_names) ? ctx.kitchen.staff_names : null
+    const kId = ctx?.kitchenId || ctx?.kitchen?.id
+    if (!list && kId) {
+      const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', kId).maybeSingle()
+      list = Array.isArray(k?.staff_names) ? k.staff_names : []
+    }
+    const person = String(ctx?.person || '').toLowerCase()
+    if (!person) return false
+    const entry = (list || []).find(e => String(e?.name || '').toLowerCase() === person)
+      || (list || []).find(e => Array.isArray(e?.prevNames) && e.prevNames.some(n => String(n).toLowerCase() === person))
+    if (!entry) return false
+    if (entry.isOwner || entry.role === 'manager') return true
+    return Array.isArray(entry.perms) && entry.perms.includes(perm)
+  } catch { return false }
+}
+
 // DPDP: record a person's consent ONCE (first code login) — a timestamped
 // row in activity_logs acts as the compliance register.
 async function logConsentOnce(sb, kitchenId, person, detail) {
@@ -2810,7 +2833,9 @@ export async function GET(request, { params }) {
       }
 
       // ------- RECEIPTS: list scanned supplier receipts (Aug 2026) -------
+      // Owners/managers only by default; staff need the 'receipts' perm.
       if (path === 'receipts') {
+        if (!(await chefHasPerm(sb, ctx, 'receipts'))) return json({ error: 'No access to receipts — ask the owner to enable it for you' }, 403)
         const url = new URL(request.url)
         const from = url.searchParams.get('from')
         const to = url.searchParams.get('to')
@@ -4348,6 +4373,7 @@ Output strictly valid JSON with no other text.`
 
       // ------- RECEIPTS: save a scanned / uploaded / manual receipt -------
       if (path === 'receipts') {
+        if (!(await chefHasPerm(sb, ctx, 'receipts'))) return json({ error: 'No access to receipts — ask the owner to enable it for you' }, 403)
         const body = await request.json()
         const person = await validatedPersonFromRequest(sb, request, ctx)
         const id = uuidv4()
@@ -4407,6 +4433,7 @@ Output strictly valid JSON with no other text.`
 
       // ------- RECEIPTS: AI reads supplier / date / total from the photo -------
       if (path === 'receipts/ai-extract') {
+        if (!(await chefHasPerm(sb, ctx, 'receipts'))) return json({ error: 'No access to receipts — ask the owner to enable it for you' }, 403)
         const body = await request.json()
         if (!body.dataUrl) return json({ error: 'dataUrl required' }, 400)
         try {
@@ -5430,6 +5457,7 @@ export async function PUT(request, { params }) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
       if (ctx.kitchen && ctx.kitchen.account_type === 'supplier') return json({ error: 'Supplier accounts cannot access kitchen tools' }, 403)
+      if (!(await chefHasPerm(sb, ctx, 'receipts'))) return json({ error: 'No access to receipts — ask the owner to enable it for you' }, 403)
       const body = await request.json()
       const patch = {}
       if (body.supplier !== undefined) patch.supplier = String(body.supplier || '').trim().slice(0, 120)
@@ -5490,6 +5518,7 @@ export async function DELETE(request, { params }) {
     if (segs[0] === 'receipts' && segs[1]) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
+      if (!(await chefHasPerm(sb, ctx, 'receipts'))) return json({ error: 'No access to receipts — ask the owner to enable it for you' }, 403)
       const { data: r } = await sb.from('receipts').select('image_path, supplier').eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
       const { error: e2 } = await sb.from('receipts').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
       if (e2) return json({ error: e2.message }, 500)
