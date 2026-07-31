@@ -76,3 +76,25 @@ Next.js App Router PWA (Supabase Postgres) for professional kitchen management: 
   distinct from regenerate-code + delete. Updates local sw_person_name/sw_kiosk_user if renamed person active.
 - Verified: 5/5 unit tests (old-token resolution), 10/10 backend wiring tests, screenshot of Staff screen.
 - Production needs REDEPLOY.
+
+## Session (Aug 2026, cont. 4) — Receipts feature + 3 updates
+RECEIPTS (nav "Receipts", all inventory roles):
+- Backend: GET/POST /api/receipts (base64 image/pdf -> private 'receipts' storage bucket, auto-creates bucket;
+  signed URLs 1h), POST /api/receipts/ai-extract (gpt-4o vision -> supplier/date/total/currency),
+  PUT/DELETE /api/receipts/:id (edit attribution). 'receipts' added to BOTH ownerOrChef GET array (line ~2753)
+  AND kitchenScoped POST array. receiptFromDb + extractReceiptDetails helpers.
+- DB: supabase/migration-23-receipts.sql (receipts table + storage bucket) — USER MUST RUN IT in Supabase SQL editor.
+- Frontend: components/shelfwise/receipts.jsx — scan flow (camera/library/PDF/details-only), OpenCV.js (CDN,
+  lazy) auto edge-detect + draggable-corner perspective crop w/ fallbacks, AI autofill, status (pending/
+  submitted/reviewed) + 8 colour tags, export dialog (Today/Week/Month/custom; combined PDF via pdf-lib or
+  separate PDFs zipped via jszip; PDFs merged with copyPages; details-only get text pages).
+- Packages added: pdf-lib, jszip (yarn).
+3 UPDATES:
+- Header shows active person: "👤 {me.personName}" under kitchen name (page.js center header block).
+- Product edits stamp custom_fields._editedBy/_editedAt (PUT /api/products/:id preserves _addedBy from DB);
+  inventory rows show "✏️ Last edited by X — time"; temp-log PUT logs 'temp_updated' activity.
+- Product Note field: body.note -> custom_fields._note (toDb), shown in inventory row (amber chip), editable
+  in form (EMPTY_FORM.note, openEdit maps it).
+- Verified: screenshots (receipts list, add dialog 4 tiles, crop editor auto-detect WORKS, AI details step),
+  backend 12/12 after fixing missing 'receipts' in ownerOrChef GET array.
+- Production needs REDEPLOY + migration-23 run.
