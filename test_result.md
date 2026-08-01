@@ -5262,3 +5262,16 @@ frontend:
         - working: true
           agent: "main"
           comment: "User (prod PWA): no Live scan button + blurry output. (1) Button now driven by ddsLicense state fetched from /api/config/scanner at runtime (build-time env fallback kept); verified button renders via runtime fetch. (2) Sharpness: fileToJpegDataUrl 2000->2600 @0.9, warp input cap 1600->2600, worker warp output cap 2200->2600, final jpeg 0.88->0.92. Verified with 3024px phone-like photo: straightened page saved at 1072px paper width (= full native paper resolution at cap; old pipeline ~830px). No straighten-failure toast. NOTE: sw.js does NO asset caching (push-only) so stale-PWA not a factor. If Live scan button still missing in production after redeploy, the production runtime env lacks NEXT_PUBLIC_DYNAMSOFT_LICENSE -> user должен contact Emergent Support to add it."
+
+frontend:
+  - task: "Stale production PWA root cause: year-long HTML cache -> force-dynamic + cache-busted updater"
+    implemented: true
+    working: true
+    file: "app/layout.js, app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "User's phone kept showing the old app (no Live scan button) after redeploy + force-close. Diagnosed from outside: prod serves HTML with 'cache-control: s-maxage=31536000, stale-while-revalidate' because Next statically prerendered the shell — devices/CDN keep stale HTML up to a year. Verified prod ORIGIN has new code (chunk grep found 'Live scan' + 'config/scanner') — purely a caching issue. Fixes: (1) export const dynamic='force-dynamic' in app/layout.js — production build verified: all routes now dynamic (no-store); (2) version-updater doReload now navigates to '/?u='+Date.now() (cache-busted) instead of location.reload() which could re-serve cached shell. yarn build passes (25s). USER MUST REDEPLOY, then on the phone: open app (revalidates in background), force-close, reopen -> fresh; or delete + re-add home-screen icon for guaranteed refresh."

@@ -1,6 +1,13 @@
 import './globals.css'
 import { Toaster } from 'sonner'
 
+// CRITICAL (Aug 2026): force every HTML response to render dynamically.
+// Without this, Next statically prerenders the shell and serves it with
+// "s-maxage=31536000, stale-while-revalidate" — phones/CDNs then keep the
+// OLD app for up to a YEAR after a redeploy (users saw stale UIs that no
+// force-close would fix). Dynamic rendering sends no-store headers instead.
+export const dynamic = 'force-dynamic'
+
 export const metadata = {
   title: 'ShelfWise — Kitchen Inventory & Waste Reduction',
   description: 'Smart inventory management for restaurants, cafes & institutional kitchens. Track expiries, reduce waste.',

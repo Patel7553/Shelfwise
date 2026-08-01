@@ -1890,7 +1890,9 @@ function App() {
       sessionStorage.setItem(key, '1')
       try { localStorage.setItem('sw_last_version', v) } catch {}
       toast.info('New version available — updating…')
-      setTimeout(() => window.location.reload(), 1200)
+      // Cache-busted navigation: a unique URL bypasses any stale cached HTML
+      // (plain location.reload() could re-serve the year-long cached shell)
+      setTimeout(() => window.location.replace('/?u=' + Date.now()), 1200)
     }
     const check = async () => {
       try {
