@@ -947,7 +947,9 @@ function EnhancePanel({ dataUrl, onDone, onBackToCrop, onRetake }) {
     setWorking(true)
     const t = setTimeout(() => {
       try {
-        const mid = scaleCanvas(baseCanvas, 900)
+        // FULL-resolution preview — what you pinch-zoom is exactly what gets
+        // saved (only capped at 2600px to respect iOS canvas limits)
+        const mid = Math.max(baseCanvas.width, baseCanvas.height) > 2600 ? scaleCanvas(baseCanvas, 2600) : baseCanvas
         let out = applyReceiptFilter(mid, filter)
         out = drawStamp(out, stamp)
         if (!cancelled) setPreviewUrl(canvasToJpegSafe(out, 0.85, dataUrl))
@@ -1237,7 +1239,7 @@ export function ReceiptsView({ currency }) {
       const img = result?.correctedImageResult
       if (img) {
         const canvas = img.toCanvas()
-        const dataUrl = canvasToJpegSafe(canvas, 0.9, null)
+        const dataUrl = canvasToJpegSafe(canvas, 0.95, null)   // minimal compression on live-scan captures
         if (!dataUrl) throw new Error('empty scan output')
         setCroppedImage(dataUrl)
         setStep('enhance')

@@ -5301,3 +5301,29 @@ frontend:
         - working: true
           agent: "main"
           comment: "DISCOVERY: user's phone/PWA runs shelfwise.co.in — served by VERCEL (curl: server: Vercel), a separate deployment from kitchen-stock-39.emergent.host. ALL Emergent redeploys never touched the user's actual app — explains every 'still old' report. Also fixed: Emergent deployment login showed 'Supabase env vars missing in browser' (NEXT_PUBLIC_* not inlined at build). supabaseBrowser.js now falls back to fetching /api/config/public at runtime; bridge object awaits the real client for signUp/signInWithPassword/resetPasswordForEmail/updateUser/signOut/getSession/onAuthStateChange (all methods used in codebase covered — verified by grep). yarn build passes. USER PATHS: (A) push latest code to GitHub via 'Save to GitHub' -> Vercel auto-deploys shelfwise.co.in; add NEXT_PUBLIC_DYNAMSOFT_LICENSE in Vercel env settings + rebuild. (B) or move domain to Emergent deployment via Emergent Support. Both hosts share the same Supabase DB."
+
+frontend:
+  - task: "Zoom quality: enhance preview 900px -> 1500px (+ .next corruption fix)"
+    implemented: true
+    working: true
+    file: "components/shelfwise/receipts.jsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "User (Vercel prod, Live scan now WORKING on their phone): pinch-zooming the filter preview looked blurry. Cause: preview rendered at 900px while saved output is full-res. Raised preview to 1500px — verified natural res 822x1500 in flow test. Also: dev .next was corrupted by earlier concurrent 'yarn build' (chunk 404s) — fixed by rm -rf .next + restart. User guidance: Dynamsoft live scanner defaults to 2K; its top-bar resolution menu allows higher (4K) for sharper captures. Changes reach shelfwise.co.in via user's 'Save to GitHub' -> Vercel auto-deploy."
+
+frontend:
+  - task: "Full-resolution preview (zoom = saved pixels) + 0.95 jpeg on live-scan capture"
+    implemented: true
+    working: true
+    file: "components/shelfwise/receipts.jsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "User still perceived zoom blur after 1500px preview (their Vercel push confirmed live: SHA cc683925). Final change: preview now uses the FULL base canvas (only capped at 2600 for iOS canvas limits) so pinch-zoom shows exactly the saved pixels; verified preview 1072x1957 == straightened output. Live-scan initial jpeg 0.9 -> 0.95. Remaining ceiling is CAPTURE resolution: Dynamsoft dds wrapper has NO programmatic resolution config (confirmed via docs/repo) — default 2K, higher only via the scanner UI's resolution dropdown; for dense documents the 'Take photo' flow (12MP camera -> 2600px pipeline) captures MORE detail than the 2K live stream. User guidance provided."
