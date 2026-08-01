@@ -2312,6 +2312,13 @@ export async function GET(request, { params }) {
     // ----- PUBLIC endpoints -----
     if (path === '' || path === 'health') return json({ ok: true, service: 'ShelfWise API (Supabase / multi-tenant)' })
 
+    // Scanner config (public): serves the Dynamsoft license at RUNTIME so the
+    // Live-scan button doesn't depend on build-time env inlining (which failed
+    // to reach the production build). The key is client-visible by design.
+    if (path === 'config/scanner') {
+      return json({ dynamsoftLicense: process.env.NEXT_PUBLIC_DYNAMSOFT_LICENSE || '' })
+    }
+
     // ------- Deployment version (public) — used by clients to auto-refresh
     // stale PWA installs when a new build goes live (fixes the recurring
     // "old version on staff phones" problem).

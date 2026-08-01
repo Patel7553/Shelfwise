@@ -5236,3 +5236,29 @@ frontend:
         - working: true
           agent: "main"
           comment: "User confirmed ML Kit impossible (Android-native only, web PWA incompatible) and provided Dynamsoft trial license. Integrated dynamsoft-document-scanner@1.3.1 (dds.bundle.js via jsdelivr, loaded on demand): new 'Live scan (recommended)' button at top of Add-receipt source step -> hides dialog -> scanner.launch() fullscreen viewfinder (real-time Detect Borders ON, Smart Capture ON, Auto Crop ON via scannerViewConfig) -> correctedImageResult.toCanvas() -> straight into existing enhance/filter step -> multi-page/OCR/PDF pipeline unchanged. Cancel returns to source step; any SDK/license failure shows toast and the free jscanify flow remains as full fallback. VERIFIED in sandbox: SDK loaded, license VALIDATED (no license errors), fullscreen viewfinder launched with fake camera, all three modes ON. NOTE: trial license expires after 30 days -> live-scan button will error but photo flow keeps working. USER MUST REDEPLOY."
+
+backend:
+  - task: "GET /api/config/scanner (public, runtime Dynamsoft license)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "New public endpoint returns { dynamsoftLicense } from runtime env. Verified via curl: returns the license. Solves production issue where NEXT_PUBLIC_ build-time inlining didn't reach the deployed bundle (Live scan button invisible in prod PWA)."
+
+frontend:
+  - task: "Runtime license fetch for Live-scan button + resolution bump (blur fix)"
+    implemented: true
+    working: true
+    file: "components/shelfwise/receipts.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "User (prod PWA): no Live scan button + blurry output. (1) Button now driven by ddsLicense state fetched from /api/config/scanner at runtime (build-time env fallback kept); verified button renders via runtime fetch. (2) Sharpness: fileToJpegDataUrl 2000->2600 @0.9, warp input cap 1600->2600, worker warp output cap 2200->2600, final jpeg 0.88->0.92. Verified with 3024px phone-like photo: straightened page saved at 1072px paper width (= full native paper resolution at cap; old pipeline ~830px). No straighten-failure toast. NOTE: sw.js does NO asset caching (push-only) so stale-PWA not a factor. If Live scan button still missing in production after redeploy, the production runtime env lacks NEXT_PUBLIC_DYNAMSOFT_LICENSE -> user должен contact Emergent Support to add it."

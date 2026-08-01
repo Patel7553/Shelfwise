@@ -185,7 +185,7 @@ function warp(imageData, corners) {
   const tl = corners[0], tr = corners[1], br = corners[2], bl = corners[3];
   let W = Math.max(32, Math.round(Math.max(dist2(tl, tr), dist2(bl, br))));
   let H = Math.max(32, Math.round(Math.max(dist2(tl, bl), dist2(tr, br))));
-  const cap = 2200, s = Math.min(1, cap / Math.max(W, H));
+  const cap = 2600, s = Math.min(1, cap / Math.max(W, H));
   W = Math.round(W * s); H = Math.round(H * s);
   // Homography mapping unit square -> source quad (q0=tl q1=tr q2=br q3=bl)
   const q0 = tl, q1 = tr, q2 = br, q3 = bl;
@@ -287,16 +287,17 @@ function warmCvWorker() { cvCall('warm', {}, [], 60000) }
 // ---------------------------------------------------------------------------
 const DDS_SRC = 'https://cdn.jsdelivr.net/npm/dynamsoft-document-scanner@1.3.1/dist/dds.bundle.js'
 let _ddsPromise = null
-function getDynamsoftScanner() {
+function getDynamsoftScanner(license) {
   if (typeof window === 'undefined') return Promise.reject(new Error('no window'))
-  if (!process.env.NEXT_PUBLIC_DYNAMSOFT_LICENSE) return Promise.reject(new Error('no license configured'))
+  const key = license || process.env.NEXT_PUBLIC_DYNAMSOFT_LICENSE
+  if (!key) return Promise.reject(new Error('no license configured'))
   if (!_ddsPromise) {
     _ddsPromise = new Promise((resolve, reject) => {
       const done = () => {
         try {
           if (!window.__swDds) {
             window.__swDds = new window.Dynamsoft.DocumentScanner({
-              license: process.env.NEXT_PUBLIC_DYNAMSOFT_LICENSE,
+              license: key,
               scannerViewConfig: {
                 enableAutoCropMode: true,      // auto-crop to detected borders
                 enableSmartCaptureMode: true,  // auto-capture when framed steady
@@ -346,7 +347,7 @@ function canvasToJpegSafe(canvas, quality, fallback) {
   return fallback
 }
 
-function fileToJpegDataUrl(file, maxSide = 2000, quality = 0.85) {
+function fileToJpegDataUrl(file, maxSide = 2600, quality = 0.9) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file)
     const img = new Image()
@@ -806,9 +807,9 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
       try {
         let srcCanvas = img
         let sCorners = orderCorners(corners)
-        const sc = Math.min(1, 1600 / Math.max(img.width, img.height))
+        const sc = Math.min(1, 2600 / Math.max(img.width, img.height))
         if (sc < 1) {
-          srcCanvas = scaleCanvas(img, 1600)
+          srcCanvas = scaleCanvas(img, 2600)
           sCorners = sCorners.map(p => ({ x: p.x * sc, y: p.y * sc }))
         }
         const ictx = srcCanvas.getContext('2d')
@@ -965,7 +966,7 @@ function EnhancePanel({ dataUrl, onDone, onBackToCrop, onRetake }) {
       try {
         let out = applyReceiptFilter(baseCanvas, filter)   // FULL resolution
         out = drawStamp(out, stamp)
-        const result = canvasToJpegSafe(out, 0.88, null)
+        const result = canvasToJpegSafe(out, 0.92, null)
         if (!result) throw new Error('empty output')
         onDone(result)
       } catch {
@@ -1214,14 +1215,24 @@ export function ReceiptsView({ currency }) {
   const onCropped = (dataUrl) => { setCroppedImage(dataUrl); setStep('enhance') }
 
   // Dynamsoft LIVE scan: fullscreen viewfinder -> auto-capture -> already
-  // cropped & straightened -> jump straight to our enhance/filter step
+  // cropped & straightened -> jump straight to our enhance/filter step.
+  // License fetched at RUNTIME from the API (build-time env inlining failed
+  // to reach production builds — this works on any deployment).
   const [liveScanBusy, setLiveScanBusy] = useState(false)
+  const [ddsLicense, setDdsLicense] = useState(process.env.NEXT_PUBLIC_DYNAMSOFT_LICENSE || '')
+  useEffect(() => {
+    if (ddsLicense) return
+    fetch('/api/config/scanner')
+      .then(r => r.json())
+      .then(d => { if (d?.dynamsoftLicense) setDdsLicense(d.dynamsoftLicense) })
+      .catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const liveScan = async () => {
     if (liveScanBusy) return
     setLiveScanBusy(true)
     setAddOpen(false)   // our dialog would fight the fullscreen scanner UI
     try {
-      const scanner = await getDynamsoftScanner()
+      const scanner = await getDynamsoftScanner(ddsLicense)
       const result = await scanner.launch()
       const img = result?.correctedImageResult
       if (img) {
@@ -1525,7 +1536,7 @@ export function ReceiptsView({ currency }) {
 
           {step === 'source' && (
             <div className="space-y-3 py-1">
-              {!!process.env.NEXT_PUBLIC_DYNAMSOFT_LICENSE && (
+              {!!ddsLicense && (
                 <button type="button" onClick={liveScan} disabled={liveScanBusy}
                   className="w-full border-2 border-emerald-500 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 transition rounded-xl p-4 text-center text-white shadow-md">
                   <div className="text-3xl mb-1">{liveScanBusy ? '⏳' : '🎯'}</div>
