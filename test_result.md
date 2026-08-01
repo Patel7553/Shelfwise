@@ -5275,3 +5275,29 @@ frontend:
         - working: true
           agent: "main"
           comment: "User's phone kept showing the old app (no Live scan button) after redeploy + force-close. Diagnosed from outside: prod serves HTML with 'cache-control: s-maxage=31536000, stale-while-revalidate' because Next statically prerendered the shell — devices/CDN keep stale HTML up to a year. Verified prod ORIGIN has new code (chunk grep found 'Live scan' + 'config/scanner') — purely a caching issue. Fixes: (1) export const dynamic='force-dynamic' in app/layout.js — production build verified: all routes now dynamic (no-store); (2) version-updater doReload now navigates to '/?u='+Date.now() (cache-busted) instead of location.reload() which could re-serve cached shell. yarn build passes (25s). USER MUST REDEPLOY, then on the phone: open app (revalidates in background), force-close, reopen -> fresh; or delete + re-add home-screen icon for guaranteed refresh."
+
+backend:
+  - task: "GET /api/config/public (runtime Supabase URL + anon key + Dynamsoft license)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "Public endpoint returning supabaseUrl/supabaseAnonKey/dynamsoftLicense from runtime env. Verified via curl (Supabase values empty locally as expected — present in production runtime)."
+
+frontend:
+  - task: "ROOT CAUSE of all 'nothing changes' reports: user's real production is VERCEL at shelfwise.co.in; Emergent deployment login fixed via runtime Supabase config"
+    implemented: true
+    working: true
+    file: "lib/supabaseBrowser.js, app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "DISCOVERY: user's phone/PWA runs shelfwise.co.in — served by VERCEL (curl: server: Vercel), a separate deployment from kitchen-stock-39.emergent.host. ALL Emergent redeploys never touched the user's actual app — explains every 'still old' report. Also fixed: Emergent deployment login showed 'Supabase env vars missing in browser' (NEXT_PUBLIC_* not inlined at build). supabaseBrowser.js now falls back to fetching /api/config/public at runtime; bridge object awaits the real client for signUp/signInWithPassword/resetPasswordForEmail/updateUser/signOut/getSession/onAuthStateChange (all methods used in codebase covered — verified by grep). yarn build passes. USER PATHS: (A) push latest code to GitHub via 'Save to GitHub' -> Vercel auto-deploys shelfwise.co.in; add NEXT_PUBLIC_DYNAMSOFT_LICENSE in Vercel env settings + rebuild. (B) or move domain to Emergent deployment via Emergent Support. Both hosts share the same Supabase DB."

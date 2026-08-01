@@ -2319,6 +2319,16 @@ export async function GET(request, { params }) {
       return json({ dynamsoftLicense: process.env.NEXT_PUBLIC_DYNAMSOFT_LICENSE || '' })
     }
 
+    // Public runtime config: Supabase URL + anon key (public by design) so the
+    // browser auth client works even when build-time env inlining fails.
+    if (path === 'config/public') {
+      return json({
+        supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+        supabaseAnonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
+        dynamsoftLicense: process.env.NEXT_PUBLIC_DYNAMSOFT_LICENSE || '',
+      })
+    }
+
     // ------- Deployment version (public) — used by clients to auto-refresh
     // stale PWA installs when a new build goes live (fixes the recurring
     // "old version on staff phones" problem).
