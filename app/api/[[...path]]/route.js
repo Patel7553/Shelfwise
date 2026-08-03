@@ -5548,18 +5548,17 @@ export async function PUT(request, { params }) {
       const id = segs[1]
       const body = await request.json()
       const patch = toDb(body)
-      // EDIT ATTRIBUTION (Aug 2026 user request): stamp WHO made this change
-      // and WHEN — kept alongside the original "_addedBy" record, which is
-      // re-applied from the DB so it can never be lost or tampered via edits.
+      // SINGLE ATTRIBUTION (Aug 2026 user request): show ONE always-current
+      // name — any edit REPLACES the "Added by" name with whoever made the
+      // change (no separate "Last edited by" line any more).
       try {
         const person = await validatedPersonFromRequest(sb, request, ctx)
-        const { data: existing } = await sb.from('products').select('custom_fields').eq('id', id).eq('kitchen_id', ctx.kitchenId).maybeSingle()
         patch.custom_fields = {
           ...(patch.custom_fields || {}),
-          _editedBy: person,
+          _addedBy: person,
           _editedAt: new Date().toISOString(),
         }
-        if (existing?.custom_fields?._addedBy) patch.custom_fields._addedBy = existing.custom_fields._addedBy
+        delete patch.custom_fields._editedBy
       } catch { /* attribution is best-effort */ }
       let { data, error: e2 } = await sb.from('products').update(patch).eq('id', id).eq('kitchen_id', ctx.kitchenId).select().single()
       if (e2 && /column .* does not exist|schema cache/i.test(e2.message || '')) {

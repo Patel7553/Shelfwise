@@ -5480,3 +5480,79 @@ test_plan:
 agent_communication:
     - agent: "main"
       message: "Please test the new POST /api/receipts/line-items endpoint. Generate a synthetic receipt image (e.g., PIL-drawn text with product lines like '2x Chicken Breast 5kg £24.00', 'Whole Milk 2L £1.85', plus VAT/TOTAL lines that must be SKIPPED), send as dataUrl. Verify: 401 without auth, 400 without dataUrl/url, 200 with items array of correct shape, non-product lines excluded. Also verify POST /api/products/bulk accepts the mapped items (then DELETE the created products to keep the real DB clean)."
+
+backend:
+  - task: "Single product attribution — edit REPLACES 'Added by' name (PUT /api/products/:id)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js, components/shelfwise/inventory.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "User request: remove separate 'Last edited by' line; the 'Added by' name must always show whoever most recently touched the product. Backend PUT now overwrites custom_fields._addedBy with the current person, stamps _editedAt, deletes _editedBy. Frontend inventory.jsx shows single line 'Added by X — <editedAt timestamp>'."
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ FOCUSED TEST COMPLETE - Product Attribution Replacement (4/4 tests passed):
+            
+            **CONTEXT:**
+            - Supabase IS configured locally → real production DB (kitchen a2573e6a-70f0-4a6d-97d0-ccf09b444643)
+            - Chef JWTs minted with embedded person names: 'Dev', 'Parth', 'Xyz'
+            - Testing the CHANGED behavior: PUT /api/products/:id now REPLACES _addedBy (was: preserved original + stamped _editedBy)
+            - Backend file: /app/app/api/[[...path]]/route.js (lines 5550-5562)
+            
+            **WHAT CHANGED THIS SESSION:**
+            - PUT /api/products/:id now REPLACES custom_fields._addedBy with current person (line 5558)
+            - Sets _editedAt to current timestamp (line 5559)
+            - Deletes _editedBy (line 5561)
+            - API responses map: _addedBy→addedBy, _editedBy→editedBy, _editedAt→editedAt
+            
+            **Test Results:**
+            - Test 1: POST /api/products as person 'Dev' → 201 ✓
+              * Product created with ID: c166487c-98b4-4b29-bd1f-982e5f601ce3
+              * addedBy = 'Dev' ✓
+              * editedBy = '' ✓
+              * editedAt = null ✓
+            
+            - Test 2: PUT /api/products/:id as person 'Parth' (quantity 3→5) → 200 ✓
+              * addedBy = 'Parth' (REPLACED from 'Dev') ✓
+              * editedBy = '' (empty as expected) ✓
+              * editedAt = '2026-08-03T17:52:50.206Z' (set) ✓
+              * quantity = 5 (updated) ✓
+            
+            - Test 3: PUT /api/products/:id as person 'Xyz' (quantity 5→7) → 200 ✓
+              * addedBy = 'Xyz' (REPLACED from 'Parth') ✓
+              * editedBy = '' (still empty) ✓
+              * editedAt = '2026-08-03T17:52:51.073Z' (updated) ✓
+              * quantity = 7 (updated) ✓
+            
+            - Test 4: DELETE /api/products/:id (cleanup) → 200 ✓
+              * Product deleted successfully (verified by GET) ✓
+            
+            **Key Validations:**
+            - ✅ PUT /api/products/:id REPLACES _addedBy with current person (not preserved)
+            - ✅ _editedBy is deleted (always returns empty string)
+            - ✅ _editedAt is set/updated on every edit
+            - ✅ Behavior works consistently across multiple edits by different persons
+            - ✅ API responses correctly map custom_fields to top-level fields
+            - ✅ Cleanup successful (test product deleted from production DB)
+            
+            **Test file:** /app/backend_test_attribution_change.sh (can be re-run anytime)
+            
+            No critical issues found. Attribution replacement behavior working perfectly as specified.
+
+test_plan:
+  current_focus:
+    - "Single product attribution — edit REPLACES 'Added by' name (PUT /api/products/:id)"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    - agent: "main"
+      message: "Test attribution replacement: create product with chef JWT person 'Dev', then PUT an edit with chef JWT person 'Parth', GET and verify addedBy=='Parth' (replaced, capitalisation may resolve via staff list), editedBy=='' and editedAt set. Kitchen a2573e6a-70f0-4a6d-97d0-ccf09b444643 (real prod DB — DELETE test product afterwards). JWT minting instructions in /app/memory/test_credentials.md."
+    - agent: "testing"
+      message: "✅ TESTING COMPLETE - Product attribution replacement behavior verified (4/4 tests passed). PUT /api/products/:id correctly REPLACES _addedBy with current person, sets _editedAt, deletes _editedBy. Tested with 3 different persons (Dev→Parth→Xyz), all edits replaced addedBy correctly. Test product cleaned up from production DB. No critical issues found. Feature working perfectly as specified."
