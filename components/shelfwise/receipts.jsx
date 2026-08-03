@@ -41,7 +41,7 @@ const COLOR_OPTIONS = [
 const colorBar = (c) => (COLOR_OPTIONS.find(o => o.key === c) || COLOR_OPTIONS[0]).dot
 const statusMeta = (s) => STATUS_OPTIONS.find(o => o.key === s) || STATUS_OPTIONS[0]
 const fmtD = (d) => d ? new Date(d + (d.length === 10 ? 'T00:00:00' : '')).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'
-const todayStr = () => new Date().toISOString().slice(0, 10)
+const todayStr = () => new Date().toLocaleDateString('en-CA')
 
 // ---------------------------------------------------------------------------
 // OpenCV loader (lazy, only when the crop editor opens) + document detection
@@ -1425,9 +1425,11 @@ export function ReceiptsView({ currency }) {
   }
 
   // ---- Export ----
+  const [expBasis, setExpBasis] = useState('receipt')   // 'receipt' (printed date) | 'scanned' (day it was added)
+  const localDay = (ts) => { try { return ts ? new Date(ts).toLocaleDateString('en-CA') : '' } catch { return '' } }
   const setQuickRange = (kind) => {
     const now = new Date()
-    const iso = (d) => d.toISOString().slice(0, 10)
+    const iso = (d) => d.toLocaleDateString('en-CA')
     if (kind === 'today') { setExpFrom(iso(now)); setExpTo(iso(now)) }
     if (kind === 'week') {
       const day = (now.getDay() + 6) % 7
@@ -1437,9 +1439,11 @@ export function ReceiptsView({ currency }) {
     if (kind === 'month') { setExpFrom(iso(new Date(now.getFullYear(), now.getMonth(), 1))); setExpTo(iso(now)) }
   }
   const inRange = useMemo(() => receipts.filter(r => {
-    const d = r.receiptDate || (r.createdAt || '').slice(0, 10)
+    const d = expBasis === 'scanned'
+      ? localDay(r.createdAt)
+      : (r.receiptDate || localDay(r.createdAt))
     return d && d >= expFrom && d <= expTo
-  }).sort((a, b) => String(a.receiptDate).localeCompare(String(b.receiptDate))), [receipts, expFrom, expTo])
+  }).sort((a, b) => String(a.receiptDate).localeCompare(String(b.receiptDate))), [receipts, expFrom, expTo, expBasis])
 
   const runExport = async () => {
     if (!inRange.length) { toast.error('No receipts in that date range'); return }
@@ -1898,6 +1902,18 @@ export function ReceiptsView({ currency }) {
             <DialogTitle className="flex items-center gap-2"><Download className="h-5 w-5 text-emerald-600" /> Export receipts</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-1.5 rounded-lg border p-1 bg-slate-50">
+              <button type="button" onClick={() => setExpBasis('receipt')}
+                className={`rounded-md px-2 py-2 text-xs font-semibold transition ${expBasis === 'receipt' ? 'bg-white shadow border border-emerald-300 text-emerald-800' : 'text-slate-500 hover:text-slate-700'}`}>
+                🗓️ Receipt date
+                <span className="block text-[10px] font-normal">date printed on the receipt</span>
+              </button>
+              <button type="button" onClick={() => setExpBasis('scanned')}
+                className={`rounded-md px-2 py-2 text-xs font-semibold transition ${expBasis === 'scanned' ? 'bg-white shadow border border-emerald-300 text-emerald-800' : 'text-slate-500 hover:text-slate-700'}`}>
+                📷 Date scanned
+                <span className="block text-[10px] font-normal">day you added it to ShelfWise</span>
+              </button>
+            </div>
             <div className="flex flex-wrap gap-1.5">
               {[['today', 'Today'], ['week', 'This week'], ['month', 'This month']].map(([k, l]) => (
                 <button key={k} onClick={() => setQuickRange(k)} className="text-xs font-semibold rounded-full border px-3 py-1.5 bg-white hover:border-emerald-400">{l}</button>

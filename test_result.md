@@ -5556,3 +5556,122 @@ agent_communication:
       message: "Test attribution replacement: create product with chef JWT person 'Dev', then PUT an edit with chef JWT person 'Parth', GET and verify addedBy=='Parth' (replaced, capitalisation may resolve via staff list), editedBy=='' and editedAt set. Kitchen a2573e6a-70f0-4a6d-97d0-ccf09b444643 (real prod DB — DELETE test product afterwards). JWT minting instructions in /app/memory/test_credentials.md."
     - agent: "testing"
       message: "✅ TESTING COMPLETE - Product attribution replacement behavior verified (4/4 tests passed). PUT /api/products/:id correctly REPLACES _addedBy with current person, sets _editedAt, deletes _editedBy. Tested with 3 different persons (Dev→Parth→Xyz), all edits replaced addedBy correctly. Test product cleaned up from production DB. No critical issues found. Feature working perfectly as specified."
+
+backend:
+  - task: "Recipe cook logging with optional ingredient deduction (POST /api/recipes/:id/cook)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js, components/shelfwise/recipes.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "NEW: POST /api/recipes/<id>/cook body {portions, servings, deduct}. scale=portions/servings. Matches ingredients to products by name (matchIngredientToInventory), converts units (kg<->g, L<->mL via COOK_UNIT_BASE), deducts scaled amounts (clamped at 0, short flag), stamps single attribution, logs 'cooked' activity. deduct:false only logs. Returns {ok, portions, deducted[], skipped[]}. Frontend: CookLogDialog with 'Log cooked' button in ViewRecipeDialog, deduct checkbox remembered in localStorage."
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ FOCUSED TEST COMPLETE - Recipe Cook/Deduction Endpoint (6/6 tests passed):
+            
+            **CONTEXT:**
+            - Tested on REAL production Supabase DB (kitchen a2573e6a-70f0-4a6d-97d0-ccf09b444643)
+            - Chef JWT minted using SHELFWISE_JWT_SECRET from /app/.env
+            - All test data prefixed with "TEST-" and cleaned up after testing
+            
+            **SETUP:**
+            - Created 3 test products: TEST-Plain Flour (5 kg), TEST-Whole Milk (2000 mL), TEST-Eggs (12 ea)
+            - Created test recipe: TEST-Pancakes (Serves 2) with 4 ingredients:
+              * TEST-Plain Flour: 500g (different unit from inventory: kg)
+              * TEST-Whole Milk: 0.5L (different unit from inventory: mL)
+              * TEST-Eggs: 2ea (same unit as inventory)
+              * TEST-Unicorn Dust: 10g (not in inventory - for skip test)
+            
+            **TEST RESULTS:**
+            
+            **Test 1: Authentication (401 without token) - PASSED ✓**
+            - POST /api/recipes/:id/cook without Authorization header → 401 "Not authenticated"
+            
+            **Test 2: Validation (portions=0 → 400) - PASSED ✓**
+            - POST with {"portions":0,"servings":2,"deduct":true} → 400 "portions must be a positive number"
+            
+            **Test 3: Non-existent recipe (404) - PASSED ✓**
+            - POST /api/recipes/00000000-0000-0000-0000-000000000000/cook → 404 "Recipe not found"
+            
+            **Test 4: Scale=2 deductions (portions=4, servings=2, deduct=true) - PASSED ✓**
+            - Response: 200 with {ok:true, portions:4, deducted:[3 items], skipped:[1 item]}
+            - Deducted items (all correct):
+              * TEST-Plain Flour: amount=1 kg, newQuantity=4 kg, short=false ✓
+                (Recipe: 500g * scale 2 = 1000g = 1kg, Stock: 5kg - 1kg = 4kg)
+              * TEST-Whole Milk: amount=1000 mL, newQuantity=1000 mL, short=false ✓
+                (Recipe: 0.5L * scale 2 = 1L = 1000mL, Stock: 2000mL - 1000mL = 1000mL)
+              * TEST-Eggs: amount=4 ea, newQuantity=8 ea, short=false ✓
+                (Recipe: 2ea * scale 2 = 4ea, Stock: 12ea - 4ea = 8ea)
+            - Skipped items:
+              * TEST-Unicorn Dust: "no matching item in your inventory" ✓
+            - Database verification: All quantities correctly updated in products table ✓
+            
+            **Test 5: deduct=false (no changes) - PASSED ✓**
+            - POST with {"portions":1,"servings":2,"deduct":false} → 200
+            - Response: {ok:true, portions:1, deducted:[], skipped:[]}
+            - Deducted array is empty ✓
+            - Database verification: All quantities UNCHANGED (Flour=4kg, Milk=1000mL, Eggs=8ea) ✓
+            
+            **Test 6: Over-deduction/clamp (short flag) - PASSED ✓**
+            - POST with {"portions":100,"servings":2,"deduct":true} → 200
+            - Scale = 100/2 = 50
+            - All 3 products over-deducted (needed more than available):
+              * TEST-Plain Flour: amount=25 kg (needed), newQuantity=0 kg, short=true ✓
+              * TEST-Whole Milk: amount=25000 mL (needed), newQuantity=0 mL, short=true ✓
+              * TEST-Eggs: amount=100 ea (needed), newQuantity=0 ea, short=true ✓
+            - All quantities clamped at 0 (not negative) ✓
+            - All items have short=true flag (stock was insufficient) ✓
+            
+            **CLEANUP:**
+            - Deleted test recipe (DELETE /api/recipes/:id) ✓
+            - Deleted all 3 test products (DELETE /api/products/:id) ✓
+            - Verified cleanup: No TEST- prefixed products remain in database ✓
+            
+            **Key Validations:**
+            - ✅ Authentication working correctly (401 without token)
+            - ✅ Input validation working (400 for portions<=0)
+            - ✅ Recipe not found handling (404 for non-existent ID)
+            - ✅ Unit conversion working perfectly (kg↔g, L↔mL, ea↔ea)
+            - ✅ Ingredient matching working (exact name match)
+            - ✅ Scale calculation correct (portions/servings)
+            - ✅ Deduction logic correct (quantity - scaled amount)
+            - ✅ Database updates persisted correctly
+            - ✅ deduct=false flag working (no changes when false)
+            - ✅ Over-deduction handling correct (clamped at 0, short=true)
+            - ✅ Skipped items handling correct (unmatched ingredients)
+            - ✅ DELETE endpoints working (recipes and products)
+            
+            **Test file:** /app/backend_test_recipe_cook.py (can be re-run anytime)
+            
+            No critical issues found. Recipe cook/deduction endpoint working perfectly.
+
+frontend:
+  - task: "Export receipts by scan date toggle + local-timezone quick ranges"
+    implemented: true
+    working: "NA"
+    file: "components/shelfwise/receipts.jsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Export dialog now has 'Receipt date' vs 'Date scanned' toggle (expBasis); 'scanned' basis uses createdAt converted to LOCAL day. todayStr() and setQuickRange now use toLocaleDateString('en-CA') (local) instead of UTC toISOString. Not UI-tested yet."
+
+test_plan:
+  current_focus:
+    - "Recipe cook logging with optional ingredient deduction (POST /api/recipes/:id/cook)"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    - agent: "main"
+      message: "Test the cook endpoint on kitchen a2573e6a-70f0-4a6d-97d0-ccf09b444643 (REAL prod DB — create everything with TEST- prefix and delete afterwards). Flow: create 2-3 products (e.g. TEST-Flour 5 kg, TEST-Milk 2000 mL, TEST-Eggs 12 ea), create a recipe via POST /api/recipes with ingredients using DIFFERENT but compatible units (flour 500 g, milk 0.5 L, eggs 2 ea) + one unmatched ingredient, then POST /api/recipes/<id>/cook {portions:4, servings:2, deduct:true} → expect scale 2: flour -1 kg → 4, milk -1000 mL → 1000, eggs -4 → 8, unmatched in skipped. Also test deduct:false (no changes), portions<=0 → 400, bad recipe id → 404, unauth → 401. Cleanup recipes + products."
+    - agent: "testing"
+      message: "✅ Recipe cook/deduction endpoint tested and working perfectly (6/6 tests passed). All functionality verified: auth (401), validation (400 for portions<=0), 404 for non-existent recipe, scale=2 deductions with unit conversion (kg↔g, L↔mL), deduct=false flag (no changes), over-deduction handling (clamped at 0, short=true), ingredient matching, skipped items. Database updates persisted correctly. Cleanup successful (all TEST- data deleted). Test file: /app/backend_test_recipe_cook.py. No critical issues found."

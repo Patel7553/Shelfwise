@@ -1987,6 +1987,20 @@ function matchIngredientToInventory(name, products) {
   return match || null
 }
 
+// Unit normalisation for recipe-cook deductions: maps a unit spelling to
+// [baseUnit, factor] so compatible units convert (kg↔g, L↔mL, ea↔pcs...).
+const COOK_UNIT_BASE = {
+  kg: ['g', 1000], kgs: ['g', 1000], kilo: ['g', 1000], kilos: ['g', 1000], kilogram: ['g', 1000], kilograms: ['g', 1000],
+  g: ['g', 1], gr: ['g', 1], gm: ['g', 1], gms: ['g', 1], gram: ['g', 1], grams: ['g', 1],
+  l: ['ml', 1000], lt: ['ml', 1000], ltr: ['ml', 1000], litre: ['ml', 1000], litres: ['ml', 1000], liter: ['ml', 1000], liters: ['ml', 1000],
+  ml: ['ml', 1], mls: ['ml', 1], cl: ['ml', 10],
+  ea: ['ea', 1], each: ['ea', 1], pc: ['ea', 1], pcs: ['ea', 1], piece: ['ea', 1], pieces: ['ea', 1], unit: ['ea', 1], units: ['ea', 1],
+}
+function cookNormaliseUnit(u) {
+  const k = String(u || 'ea').trim().toLowerCase().replace(/\.$/, '')
+  return COOK_UNIT_BASE[k] || null
+}
+
 // ============================================================================
 // AUTH HELPERS (route-scoped)
 // ============================================================================
@@ -4445,7 +4459,7 @@ Output strictly valid JSON with no other text.`
 
     // -------- Kitchen-scoped mutations --------
     const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract','receipts/ocr','receipts/line-items'].some(p => path === p)
-      || (path.startsWith('recipes/') && path.endsWith('/favorite'))
+      || (path.startsWith('recipes/') && (path.endsWith('/favorite') || path.endsWith('/cook')))
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
@@ -5054,6 +5068,68 @@ Output strictly valid JSON with no other text.`
         const { data, error } = await sb.from('recipes').update({ summary: { ...summary, favorite: next } }).eq('id', id).select().single()
         if (error) throw error
         return json({ ok: true, favorite: next, recipe: data })
+      }
+
+      // ---- Log "cooked X portions" — optionally deduct raw ingredients from
+      //      the inventory (user feature, Aug 2026; deduction is OPT-IN per log) ----
+      if (path.startsWith('recipes/') && path.endsWith('/cook')) {
+        const id = path.split('/')[1]
+        const body = await request.json()
+        const portions = Number(body.portions)
+        if (!Number.isFinite(portions) || portions <= 0) return json({ error: 'portions must be a positive number' }, 400)
+        const makes = Number(body.servings)
+        const scale = portions / (Number.isFinite(makes) && makes > 0 ? makes : 1)
+        const deduct = body.deduct !== false
+        const { data: recipe, error: rErr } = await sb.from('recipes').select('id,title,servings,ingredients').eq('id', id).eq('kitchen_id', kid).maybeSingle()
+        if (rErr) throw rErr
+        if (!recipe) return json({ error: 'Recipe not found' }, 404)
+        const person = await validatedPersonFromRequest(sb, request, ctx)
+        const deducted = []
+        const skipped = []
+        if (deduct) {
+          const { data: rows, error: pErr } = await sb.from('products').select('*').eq('kitchen_id', kid).limit(5000)
+          if (pErr) throw pErr
+          const products = (rows || []).map(fromDb)
+          const used = new Set()
+          for (const ing of (Array.isArray(recipe.ingredients) ? recipe.ingredients : [])) {
+            const name = String(ing?.name || '').trim()
+            if (!name) continue
+            const qty = Number(ing?.quantity)
+            if (!Number.isFinite(qty) || qty <= 0) { skipped.push({ name, reason: 'no quantity set on this recipe ingredient' }); continue }
+            const product = matchIngredientToInventory(name, products.filter(p => !used.has(p.id)))
+            if (!product) { skipped.push({ name, reason: 'no matching item in your inventory' }); continue }
+            const ingBase = cookNormaliseUnit(ing.unit)
+            const prodBase = cookNormaliseUnit(product.unit)
+            let amount = null   // in the PRODUCT's unit
+            if (ingBase && prodBase && ingBase[0] === prodBase[0]) {
+              amount = (qty * ingBase[1] * scale) / prodBase[1]
+            } else if (String(ing.unit || '').trim().toLowerCase() === String(product.unit || '').trim().toLowerCase()) {
+              amount = qty * scale   // identical custom units (e.g. "bunch")
+            } else {
+              skipped.push({ name, reason: `unit mismatch — recipe uses "${ing.unit || '?'}", inventory tracks "${product.unit || '?'}"` })
+              continue
+            }
+            used.add(product.id)
+            const before = Number(product.quantity) || 0
+            const newQty = Math.max(0, Math.round((before - amount) * 1000) / 1000)
+            const cf = { ...(product.customFields || {}), _addedBy: person, _editedAt: new Date().toISOString() }
+            delete cf._editedBy
+            const { error: uErr } = await sb.from('products')
+              .update({ quantity: newQty, updated_at: new Date().toISOString(), custom_fields: cf })
+              .eq('id', product.id).eq('kitchen_id', kid)
+            if (uErr) { skipped.push({ name, reason: 'could not update the inventory item' }); continue }
+            deducted.push({
+              productId: product.id,
+              productName: product.name,
+              amount: Math.round(amount * 1000) / 1000,
+              unit: product.unit || '',
+              newQuantity: newQty,
+              short: before < amount,   // stock went below zero → clamped at 0
+            })
+          }
+        }
+        await logActivity(sb, kid, person, 'cooked', `${recipe.title || 'Recipe'} — ${portions} portion${portions === 1 ? '' : 's'}${deducted.length ? ` (${deducted.length} ingredient${deducted.length === 1 ? '' : 's'} deducted)` : ''}`)
+        return json({ ok: true, portions, deducted, skipped })
       }
 
       if (path === 'recipes') {

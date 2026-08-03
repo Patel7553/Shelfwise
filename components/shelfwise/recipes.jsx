@@ -796,12 +796,124 @@ export function WebRecipeCard({ recipe: r, onSaved }) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// "I cooked this" — log portions cooked; OPTIONALLY deduct raw ingredients
+// from the inventory (checkbox, remembered per device). Aug 2026 user feature.
+// ---------------------------------------------------------------------------
+export function CookLogDialog({ recipe, open, onClose }) {
+  const [portions, setPortions] = useState('1')
+  const [makes, setMakes] = useState('1')
+  const [deduct, setDeduct] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)
+  useEffect(() => {
+    if (open) {
+      setPortions('1')
+      const m = String(recipe?.servings || '').match(/\d+(\.\d+)?/)
+      setMakes(m ? m[0] : '1')
+      try { setDeduct(localStorage.getItem('sw_cook_deduct') !== '0') } catch { setDeduct(true) }
+      setResult(null)
+    }
+  }, [open, recipe?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (!recipe) return null
+
+  const submit = async () => {
+    const p = Number(portions)
+    if (!Number.isFinite(p) || p <= 0) { toast.error('Enter how many portions you cooked'); return }
+    setBusy(true)
+    try {
+      try { localStorage.setItem('sw_cook_deduct', deduct ? '1' : '0') } catch {}
+      const res = await fetch(`/api/recipes/${recipe.id}/cook`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ portions: p, servings: Number(makes) || 1, deduct }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Could not log the cook')
+      if (!deduct) {
+        toast.success(`Logged: ${recipe.title} × ${p} portion${p === 1 ? '' : 's'} 🍳`)
+        onClose()
+        return
+      }
+      setResult(d)
+      toast.success(d.deducted?.length
+        ? `${d.deducted.length} ingredient${d.deducted.length === 1 ? '' : 's'} deducted from inventory 🍳`
+        : 'Cook logged — nothing could be deducted (see details)')
+    } catch (e) { toast.error(e.message) } finally { setBusy(false) }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-[520px] max-h-[92vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><ChefHat className="h-5 w-5 text-emerald-600" /> Log cooked — {recipe.title || 'Recipe'}</DialogTitle>
+        </DialogHeader>
+        {!result ? (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Portions cooked</Label>
+                <Input type="number" min="0.5" step="0.5" value={portions} onChange={e => setPortions(e.target.value)} className="mt-1" />
+              </div>
+              <div>
+                <Label>Recipe makes (portions)</Label>
+                <Input type="number" min="0.5" step="0.5" value={makes} onChange={e => setMakes(e.target.value)} className="mt-1" />
+                <p className="text-[10px] text-muted-foreground mt-0.5">Ingredient amounts are for this many portions</p>
+              </div>
+            </div>
+            <label className="flex items-start gap-2.5 rounded-lg border-2 p-3 cursor-pointer transition hover:border-emerald-300">
+              <input type="checkbox" checked={deduct} onChange={e => setDeduct(e.target.checked)} className="h-4 w-4 accent-emerald-600 mt-0.5" />
+              <span>
+                <span className="text-sm font-semibold block">Subtract ingredients from my inventory</span>
+                <span className="text-xs text-muted-foreground">Ingredients are matched to inventory items by name — anything that can't be matched is skipped and listed for you. Untick to just log the cook.</span>
+              </span>
+            </label>
+            <Button onClick={submit} disabled={busy} className="w-full bg-emerald-600 hover:bg-emerald-700">
+              {busy ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Working…</> : <><ChefHat className="h-4 w-4 mr-2" /> Log cooked</>}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {result.deducted?.length > 0 && (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3">
+                <p className="text-sm font-bold text-emerald-900 mb-1.5">✅ Deducted from inventory</p>
+                <ul className="space-y-1 text-sm text-emerald-900">
+                  {result.deducted.map((d, i) => (
+                    <li key={i} className="flex justify-between gap-2">
+                      <span className="capitalize">{d.productName}</span>
+                      <span className="text-emerald-700 whitespace-nowrap">−{d.amount} {d.unit} → {d.newQuantity} {d.unit} left{d.short ? ' ⚠️' : ''}</span>
+                    </li>
+                  ))}
+                </ul>
+                {result.deducted.some(d => d.short) && (
+                  <p className="text-[11px] text-amber-700 mt-1.5">⚠️ Stock was lower than the amount used — those items are now at 0. You may want to check them.</p>
+                )}
+              </div>
+            )}
+            {result.skipped?.length > 0 && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
+                <p className="text-sm font-bold text-amber-900 mb-1.5">⏭️ Skipped (not deducted)</p>
+                <ul className="space-y-1 text-xs text-amber-900">
+                  {result.skipped.map((s, i) => (
+                    <li key={i}><span className="capitalize font-semibold">{s.name}</span> — {s.reason}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <Button onClick={onClose} className="w-full bg-emerald-600 hover:bg-emerald-700">Done</Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function ViewRecipeDialog({ recipe, onClose, onDelete, onUpdated }) {
   const [scale, setScale] = useState(1)
   const [editMode, setEditMode] = useState(false)
   const [draft, setDraft] = useState(null)
   const [saving, setSaving] = useState(false)
   const [newAllergen, setNewAllergen] = useState('')
+  const [cookOpen, setCookOpen] = useState(false)
   useEffect(() => { setScale(1); setEditMode(false); setDraft(null); setNewAllergen('') }, [recipe?.id])
   const scaleQty = (q) => {
     const n = Number(q) || 0
@@ -1052,11 +1164,15 @@ export function ViewRecipeDialog({ recipe, onClose, onDelete, onUpdated }) {
               <Button variant="outline" onClick={startEdit}>
                 <Pencil className="h-4 w-4 mr-2" /> Edit
               </Button>
+              <Button onClick={() => setCookOpen(true)} className="bg-emerald-600 hover:bg-emerald-700">
+                <ChefHat className="h-4 w-4 mr-2" /> Log cooked
+              </Button>
               <Button onClick={onClose} className="bg-purple-600 hover:bg-purple-700">Close</Button>
             </>
           )}
         </DialogFooter>
       </DialogContent>
+      <CookLogDialog recipe={recipe} open={cookOpen} onClose={() => setCookOpen(false)} />
     </Dialog>
   )
 }
