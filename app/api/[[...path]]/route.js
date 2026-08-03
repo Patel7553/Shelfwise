@@ -2301,6 +2301,60 @@ async function extractReceiptDetails(base64DataUrl) {
   }
 }
 
+// GPT-4o vision reads every PRODUCT line off the receipt so items can be
+// reviewed and added straight into the inventory (user feature, Aug 2026).
+const LINE_ITEM_UNITS = ['ea', 'kg', 'g', 'L', 'mL', 'bunch', 'pack', 'box']
+async function extractReceiptLineItems(imageRef) {
+  const key = process.env.EMERGENT_LLM_KEY
+  if (!key) throw new Error('EMERGENT_LLM_KEY not set')
+  const body = {
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: `You read photos of supplier receipts/invoices from food wholesalers and extract the PRODUCT LINE ITEMS for a kitchen inventory system. Return ONLY valid JSON:
+{"items":[{"name":string,"quantity":number,"unit":"ea"|"kg"|"g"|"L"|"mL"|"bunch"|"pack"|"box","unitPrice":number|null,"lineTotal":number|null,"category":string}]}
+Rules:
+- name: clean, human-readable product name. EXPAND receipt abbreviations (e.g. "CHKN BRST FIL" -> "Chicken Breast Fillet", "TOM CHPD 400G" -> "Chopped Tomatoes 400g"). Capitalise properly.
+- quantity: how many/much was bought. If the line shows "2 x 5kg" use quantity 10 and unit "kg". If no quantity is shown, use 1.
+- unit: pick the closest from the allowed list. Weight in kg/g, volume in L/mL, otherwise "ea", "pack" or "box".
+- unitPrice: price per single unit if shown or derivable (lineTotal / quantity), else null.
+- lineTotal: the total price for that line, else null.
+- category: one of "Meat", "Fish", "Dairy", "Produce", "Bakery", "Frozen", "Dry Goods", "Drinks", "Cleaning", "Other".
+- SKIP non-product lines: subtotals, VAT/tax, totals, discounts, loyalty points, card fees, deposits, delivery charges.
+- If nothing readable, return {"items":[]}.` },
+      { role: 'user', content: [
+        { type: 'text', text: 'Extract all product line items from this receipt as JSON.' },
+        { type: 'image_url', image_url: { url: imageRef, detail: 'high' } },
+      ]},
+    ],
+    temperature: 0,
+    response_format: { type: 'json_object' },
+  }
+  const res = await fetch(EMERGENT_URL, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`Emergent LLM ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  const content = data?.choices?.[0]?.message?.content || '{}'
+  let parsed = {}
+  try { parsed = JSON.parse(content) } catch { const m = content.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(m[0]) : {} }
+  const items = (Array.isArray(parsed.items) ? parsed.items : []).slice(0, 100).map(it => {
+    const qty = Number(it?.quantity)
+    const unitPrice = Number(it?.unitPrice)
+    const lineTotal = Number(it?.lineTotal)
+    return {
+      name: String(it?.name || '').trim().slice(0, 120),
+      quantity: Number.isFinite(qty) && qty > 0 ? qty : 1,
+      unit: LINE_ITEM_UNITS.includes(it?.unit) ? it.unit : 'ea',
+      unitPrice: Number.isFinite(unitPrice) && unitPrice >= 0 ? Math.round(unitPrice * 100) / 100 : null,
+      lineTotal: Number.isFinite(lineTotal) && lineTotal >= 0 ? Math.round(lineTotal * 100) / 100 : null,
+      category: String(it?.category || '').trim().slice(0, 40),
+    }
+  }).filter(it => it.name)
+  return { items }
+}
+
 // ============================================================================
 // GET
 // ============================================================================
@@ -4390,7 +4444,7 @@ Output strictly valid JSON with no other text.`
     }
 
     // -------- Kitchen-scoped mutations --------
-    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract','receipts/ocr'].some(p => path === p)
+    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract','receipts/ocr','receipts/line-items'].some(p => path === p)
       || (path.startsWith('recipes/') && path.endsWith('/favorite'))
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
@@ -4503,6 +4557,19 @@ Output strictly valid JSON with no other text.`
           return json(await extractReceiptDetails(body.dataUrl))
         } catch (e) {
           return json({ error: e.message || 'AI could not read the receipt' }, 500)
+        }
+      }
+
+      // ------- RECEIPTS: AI extracts product LINE ITEMS for the inventory -------
+      if (path === 'receipts/line-items') {
+        if (!(await chefHasPerm(sb, ctx, 'receipts'))) return json({ error: 'No access to receipts — ask the owner to enable it for you' }, 403)
+        const body = await request.json()
+        const ref = body.dataUrl || body.url
+        if (!ref) return json({ error: 'dataUrl or url required' }, 400)
+        try {
+          return json(await extractReceiptLineItems(ref))
+        } catch (e) {
+          return json({ error: e.message || 'AI could not read the line items' }, 500)
         }
       }
 

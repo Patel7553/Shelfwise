@@ -15,3 +15,10 @@
 - Kiosk unlock: POST /api/staff/pin-login {pin} (authed). Personal phone: POST /api/auth/staff-pin-login {kitchenName, pin} (public).
 - Owner PIN entry auto-created on first GET /api/staff or pin-login attempt; owner PIN only unlocks on owner-authed devices.
 - localStorage keys: sw_kiosk_user (unlocked person), sw_kiosk ('1'=staff session from kiosk tablet), sw_person_name, shelfwise_chef_token.
+
+## June 2025 session UPDATE — Supabase NOW configured locally
+- Supabase env vars (URL, anon, service role) were added to /app/.env — the preview now talks to the REAL production Supabase DB. Be careful with destructive writes; clean up test rows after tests.
+- Approved test kitchen: id=a2573e6a-70f0-4a6d-97d0-ccf09b444643 (name "Shelfwise"), staff: Xyz (owner/manager), Dev, Parth.
+- To auth API calls, mint a chef JWT (owner person "Xyz" passes all perm checks):
+  cd /app && node -e "require('dotenv').config(); console.log(require('jsonwebtoken').sign({kitchen_id:'a2573e6a-70f0-4a6d-97d0-ccf09b444643',role:'chef',person:'Xyz'},process.env.SHELFWISE_JWT_SECRET,{expiresIn:'12h'}))"
+  Then send header: Authorization: Bearer <token>

@@ -2403,6 +2403,102 @@ backend:
             
             No critical issues found. All PHASE 7 order lifecycle notification + kitchen edit/cancel + sample products endpoints working perfectly.
 
+  - task: "Receipt Line Items Extraction (POST /api/receipts/line-items)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            NEW: POST /api/receipts/line-items endpoint for extracting product line items from receipt images.
+            Uses gpt-4o vision via EMERGENT_LLM_KEY to extract structured product data from supplier receipts/invoices.
+            Returns {items: [{name, quantity, unit, unitPrice, lineTotal, category}]} where unit is one of ea/kg/g/L/mL/bunch/pack/box.
+            Expands receipt abbreviations (e.g. "CHKN BRST FIL" → "Chicken Breast Fillet"), skips non-product lines (subtotals, VAT, totals).
+            Downstream flow: extracted items can be posted to POST /api/products/bulk for inventory addition.
+            Connected to REAL production Supabase database - test rows must be cleaned up.
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ FOCUSED TEST COMPLETE - Receipt Line Items Extraction (5/5 tests passed):
+            
+            **CONTEXT:**
+            - Supabase IS configured (production DB) → test rows MUST be cleaned up
+            - EMERGENT_LLM_KEY IS configured → gpt-4o vision calls work for real
+            - Chef JWT minted for approved kitchen (a2573e6a-70f0-4a6d-97d0-ccf09b444643, person='Xyz')
+            - Testing NEW endpoint POST /api/receipts/line-items
+            
+            **TEST 1: AUTH GATING (1/1 passed):**
+            - Test 1: POST /api/receipts/line-items with NO auth → 401 "Not authenticated" ✓
+            
+            **TEST 2: INPUT VALIDATION (1/1 passed):**
+            - Test 2: POST /api/receipts/line-items with chef JWT + empty body {} → 400 "dataUrl or url required" ✓
+            
+            **TEST 3: AI EXTRACTION (1/1 passed):**
+            - Test 3: POST /api/receipts/line-items with chef JWT + synthetic receipt image → 200 ✓
+              * ⏱️  Response time: 2.6 seconds (EXCELLENT - gpt-4o vision)
+              * Items extracted: 6/6 ✓
+              * All items have valid structure:
+                - name (string): ✓ (all 6 items)
+                - quantity (number > 0): ✓ (all 6 items)
+                - unit (one of ea/kg/g/L/mL/bunch/pack/box): ✓ (all 6 items)
+                - unitPrice (number or null): ✓ (all 6 items)
+                - lineTotal (number or null): ✓ (all 6 items)
+                - category (string): ✓ (all 6 items)
+              * ✅ Abbreviations expanded correctly:
+                - "CHKN BRST FIL 5KG" → "Chicken Breast Fillet" (5 kg) ✓
+                - "TOM CHPD 400G x6" → "Chopped Tomatoes 400g" (6 ea) ✓
+                - "2 x WHOLE MILK 2L" → "Whole Milk" (2 L) ✓
+              * ✅ SUBTOTAL/VAT/TOTAL lines correctly excluded (not in items array) ✓
+              * ✅ Units correctly mapped: kg, L, ea (all valid) ✓
+              * ✅ Categories assigned: Meat, Dairy, Dry Goods, Produce ✓
+            
+            **TEST 4: DOWNSTREAM FLOW (1/1 passed):**
+            - Test 4: POST /api/products/bulk with extracted items → 201 ✓
+              * Mapped 6 extracted items to products/bulk format:
+                - name, quantity, unit, category from extraction
+                - supplier: "TEST-LINEITEMS"
+                - source: "receipt"
+                - unitCost: unitPrice (when available)
+              * Inserted: 6/6 items ✓
+              * Returned: 6/6 items with IDs ✓
+              * All items successfully added to inventory:
+                - Chicken Breast Fillet (ID: 97dc3040-489d-498f-a7bd-b541df3e608a)
+                - Whole Milk (ID: 2bd7964e-05ec-40ed-a319-ce5aa9eb5d53)
+                - Chopped Tomatoes 400g (ID: d017cf34-e306-48e0-a466-2dee388edca6)
+                - Butter Unsalted (ID: fb9b4f4e-fcb8-4c2f-8e72-596786916f18)
+                - Eggs Large (ID: 229f3293-5b75-4d19-99ce-e32b9e9a16da)
+                - Onions (ID: 523685e2-29a8-40ee-8e78-c4caed5637e5)
+            
+            **TEST 5: CLEANUP (1/1 passed) - MANDATORY:**
+            - Test 5: DELETE /api/products/{id} for all 6 created products → 200 ✓
+              * All 6 test products deleted successfully ✓
+              * Production database cleaned up ✓
+            
+            **KEY VALIDATIONS:**
+            - ✅ Chef JWT authentication working correctly (SHELFWISE_JWT_SECRET)
+            - ✅ Auth gating working (401 without token)
+            - ✅ Input validation working (400 for empty body)
+            - ✅ gpt-4o vision extraction working perfectly (2.6s response time)
+            - ✅ All 6 items extracted with correct structure
+            - ✅ Abbreviations expanded correctly (CHKN BRST → Chicken Breast Fillet)
+            - ✅ Non-product lines excluded (SUBTOTAL/VAT/TOTAL not in items)
+            - ✅ Units correctly mapped to allowed list (ea/kg/g/L/mL/bunch/pack/box)
+            - ✅ Downstream bulk add working (6/6 items added to inventory)
+            - ✅ Cleanup successful (all test products deleted from production DB)
+            
+            **PERFORMANCE:**
+            - Response time: 2.6 seconds for gpt-4o vision extraction (EXCELLENT)
+            - LLM timeout: 60 seconds (generous for 10-30s typical response time)
+            
+            **Test file:** /app/backend_test_receipt_lineitems.py (can be re-run anytime)
+            
+            No critical issues found. Receipt line-items extraction endpoint working perfectly.
+
+
 
 frontend:
   - task: "Staff Code PIN — login page tab, kiosk lock screen, switch user"
@@ -2658,6 +2754,39 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+    - agent: "testing"
+      message: |
+        ✅ FOCUSED TEST COMPLETE - Receipt Line Items Extraction (5/5 tests passed)
+        
+        Tested the NEW POST /api/receipts/line-items endpoint as per review_request.
+        
+        **ALL TESTS PASSED:**
+        - ✅ TEST 1: Auth gating - no auth → 401 "Not authenticated"
+        - ✅ TEST 2: Input validation - empty body → 400 "dataUrl or url required"
+        - ✅ TEST 3: AI extraction - synthetic receipt image → 200 with 6 items
+          * Response time: 2.6 seconds (gpt-4o vision)
+          * All items have valid structure (name, quantity, unit, unitPrice, lineTotal, category)
+          * Abbreviations expanded correctly (CHKN BRST → Chicken Breast Fillet, TOM CHPD → Chopped Tomatoes)
+          * SUBTOTAL/VAT/TOTAL lines correctly excluded
+          * Units correctly mapped to allowed list (ea/kg/g/L/mL/bunch/pack/box)
+        - ✅ TEST 4: Downstream flow - POST /api/products/bulk → 201 with 6 items added to inventory
+        - ✅ TEST 5: Cleanup - DELETE /api/products/{id} → all 6 test products deleted from production DB
+        
+        **KEY FINDINGS:**
+        - gpt-4o vision extraction working perfectly (2.6s response time)
+        - All 6 items extracted with correct structure and valid units
+        - Abbreviations expanded correctly (CHKN BRST FIL → Chicken Breast Fillet)
+        - Non-product lines excluded (SUBTOTAL/VAT/TOTAL not in items)
+        - Downstream bulk add working (6/6 items added to inventory)
+        - Cleanup successful (all test products deleted from production DB)
+        
+        **IMPORTANT:**
+        - Production Supabase database is connected - test rows MUST be cleaned up
+        - All test products were successfully deleted (cleanup verified)
+        
+        **Test file:** /app/backend_test_receipt_lineitems.py
+        
+        No critical issues found. Feature is production-ready.
     - agent: "testing"
       message: |
         ✅ FOCUSED TEST COMPLETE - DPDP Consent & Privacy Endpoints (13/13 tests passed)
@@ -5327,3 +5456,27 @@ frontend:
         - working: true
           agent: "main"
           comment: "User still perceived zoom blur after 1500px preview (their Vercel push confirmed live: SHA cc683925). Final change: preview now uses the FULL base canvas (only capped at 2600 for iOS canvas limits) so pinch-zoom shows exactly the saved pixels; verified preview 1072x1957 == straightened output. Live-scan initial jpeg 0.9 -> 0.95. Remaining ceiling is CAPTURE resolution: Dynamsoft dds wrapper has NO programmatic resolution config (confirmed via docs/repo) — default 2K, higher only via the scanner UI's resolution dropdown; for dense documents the 'Take photo' flow (12MP camera -> 2600px pipeline) captures MORE detail than the 2K live stream. User guidance provided."
+
+backend:
+  - task: "Receipt Line Items extraction endpoint (POST /api/receipts/line-items)"
+    implemented: true
+    working: "NA"
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "NEW FEATURE: extractReceiptLineItems() uses gpt-4o vision (EMERGENT_LLM_KEY) with json_object response to extract product line items {name, quantity, unit, unitPrice, lineTotal, category} from a receipt image (dataUrl or url). Endpoint is kitchen-scoped, requires 'receipts' perm. Frontend adds review dialog then POSTs chosen items to existing /api/products/bulk with source:'receipt'. Supabase env vars NOW configured locally (real production DB — clean up test rows). Auth: mint chef JWT per /app/memory/test_credentials.md (kitchen a2573e6a-70f0-4a6d-97d0-ccf09b444643, person Xyz)."
+
+test_plan:
+  current_focus:
+    - "Receipt Line Items extraction endpoint (POST /api/receipts/line-items)"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    - agent: "main"
+      message: "Please test the new POST /api/receipts/line-items endpoint. Generate a synthetic receipt image (e.g., PIL-drawn text with product lines like '2x Chicken Breast 5kg £24.00', 'Whole Milk 2L £1.85', plus VAT/TOTAL lines that must be SKIPPED), send as dataUrl. Verify: 401 without auth, 400 without dataUrl/url, 200 with items array of correct shape, non-product lines excluded. Also verify POST /api/products/bulk accepts the mapped items (then DELETE the created products to keep the real DB clean)."

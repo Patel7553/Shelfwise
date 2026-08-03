@@ -14,7 +14,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { toast } from 'sonner'
-import { Loader2, ReceiptText, Download, Trash2, Sparkles, RefreshCw, Check, X, FileText, RotateCcw, RotateCw, ScanText, ArrowLeft, ArrowRight, Search } from 'lucide-react'
+import { Loader2, ReceiptText, Download, Trash2, Sparkles, RefreshCw, Check, X, FileText, RotateCcw, RotateCw, ScanText, ArrowLeft, ArrowRight, Search, PackagePlus } from 'lucide-react'
 import { apiFetch } from '@/lib/apiClient'
 import { CURRENCY_SYMBOL } from '@/components/shelfwise/shared'
 
@@ -1371,6 +1371,59 @@ export function ReceiptsView({ currency }) {
     } catch (e) { toast.error(e.message) } finally { setViewOcrBusy(false) }
   }
 
+  // ---- Line items → inventory (AI extract, review, then bulk-add) ----
+  const [itemsBusy, setItemsBusy] = useState(false)
+  const [reviewItems, setReviewItems] = useState(null)   // null = dialog closed
+  const [reviewSupplier, setReviewSupplier] = useState('')
+  const [addingItems, setAddingItems] = useState(false)
+
+  const extractItems = async (ref, supplier) => {
+    if (!ref || itemsBusy) return
+    setItemsBusy(true)
+    try {
+      const payload = String(ref).startsWith('data:') ? { dataUrl: ref } : { url: ref }
+      const res = await fetch('/api/receipts/line-items', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'AI could not read the line items')
+      const items = (Array.isArray(d.items) ? d.items : []).map(it => ({ ...it, _include: true }))
+      if (!items.length) { toast.error('No product lines found on this receipt'); return }
+      setReviewSupplier(supplier || '')
+      setReviewItems(items)
+    } catch (e) { toast.error(e.message) } finally { setItemsBusy(false) }
+  }
+
+  const updateReviewItem = (idx, patch) => {
+    setReviewItems(prev => prev ? prev.map((it, i) => i === idx ? { ...it, ...patch } : it) : prev)
+  }
+
+  const addItemsToInventory = async () => {
+    const chosen = (reviewItems || []).filter(i => i._include && String(i.name || '').trim())
+    if (!chosen.length) { toast.error('Tick at least one item to add'); return }
+    setAddingItems(true)
+    try {
+      const res = await fetch('/api/products/bulk', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: chosen.map(i => ({
+            name: String(i.name).trim(),
+            quantity: Number(i.quantity) > 0 ? Number(i.quantity) : 1,
+            unit: i.unit || 'ea',
+            category: String(i.category || '').trim(),
+            supplier: reviewSupplier,
+            ...(i.unitPrice != null && i.unitPrice !== '' ? { unitCost: Number(i.unitPrice) } : {}),
+            source: 'receipt',
+          })),
+        }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Could not add the items')
+      toast.success(`${d.inserted} item${d.inserted === 1 ? '' : 's'} added to your inventory 📦`)
+      setReviewItems(null)
+    } catch (e) { toast.error(e.message) } finally { setAddingItems(false) }
+  }
+
   // ---- Export ----
   const setQuickRange = (kind) => {
     const now = new Date()
@@ -1634,6 +1687,11 @@ export function ReceiptsView({ currency }) {
                       <pre className="mt-1.5 whitespace-pre-wrap max-h-32 overflow-y-auto text-[11px] text-slate-600">{ocrText}</pre>
                     </details>
                   )}
+                  <Button type="button" variant="outline" size="sm" onClick={() => extractItems(pages[0], details.supplier)} disabled={itemsBusy}
+                    className="w-full border-emerald-300 text-emerald-700 hover:bg-emerald-50">
+                    {itemsBusy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <PackagePlus className="h-4 w-4 mr-2" />}
+                    {itemsBusy ? 'AI is reading the items…' : 'Extract items → add to inventory'}
+                  </Button>
                 </div>
               )}
               {pdfFile && (
@@ -1718,6 +1776,13 @@ export function ReceiptsView({ currency }) {
                   </Button>
                 )
               )}
+              {viewing.hasFile && viewing.fileType === 'image' && viewing.fileUrl && (
+                <Button variant="outline" size="sm" onClick={() => extractItems(viewing.fileUrl, viewing.supplier)} disabled={itemsBusy}
+                  className="w-full border-emerald-300 text-emerald-700 hover:bg-emerald-50">
+                  {itemsBusy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <PackagePlus className="h-4 w-4 mr-2" />}
+                  {itemsBusy ? 'AI is reading the items…' : 'Extract items → add to inventory'}
+                </Button>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <Label>Supplier</Label>
@@ -1770,6 +1835,59 @@ export function ReceiptsView({ currency }) {
               </div>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ================= LINE ITEMS REVIEW DIALOG ================= */}
+      <Dialog open={!!reviewItems} onOpenChange={(v) => { if (!v) setReviewItems(null) }}>
+        <DialogContent className="sm:max-w-[680px] max-h-[92vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><PackagePlus className="h-5 w-5 text-emerald-600" /> Review items before adding</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground -mt-1">AI read these product lines off the receipt. Untick anything you don't want, fix names/quantities, then add them to your inventory.</p>
+          <div>
+            <Label>Supplier (saved on every item)</Label>
+            <Input value={reviewSupplier} onChange={e => setReviewSupplier(e.target.value)} placeholder="e.g. Bidfood" className="mt-1" />
+          </div>
+          <div className="space-y-2">
+            {(reviewItems || []).map((it, i) => (
+              <div key={i} className={`rounded-lg border p-2.5 ${it._include ? 'bg-white' : 'bg-slate-50 opacity-60'}`}>
+                <div className="flex items-center gap-2">
+                  <input type="checkbox" checked={!!it._include} onChange={e => updateReviewItem(i, { _include: e.target.checked })}
+                    className="h-4 w-4 accent-emerald-600 shrink-0" />
+                  <Input value={it.name} onChange={e => updateReviewItem(i, { name: e.target.value })} placeholder="Item name" className="h-8 text-sm font-medium" />
+                </div>
+                <div className="grid grid-cols-4 gap-1.5 mt-1.5 pl-6">
+                  <div>
+                    <span className="text-[10px] text-muted-foreground block">Qty</span>
+                    <Input type="number" step="0.01" min="0" value={it.quantity} onChange={e => updateReviewItem(i, { quantity: e.target.value })} className="h-8 text-sm" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-muted-foreground block">Unit</span>
+                    <select value={it.unit} onChange={e => updateReviewItem(i, { unit: e.target.value })}
+                      className="h-8 w-full rounded-md border border-input bg-white px-2 text-sm">
+                      {['ea', 'kg', 'g', 'L', 'mL', 'bunch', 'pack', 'box'].map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-muted-foreground block">Unit price ({sym})</span>
+                    <Input type="number" step="0.01" min="0" value={it.unitPrice ?? ''} onChange={e => updateReviewItem(i, { unitPrice: e.target.value === '' ? null : e.target.value })} placeholder="—" className="h-8 text-sm" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-muted-foreground block">Category</span>
+                    <Input value={it.category || ''} onChange={e => updateReviewItem(i, { category: e.target.value })} placeholder="e.g. Dairy" className="h-8 text-sm" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <p className="text-xs text-muted-foreground">{(reviewItems || []).filter(i => i._include).length} of {(reviewItems || []).length} selected</p>
+            <Button onClick={addItemsToInventory} disabled={addingItems || !(reviewItems || []).some(i => i._include)} className="bg-emerald-600 hover:bg-emerald-700">
+              {addingItems ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <PackagePlus className="h-4 w-4 mr-2" />}
+              Add {(reviewItems || []).filter(i => i._include).length} to inventory
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
 
