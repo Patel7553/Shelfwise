@@ -2147,6 +2147,7 @@ export function StaffActivityCard() {
 
   const ACTION_LABEL = {
     item_added: '➕ Added item', item_updated: '✏️ Edited item', item_deleted: '🗑️ Deleted item',
+    item_used: '🍳 Used in cooking', cooked: '👨‍🍳 Cooked recipe',
     waste_logged: '♻️ Logged waste', temp_logged: '🌡️ Logged temperature',
     recipe_saved: '📖 Saved recipe', recipe_updated: '📖 Edited recipe', recipe_deleted: '📖 Deleted recipe',
     consent: '🔐 Gave data consent', data_exported: '📦 Exported data', deletion_requested: '⚠️ Requested data deletion',

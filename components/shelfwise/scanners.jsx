@@ -115,6 +115,7 @@ export function ReceiptScanDialog({ open, onClose, onImport, settings }) {
         unitCost: it.unitCost != null ? String(it.unitCost) : '',
         category: it.category || '',
         storageType: it.storageType || 'Fridge',
+        dateReceived: new Date().toLocaleDateString('en-CA'),
         expiryDate: it.expiryDate || '',
         location: '',
         allergens: [],
@@ -141,6 +142,7 @@ export function ReceiptScanDialog({ open, onClose, onImport, settings }) {
       unitCost: '',
       category: '',
       storageType: 'Fridge',
+      dateReceived: new Date().toLocaleDateString('en-CA'),
       expiryDate: '',
       location: '',
       allergens: [],
@@ -170,6 +172,7 @@ export function ReceiptScanDialog({ open, onClose, onImport, settings }) {
       category: r.category || '',
       storageType: r.storageType || 'Fridge',
       location: r.location || '',
+      dateReceived: r.dateReceived || '',
       expiryDate: r.expiryDate || '',
       allergens: Array.isArray(r.allergens) ? r.allergens : [],
       supplier,
@@ -368,6 +371,10 @@ export function ReceiptScanDialog({ open, onClose, onImport, settings }) {
                       <div>
                         <Label className="text-xs">Category</Label>
                         <Input value={r.category} onChange={e => updateRow(i, { category: e.target.value })} className="h-10 text-sm bg-white" placeholder="e.g. Dairy" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">📅 Date received</Label>
+                        <Input type="date" value={r.dateReceived || ''} onChange={e => updateRow(i, { dateReceived: e.target.value })} className="h-10 text-sm bg-white" />
                       </div>
                       <div>
                         <Label className="text-xs">Expiry date</Label>

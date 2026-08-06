@@ -1223,6 +1223,7 @@ function App() {
         quantity: Number(it.quantity) || 1,
         unit: it.unit || 'ea',
         expiryDate: it.expiryDate || '',
+        dateReceived: new Date().toLocaleDateString('en-CA'),
         category: it.category || '',
         storageType: it.storageType || 'Fridge',
         location: it.location || '',
@@ -1574,7 +1575,7 @@ function App() {
       const res = await fetch('/api/products', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...snapItem, quantity: Number(snapItem.quantity) || 1, preparedBy: snapItem.preparedBy || getPersonName() })
+        body: JSON.stringify({ ...snapItem, quantity: Number(snapItem.quantity) || 1, dateReceived: snapItem.dateReceived || new Date().toLocaleDateString('en-CA'), preparedBy: snapItem.preparedBy || getPersonName() })
       })
       if (!res.ok) {
         let msg = `Save failed (${res.status})`
@@ -1643,7 +1644,7 @@ function App() {
       })
       const data = await safeJson(res)
       if (!res.ok) throw new Error(data.error || 'Scan failed')
-      const items = (data.items || []).map(it => ({ ...it, _keep: true }))
+      const items = (data.items || []).map(it => ({ ...it, dateReceived: it.dateReceived || new Date().toLocaleDateString('en-CA'), _keep: true }))
       setScanItems(items)
       if (!items.length) toast.warning('No items detected. Try a clearer photo.')
       else toast.success(`Detected ${items.length} item${items.length !== 1 ? 's' : ''}`)
@@ -2724,6 +2725,15 @@ function App() {
                           </div>
                         </div>
                         <div>
+                          <Label className="text-xs">📅 Date received</Label>
+                          <Input
+                            type="date"
+                            value={it.dateReceived || ''}
+                            onChange={e => updateVoiceItem(idx, { dateReceived: e.target.value })}
+                            className="h-9"
+                          />
+                        </div>
+                        <div>
                           <Label className="text-xs">Expiry date</Label>
                           <Input
                             type="date"
@@ -2999,6 +3009,18 @@ function App() {
                 </div>
               </div>
               <div>
+                <Label className="text-xs">📅 Date received (today)</Label>
+                <Input
+                  type="date"
+                  value={snapItem.dateReceived || new Date().toISOString().slice(0, 10)}
+                  onChange={e => {
+                    const v = e.target.value
+                    // Changing Date Received recalculates expiry FROM that date (user request)
+                    setSnapItem({ ...snapItem, dateReceived: v, expiryDate: suggestExpiryDate(snapItem.category || '', snapItem.storageType || 'Fridge', v) })
+                  }}
+                />
+              </div>
+              <div>
                 <Label className="text-xs">Expiry date *</Label>
                 <div className="flex gap-2 items-stretch">
                   <Input type="date" className="flex-1" value={snapItem.expiryDate || ''} onChange={e => setSnapItem({ ...snapItem, expiryDate: e.target.value })} />
@@ -3011,18 +3033,6 @@ function App() {
                   </Button>
                 </div>
                 <p className="text-[10px] text-amber-700 mt-0.5">⚠️ Always check the printed date on the package. Tap &quot;📸 Snap Date&quot; for live AI scan, or type manually.</p>
-              </div>
-              <div>
-                <Label className="text-xs">Date received (today)</Label>
-                <Input
-                  type="date"
-                  value={snapItem.dateReceived || new Date().toISOString().slice(0, 10)}
-                  onChange={e => {
-                    const v = e.target.value
-                    // Changing Date Received recalculates expiry FROM that date (user request)
-                    setSnapItem({ ...snapItem, dateReceived: v, expiryDate: suggestExpiryDate(snapItem.category || '', snapItem.storageType || 'Fridge', v) })
-                  }}
-                />
               </div>
               <div className="grid grid-cols-1 gap-2">
                 <div>
@@ -3152,6 +3162,10 @@ function App() {
                       </div>
                     </div>
                     <div>
+                      <Label className="text-[11px] text-slate-500">📅 Date received</Label>
+                      <Input type="date" value={it.dateReceived || ''} onChange={e => updateScanItem(idx, 'dateReceived', e.target.value)} className="h-9" />
+                    </div>
+                    <div>
                       <Label className="text-[11px] text-slate-500">Expiry date</Label>
                       <Input type="date" value={it.expiryDate || ''} onChange={e => updateScanItem(idx, 'expiryDate', e.target.value)} className="h-9" />
                     </div>
@@ -3178,6 +3192,7 @@ function App() {
                       <TableHead>Name</TableHead>
                       <TableHead className="w-20">Qty</TableHead>
                       <TableHead className="w-20">Unit</TableHead>
+                      <TableHead className="w-36">Received</TableHead>
                       <TableHead className="w-36">Expiry</TableHead>
                       <TableHead>Category</TableHead>
                       <TableHead className="w-28">Storage</TableHead>
@@ -3190,6 +3205,7 @@ function App() {
                         <TableCell><Input value={it.name} onChange={e => updateScanItem(idx, 'name', e.target.value)} className="h-8" /></TableCell>
                         <TableCell><Input type="number" value={it.quantity} onChange={e => updateScanItem(idx, 'quantity', e.target.value)} className="h-8" /></TableCell>
                         <TableCell><Input value={it.unit} onChange={e => updateScanItem(idx, 'unit', e.target.value)} className="h-8" /></TableCell>
+                        <TableCell><Input type="date" value={it.dateReceived || ''} onChange={e => updateScanItem(idx, 'dateReceived', e.target.value)} className="h-8" /></TableCell>
                         <TableCell><Input type="date" value={it.expiryDate || ''} onChange={e => updateScanItem(idx, 'expiryDate', e.target.value)} className="h-8" /></TableCell>
                         <TableCell><Input value={it.category} onChange={e => updateScanItem(idx, 'category', e.target.value)} className="h-8" /></TableCell>
                         <TableCell><Input value={it.storageType} onChange={e => updateScanItem(idx, 'storageType', e.target.value)} className="h-8" /></TableCell>

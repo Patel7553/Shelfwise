@@ -4667,24 +4667,42 @@ Output strictly valid JSON with no other text.`
       // Deducts confirmed quantities from stock (never below 0).
       if (path === 'usage/apply') {
         const body = await request.json()
+        // DECIMALS SUPPORTED (Aug 2026 bug fix): quantities like 0.4 kg used to
+        // be Math.round()ed to 0 so "Cooked it" silently deducted NOTHING.
         const items = (Array.isArray(body.items) ? body.items : [])
           .filter(i => i && i.id && Number(i.used) > 0)
           .slice(0, 500)
-          .map(i => ({ id: String(i.id), used: Math.max(0, Math.min(9999, Math.round(Number(i.used)))) }))
+          .map(i => ({ id: String(i.id), used: Math.max(0, Math.min(99999, Math.round(Number(i.used) * 1000) / 1000)) }))
+          .filter(i => i.used > 0)
         if (items.length === 0) return json({ error: 'No items with a usage count above 0' }, 400)
 
+        const person = await validatedPersonFromRequest(sb, request, ctx)
         const results = []
         for (const it of items) {
           const { data: prod, error: pErr } = await sb.from('products')
-            .select('id,name,quantity,unit')
+            .select('id,name,quantity,unit,custom_fields')
             .eq('id', it.id).eq('kitchen_id', kid).maybeSingle()
           if (pErr || !prod) { results.push({ id: it.id, ok: false, reason: 'not found' }); continue }
           const from = Number(prod.quantity) || 0
-          const to = Math.max(0, from - it.used)
-          const { error: uErr } = await sb.from('products')
-            .update({ quantity: to })
-            .eq('id', it.id).eq('kitchen_id', kid)
-          results.push({ id: it.id, name: prod.name, unit: prod.unit || '', ok: !uErr, from, used: it.used, to })
+          const to = Math.max(0, Math.round((from - it.used) * 1000) / 1000)
+          let uErr = null
+          let removed = false
+          if (to <= 0) {
+            // Fully used → REMOVE from active inventory so it disappears from
+            // stock counts and expiry alerts. The Logbook keeps the record.
+            ;({ error: uErr } = await sb.from('products').delete().eq('id', it.id).eq('kitchen_id', kid))
+            removed = !uErr
+          } else {
+            const cf = { ...(prod.custom_fields || {}), _addedBy: person, _editedAt: new Date().toISOString() }
+            delete cf._editedBy
+            ;({ error: uErr } = await sb.from('products')
+              .update({ quantity: to, updated_at: new Date().toISOString(), custom_fields: cf })
+              .eq('id', it.id).eq('kitchen_id', kid))
+          }
+          if (!uErr) {
+            await logActivity(sb, kid, person, 'item_used', `${prod.name} — ${it.used} ${prod.unit || ''} used in cooking${removed ? ' (all used — removed from inventory)' : ''}`)
+          }
+          results.push({ id: it.id, name: prod.name, unit: prod.unit || '', ok: !uErr, from, used: it.used, to, removed })
         }
         const applied = results.filter(r => r.ok)
         return json({

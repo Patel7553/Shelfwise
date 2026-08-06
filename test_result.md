@@ -562,6 +562,86 @@ backend:
             **Test file:** /app/test_usage_log.py (can be re-run anytime)
             
             No critical issues found. Feature is production-ready with perfect AI accuracy.
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ FOCUSED TEST COMPLETE - FIXED POST /api/usage/apply (6/6 tests passed):
+            
+            **CONTEXT:**
+            - Testing the FIXED endpoint for decimal support and product deletion
+            - Previously: fractional usage amounts were Math.round()ed (0.4 → 0, deducting nothing)
+            - NOW FIXED: (a) decimal amounts supported to 3 decimals, (b) when resulting quantity <= 0 
+              the product row is DELETED from products table, (c) partial usage updates quantity and 
+              stamps custom_fields._addedBy/_editedAt, (d) every successful application inserts an 
+              'item_used' row into activity_logs
+            - Real production DB used (Supabase configured)
+            - Chef JWT: kitchen_id=a2573e6a-70f0-4a6d-97d0-ccf09b444643, person=Xyz
+            
+            **SETUP:**
+            Created 3 test products via POST /api/products:
+            - TEST-Basil Pesto: 0.4 kg (Fridge)
+            - TEST-Cream: 2.5 kg (Fridge)
+            - TEST-Lemon: 1 ea (Fridge)
+            
+            **TEST RESULTS:**
+            
+            **Test 1: Exact usage (0.4 kg) → product DELETED ✓**
+            - POST /api/usage/apply {"items":[{"id":"<A>","used":0.4}]} → 200
+            - Response: ok:true, from:0.4, used:0.4, to:0, removed:true ✓
+            - GET /api/products confirms TEST-Basil Pesto is GONE (row deleted) ✓
+            - Decimal amount 0.4 correctly processed (NOT rounded to 0) ✓
+            
+            **Test 2: Partial usage (0.7 kg from 2.5 kg) → quantity updated to 1.8 kg ✓**
+            - POST /api/usage/apply {"items":[{"id":"<B>","used":0.7}]} → 200
+            - Response: ok:true, from:2.5, used:0.7, to:1.8, removed:false ✓
+            - GET /api/products confirms quantity updated to 1.8 kg ✓
+            - Decimal subtraction working correctly (2.5 - 0.7 = 1.8) ✓
+            
+            **Test 3: Over-use (5 ea from 1 ea) → product DELETED ✓**
+            - POST /api/usage/apply {"items":[{"id":"<C>","used":5}]} → 200
+            - Response: ok:true, to:0, removed:true ✓
+            - GET /api/products confirms TEST-Lemon is GONE (row deleted) ✓
+            - Over-usage correctly results in deletion (quantity <= 0) ✓
+            
+            **Test 4: Empty items array → 400 ✓**
+            - POST /api/usage/apply {"items":[]} → 400 "No items with a usage count above 0" ✓
+            - Validation working correctly ✓
+            
+            **Test 5: Zero-used items → 400 ✓**
+            - POST /api/usage/apply {"items":[{"id":"<B>","used":0}]} → 400 "No items with a usage count above 0" ✓
+            - Zero counts correctly filtered out ✓
+            
+            **Test 6: Activity logs verification ✓**
+            - GET Supabase REST /activity_logs?action=eq.item_used → 9 logs retrieved
+            - Found 3 activity logs for test products:
+              * "TEST-Basil Pesto — 0.4 kg used in cooking (all used — removed from inventory)" ✓
+              * "TEST-Cream — 0.7 kg used in cooking" ✓
+              * "TEST-Lemon — 5 ea used in cooking (all used — removed from inventory)" ✓
+            - All logs have person='Xyz' (from JWT) ✓
+            - All logs have action='item_used' ✓
+            - Decimal amounts correctly logged (0.4, 0.7) ✓
+            
+            **CLEANUP:**
+            - All 3 test products deleted via DELETE /api/products/:id ✓
+            - All 9 test activity logs deleted via Supabase REST API ✓
+            - Verified no TEST- products remain in inventory ✓
+            
+            **Key Validations:**
+            - ✅ Decimal amounts (0.4, 0.7) correctly supported to 3 decimals (NOT rounded to 0)
+            - ✅ Products with quantity <= 0 are DELETED from products table (removed:true)
+            - ✅ Partial usage updates quantity correctly (2.5 - 0.7 = 1.8)
+            - ✅ Activity logs inserted for every successful usage application
+            - ✅ Activity logs contain correct details: product name, amount used, unit, person
+            - ✅ Validation working: empty items → 400, zero-used → 400
+            - ✅ Over-usage handled correctly (5 from 1 → deletion)
+            
+            **BUG FIX VERIFIED:**
+            The original bug (0.4 kg → Math.round(0.4) = 0, deducting nothing) is FIXED.
+            Decimal amounts are now correctly processed using Math.round(amount * 1000) / 1000.
+            
+            **Test file:** /app/backend_test_usage_apply.py (can be re-run anytime)
+            
+            No critical issues found. All FIXED features working perfectly in production.
 
   - task: "Refactor: page.js split into /components/shelfwise/* (9 files)"
     implemented: true
@@ -5675,3 +5755,40 @@ agent_communication:
       message: "Test the cook endpoint on kitchen a2573e6a-70f0-4a6d-97d0-ccf09b444643 (REAL prod DB — create everything with TEST- prefix and delete afterwards). Flow: create 2-3 products (e.g. TEST-Flour 5 kg, TEST-Milk 2000 mL, TEST-Eggs 12 ea), create a recipe via POST /api/recipes with ingredients using DIFFERENT but compatible units (flour 500 g, milk 0.5 L, eggs 2 ea) + one unmatched ingredient, then POST /api/recipes/<id>/cook {portions:4, servings:2, deduct:true} → expect scale 2: flour -1 kg → 4, milk -1000 mL → 1000, eggs -4 → 8, unmatched in skipped. Also test deduct:false (no changes), portions<=0 → 400, bad recipe id → 404, unauth → 401. Cleanup recipes + products."
     - agent: "testing"
       message: "✅ Recipe cook/deduction endpoint tested and working perfectly (6/6 tests passed). All functionality verified: auth (401), validation (400 for portions<=0), 404 for non-existent recipe, scale=2 deductions with unit conversion (kg↔g, L↔mL), deduct=false flag (no changes), over-deduction handling (clamped at 0, short=true), ingredient matching, skipped items. Database updates persisted correctly. Cleanup successful (all TEST- data deleted). Test file: /app/backend_test_recipe_cook.py. No critical issues found."
+
+backend:
+  - task: "Cooked it fix — usage/apply supports decimals, removes item at 0, logs to Logbook"
+    implemented: true
+    working: "NA"
+    file: "app/api/[[...path]]/route.js, components/shelfwise/settings-auth.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "BUG: usage/apply Math.round()ed fractional usage (0.4 kg -> 0) so 'Cooked it' deducted nothing. FIX: 3-decimal precision; when resulting qty <= 0 the product row is DELETED (removed:true in results) so it leaves stock counts and expiry alerts; partial usage updates qty + single attribution; every application logs 'item_used' activity ('<name> — <used> <unit> used in cooking'). ACTION_LABEL added for item_used and cooked in activity log UI."
+
+frontend:
+  - task: "Date Received before Expiry Date in ALL add-product flows"
+    implemented: true
+    working: "NA"
+    file: "app/page.js, components/shelfwise/scanners.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Checked every add flow. Manual Add/Edit: already correct. Snap Label (also Barcode + AI-identify): swapped so Date received first. Voice items: added Date received field (default today) before Expiry. AI Scan: mobile card field + desktop table 'Received' column added before Expiry, default today. Supplier Invoice Scanner: Date received field added before Expiry, default today, passed through import payload. Not UI-tested."
+
+test_plan:
+  current_focus:
+    - "Cooked it fix — usage/apply supports decimals, removes item at 0, logs to Logbook"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    - agent: "main"
+      message: "Test POST /api/usage/apply on kitchen a2573e6a-70f0-4a6d-97d0-ccf09b444643 (REAL prod DB — TEST- prefix + cleanup). Cases: fractional full use (0.4 kg product, used 0.4 -> row DELETED, removed:true), partial fractional (2.5 kg, used 0.7 -> qty 1.8 remains), over-use (1 ea, used 5 -> deleted), and verify activity log got 'item_used' rows (GET the activity endpoint or query activity_logs via supabase REST)."
