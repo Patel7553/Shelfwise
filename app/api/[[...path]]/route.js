@@ -875,6 +875,90 @@ async function notifyForEmailAction(sb, event, order) {
   } catch (e) { console.error('notifyForEmailAction:', e?.message) }
 }
 
+/** Build the itemised ORDER SUMMARY PDF (server-side, pdf-lib) — the default
+ *  "tier 1" document every kitchen gets when an order is delivered.
+ *  Returns base64 string, or null on failure (email still goes out). */
+async function buildOrderSummaryPdfBase64({ order, supplierName, clientCode, sym }) {
+  try {
+    const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib')
+    const clean = (t) => String(t ?? '').replace(/[^\x20-\x7E\xA0-\xFF€]/g, '').slice(0, 80)
+    const money = (n) => `${clean(sym) || ''}${(Number(n) || 0).toFixed(2)}`
+    const ref = 'ORD-' + String(order.id || '').replace(/-/g, '').slice(0, 6).toUpperCase()
+    const doc = await PDFDocument.create()
+    const font = await doc.embedFont(StandardFonts.Helvetica)
+    const bold = await doc.embedFont(StandardFonts.HelveticaBold)
+    const indigo = rgb(0.19, 0.18, 0.51)
+    const grey = rgb(0.42, 0.45, 0.5)
+    const W = 595, H = 842, M = 40
+    let page = doc.addPage([W, H])
+    let y = H - 50
+
+    // Header
+    page.drawText(clean(supplierName) || 'Supplier', { x: M, y, size: 18, font: bold, color: indigo })
+    page.drawText('ORDER SUMMARY', { x: W - M - 150, y, size: 14, font: bold, color: indigo })
+    y -= 18
+    page.drawText(ref, { x: W - M - 150, y, size: 11, font: bold })
+    page.drawText(`Delivered: ${new Date(order.fulfilled_at || Date.now()).toLocaleDateString('en-GB')}`, { x: W - M - 150, y: y - 14, size: 9, font, color: grey })
+    y -= 40
+    page.drawText('CUSTOMER', { x: M, y, size: 8, font: bold, color: grey })
+    y -= 13
+    page.drawText(clean(order.customer_name) || '-', { x: M, y, size: 12, font: bold })
+    if (clientCode) { y -= 13; page.drawText(`Account number: ${clean(clientCode)}`, { x: M, y, size: 9, font, color: grey }) }
+    y -= 26
+
+    const cols = { n: M, code: M + 26, item: M + 96, qty: 388, price: 452, amt: W - M }
+    const header = () => {
+      page.drawRectangle({ x: M - 4, y: y - 4, width: W - 2 * M + 8, height: 18, color: rgb(0.93, 0.95, 1) })
+      page.drawText('#', { x: cols.n, y, size: 8, font: bold, color: indigo })
+      page.drawText('CODE', { x: cols.code, y, size: 8, font: bold, color: indigo })
+      page.drawText('ITEM', { x: cols.item, y, size: 8, font: bold, color: indigo })
+      page.drawText('QTY', { x: cols.qty, y, size: 8, font: bold, color: indigo })
+      page.drawText('UNIT PRICE', { x: cols.price, y, size: 8, font: bold, color: indigo })
+      const t = 'AMOUNT'; page.drawText(t, { x: cols.amt - bold.widthOfTextAtSize(t, 8), y, size: 8, font: bold, color: indigo })
+      y -= 20
+    }
+    header()
+    const items = Array.isArray(order.items) ? order.items : []
+    items.forEach((i, idx) => {
+      if (y < 130) { page = doc.addPage([W, H]); y = H - 60; header() }
+      const qty = Number(i.quantity) || 0
+      const price = Number(i.price) || 0
+      page.drawText(String(idx + 1), { x: cols.n, y, size: 9, font })
+      page.drawText(clean(i.sku) || '-', { x: cols.code, y, size: 9, font, color: grey })
+      page.drawText(clean(i.name).slice(0, 52), { x: cols.item, y, size: 9, font })
+      page.drawText(`${qty} ${clean(i.unit) || ''}`.trim(), { x: cols.qty, y, size: 9, font })
+      page.drawText(money(price), { x: cols.price, y, size: 9, font })
+      const amt = money(qty * price); page.drawText(amt, { x: cols.amt - font.widthOfTextAtSize(amt, 9), y, size: 9, font })
+      y -= 16
+    })
+
+    // Totals
+    y -= 8
+    const totalLine = (label, value, big) => {
+      const f = big ? bold : font, s = big ? 12 : 10
+      page.drawText(label, { x: 380, y, size: s, font: f })
+      page.drawText(value, { x: cols.amt - f.widthOfTextAtSize(value, s), y, size: s, font: f })
+      y -= big ? 20 : 15
+    }
+    totalLine('Subtotal', money(order.subtotal))
+    if (Number(order.vat_rate) > 0) totalLine(`VAT (${order.vat_rate}%)`, money((Number(order.total) || 0) - (Number(order.subtotal) || 0)))
+    totalLine('Total (agreed prices)', money(order.total), true)
+
+    // Disclaimer
+    y -= 14
+    if (y < 60) { page = doc.addPage([W, H]); y = H - 60 }
+    page.drawText('This order summary is a record of the order for reference only. It is not a tax invoice —', { x: M, y, size: 8, font, color: grey })
+    page.drawText(`the official invoice is issued separately by ${clean(supplierName) || 'the supplier'} through their own invoicing system.`, { x: M, y: y - 11, size: 8, font, color: grey })
+    page.drawText('Generated automatically by ShelfWise', { x: M, y: y - 28, size: 7, font, color: grey })
+
+    const bytes = await doc.save()
+    return Buffer.from(bytes).toString('base64')
+  } catch (e) {
+    console.error('order summary pdf failed (non-fatal):', e?.message)
+    return null
+  }
+}
+
 async function notifyOrderEvent(sb, event, { order, supplierName, supplierEmail, restaurantEmail, restaurantName, clientCode, sym }) {
   try {
     const api = supplierOrderToApi(order)
@@ -935,9 +1019,13 @@ async function notifyOrderEvent(sb, event, { order, supplierName, supplierEmail,
 
     if (event === 'fulfilled') {
       if (restaurantEmail) {
-        // Attach the supplier's own invoice file if they uploaded one (best-effort)
         jobs.push((async () => {
-          let attachments
+          const attachments = []
+          // TIER 1 (default, every supplier): auto-generated Order Summary PDF
+          const summary = await buildOrderSummaryPdfBase64({ order, supplierName, clientCode, sym })
+          if (summary) attachments.push({ filename: `order-summary-${ref}.pdf`, content: summary })
+          // TIER 2 (optional): the supplier's OWN invoice, if one is attached
+          // to the order (manual upload or a connected invoicing platform)
           try {
             const { data: file } = await sb.storage.from('receipts').download(orderInvoicePath(order.id))
             if (file) {
@@ -945,19 +1033,19 @@ async function notifyOrderEvent(sb, event, { order, supplierName, supplierEmail,
               if (buf.length > 0 && buf.length < 9 * 1024 * 1024) {
                 const mime = file.type || 'application/octet-stream'
                 const ext = mime.includes('pdf') ? 'pdf' : mime.includes('png') ? 'png' : mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'bin'
-                attachments = [{ filename: `supplier-invoice-${ref}.${ext}`, content: buf.toString('base64') }]
+                attachments.push({ filename: `supplier-invoice-${ref}.${ext}`, content: buf.toString('base64') })
               }
             }
-          } catch { /* no invoice uploaded — send without attachment */ }
+          } catch { /* no supplier invoice — summary alone is the default */ }
           return resendSend({
             to: restaurantEmail,
             subject: `Order ${ref} delivered — ${supplierName}`,
-            html: html('Order delivered ✅', `Your order from <b>${supplierName}</b> has been delivered.${attachments ? ' Their invoice is attached to this email and also available on the order in ShelfWise.' : ' The order summary below is for your records.'}`),
-            attachments,
+            html: html('Order delivered ✅', `Your order from <b>${supplierName}</b> has been delivered. The itemised <b>Order Summary</b> is attached${attachments.length > 1 ? ' along with the supplier\'s invoice' : ''} for your records.`),
+            attachments: attachments.length ? attachments : undefined,
           })
         })())
       }
-      if (order.kitchen_id) jobs.push(sendPushToKitchen(sb, order.kitchen_id, { title: `Order ${ref} delivered 🎉`, body: `${supplierName} delivered your order` }))
+      if (order.kitchen_id) jobs.push(sendPushToKitchen(sb, order.kitchen_id, { title: `Order ${ref} delivered 🎉`, body: `${supplierName} delivered your order — summary sent to your email` }))
     }
 
     if (event === 'updated') {
@@ -3562,6 +3650,24 @@ export async function POST(request, { params }) {
   try {
     const path = (params?.path || []).join('/')
     const sb = supabaseAdmin
+
+    // ------- PUBLIC: service-worker push re-subscribe (Aug 2026 fix) -------
+    // Browsers rotate push subscriptions; the SW has no login context, so it
+    // swaps the endpoint on the EXISTING registration matched by old endpoint.
+    if (path === 'push/resubscribe') {
+      const body = await request.json().catch(() => ({}))
+      const sub = body.subscription
+      if (!sub || !sub.endpoint || !sub.keys) return json({ error: 'Invalid push subscription' }, 400)
+      const oldEndpoint = String(body.oldEndpoint || '')
+      if (!oldEndpoint) return json({ error: 'oldEndpoint required' }, 400)
+      const { data: existing } = await sb.from('push_subscriptions').select('id').eq('endpoint', oldEndpoint).maybeSingle()
+      if (!existing) return json({ error: 'Unknown subscription' }, 404)
+      const { error: upErr } = await sb.from('push_subscriptions')
+        .update({ endpoint: String(sub.endpoint).slice(0, 1000), subscription: sub })
+        .eq('id', existing.id)
+      if (upErr) throw upErr
+      return json({ ok: true })
+    }
 
     // ------- PUBLIC: reject-order form submit from the email action page -------
     if (path === 'order-action') {

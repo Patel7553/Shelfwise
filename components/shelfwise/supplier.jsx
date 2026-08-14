@@ -22,7 +22,7 @@ import {
   Users, Copy, CalendarDays, Download, KeyRound,
 } from 'lucide-react'
 import { apiFetch, apiJson, signOutAll } from '@/lib/apiClient'
-import { withBackToolbar } from '@/components/shelfwise/shared'
+import { withBackToolbar, catEmoji } from '@/components/shelfwise/shared'
 
 const STATUS_STYLE = {
   pending:    { label: 'Pending',    cls: 'bg-amber-100 text-amber-800 border-amber-300' },
@@ -51,13 +51,19 @@ export function printOrderSummary(order, profile, businessName, ownerEmail, clie
       <td style="text-align:right">${sym}${((Number(i.quantity) || 0) * (Number(i.price) || 0)).toFixed(2)}</td>
     </tr>`).join('')
   const html = `<!doctype html><html><head><title>${esc(order.orderRef || 'Order Summary')}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111;margin:40px;font-size:14px}
+    @media (max-width:640px){ body{margin:14px} }
     h1{font-size:24px;margin:0;color:#312e81} .muted{color:#6b7280;font-size:12px}
-    table{width:100%;border-collapse:collapse;margin-top:24px}
-    th{background:#eef2ff;color:#312e81;text-align:left;padding:8px;font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+    .table-wrap{overflow-x:auto;margin-top:24px}
+    table{width:100%;border-collapse:collapse}
+    th{background:#eef2ff;color:#312e81;text-align:left;padding:8px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}
     th:nth-child(n+4){text-align:right}
-    td{padding:8px;border-bottom:1px solid #e5e7eb;word-break:break-word}
+    /* Names must wrap by WORD, never letter-by-letter (Aug 2026 bug fix) */
+    td{padding:8px;border-bottom:1px solid #e5e7eb;word-break:normal;overflow-wrap:normal}
+    td:nth-child(3){min-width:140px;overflow-wrap:break-word}
+    td:nth-child(n+4){text-align:right;white-space:nowrap}
     .totals{margin-top:16px;margin-left:auto;width:280px}
     .totals div{display:flex;justify-content:space-between;padding:4px 8px}
     .totals .grand{font-weight:700;font-size:18px;border-top:2px solid #312e81;margin-top:4px;padding-top:8px}
@@ -87,8 +93,8 @@ export function printOrderSummary(order, profile, businessName, ownerEmail, clie
     ${clientCode ? `<div class="muted">Account number: <b>${esc(clientCode)}</b></div>` : ''}
     ${order.customerEmail ? `<div class="muted">${esc(order.customerEmail)}</div>` : ''}
   </div>
-  <table><thead><tr><th>#</th><th>Code</th><th>Item</th><th>Qty</th><th>Unit price</th><th>Amount</th></tr></thead>
-  <tbody>${rows}</tbody></table>
+  <div class="table-wrap"><table><thead><tr><th>#</th><th>Code</th><th>Item</th><th>Qty</th><th>Unit price</th><th>Amount</th></tr></thead>
+  <tbody>${rows}</tbody></table></div>
   <div class="totals">
     <div><span>Subtotal</span><span>${sym}${(order.subtotal || 0).toFixed(2)}</span></div>
     ${order.vatRate ? `<div><span>VAT (${order.vatRate}%)</span><span>${sym}${((order.total || 0) - (order.subtotal || 0)).toFixed(2)}</span></div>` : ''}
@@ -342,25 +348,14 @@ function NewOrderDialog({ open, onClose, products, defaultVatRate, currencySymbo
 // Order detail dialog
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
-// Mark-as-Delivered dialog (Aug 2026): delivery note + the supplier's OWN
-// invoice file (PDF/image) — attached to the order + emailed to the kitchen.
+// Mark-as-Delivered dialog: optional delivery note. The itemised ORDER SUMMARY
+// PDF is generated AUTOMATICALLY by the server and emailed to the kitchen —
+// no manual upload needed (two-tier invoicing, Aug 2026).
 // ---------------------------------------------------------------------------
 function MarkDeliveredDialog({ order, onClose, onSubmit, busy }) {
   const [note, setNote] = useState('')
-  const [file, setFile] = useState(null)      // { name, dataUrl, size }
-  const fileRef = useRef(null)
-  useEffect(() => { if (order) { setNote(''); setFile(null) } }, [order?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (order) setNote('') }, [order?.id]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!order) return null
-
-  const pickFile = (f) => {
-    if (!f) return
-    if (f.size > 8 * 1024 * 1024) { toast.error('File too large — max 8 MB'); return }
-    const ok = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(f.type)
-    if (!ok) { toast.error('Invoice must be a PDF or image (JPG/PNG/WebP)'); return }
-    const reader = new FileReader()
-    reader.onload = () => setFile({ name: f.name, dataUrl: reader.result, size: f.size })
-    reader.readAsDataURL(f)
-  }
 
   return (
     <Dialog open={!!order} onOpenChange={(v) => { if (!v && !busy) onClose() }}>
@@ -369,38 +364,20 @@ function MarkDeliveredDialog({ order, onClose, onSubmit, busy }) {
           <DialogTitle className="flex items-center gap-2"><ClipboardCheck className="h-5 w-5 text-emerald-600" /> Mark {order.orderRef} as delivered</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
-          <p className="text-xs text-muted-foreground">The kitchen gets an in-app notification and an email — with your invoice attached if you add one below.</p>
+          <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2.5 text-xs text-emerald-900">
+            📄 The itemised <b>Order Summary PDF</b> (products, codes, quantities, prices, totals) is generated automatically and emailed to the kitchen with their delivery notification — nothing to upload.
+          </div>
           <div>
             <Label className="text-xs">Delivery note (optional)</Label>
             <Input value={note} onChange={e => setNote(e.target.value)} maxLength={300} placeholder='e.g. "Left with kitchen manager, signed by Michael"' className="mt-1" />
           </div>
-          <div>
-            <Label className="text-xs">📎 Attach YOUR invoice (optional — PDF or photo)</Label>
-            <input ref={fileRef} type="file" accept="application/pdf,image/jpeg,image/png,image/webp" className="hidden"
-              onChange={e => pickFile(e.target.files?.[0])} />
-            {!file ? (
-              <button type="button" onClick={() => fileRef.current?.click()}
-                className="mt-1 w-full border-2 border-dashed border-slate-300 hover:border-emerald-400 rounded-xl py-5 text-sm text-slate-500 hover:text-emerald-700 transition">
-                Tap to choose your invoice file<br /><span className="text-[11px]">Your own invoice format — ShelfWise stores it on this order</span>
-              </button>
-            ) : (
-              <div className="mt-1 flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5">
-                <span className="text-xl">📄</span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold truncate">{file.name}</p>
-                  <p className="text-[11px] text-muted-foreground">{(file.size / 1024).toFixed(0)} KB — will be attached to the kitchen's email</p>
-                </div>
-                <Button size="sm" variant="ghost" className="text-red-500 h-8 px-2" onClick={() => setFile(null)}><X className="h-4 w-4" /></Button>
-              </div>
-            )}
-          </div>
         </div>
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={onClose} disabled={busy}>Back</Button>
-          <Button onClick={() => onSubmit(order, { note: note.trim(), dataUrl: file?.dataUrl || null })} disabled={busy}
+          <Button onClick={() => onSubmit(order, { note: note.trim() })} disabled={busy}
             className="bg-emerald-600 hover:bg-emerald-700 text-white">
             {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Check className="h-4 w-4 mr-2" />}
-            Mark as delivered{file ? ' + send invoice' : ''}
+            Mark as delivered
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -567,17 +544,14 @@ export default function SupplierDashboard({ me }) {
     } catch (e) { toast.error(e.message || 'Update failed') } finally { setStatusBusy(null) }
   }
 
-  const completeDelivery = async (order, { note, dataUrl }) => {
+  const completeDelivery = async (order, { note }) => {
     setStatusBusy(order.id)
     try {
-      if (dataUrl) {
-        await apiJson(`/api/supplier/orders/${order.id}/invoice`, { method: 'POST', body: JSON.stringify({ dataUrl }) })
-      }
       const updated = await apiJson(`/api/supplier/orders/${order.id}`, {
         method: 'PUT',
         body: JSON.stringify({ status: 'fulfilled', ...(note ? { deliveryNote: note } : {}) }),
       })
-      toast.success(`Order ${updated.orderRef} marked as delivered 🎉 — the kitchen has been notified${dataUrl ? ' (invoice attached)' : ''}`)
+      toast.success(`Order ${updated.orderRef} marked as delivered 🎉 — kitchen notified with the Order Summary PDF`)
       setViewOrder(v => (v && v.id === order.id) ? updated : v)
       setDeliverOrder(null)
       loadAll()
@@ -823,26 +797,40 @@ export default function SupplierDashboard({ me }) {
                       </Button>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                      {products.map(p => (
-                        <div key={p.id} className={`border rounded-lg p-3 ${p.available ? '' : 'opacity-60'}`}>
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <p className="font-semibold text-sm truncate">{p.name}</p>
-                              <p className="text-xs text-muted-foreground">{[p.category, p.packSize, p.sku].filter(Boolean).join(' · ')}</p>
-                            </div>
-                            <span className="font-bold text-indigo-700 text-sm whitespace-nowrap">{money(p.price, sym)}{p.unit ? <span className="text-[10px] text-muted-foreground font-normal">/{p.unit}</span> : ''}</span>
+                    <div className="space-y-5">
+                      {Object.entries(products.reduce((g, p) => {
+                        const c = p.category || 'Other'
+                        ;(g[c] = g[c] || []).push(p)
+                        return g
+                      }, {})).sort(([a], [b]) => a.localeCompare(b)).map(([cat, items]) => (
+                        <div key={cat}>
+                          <p className="text-xs font-bold uppercase tracking-wider text-indigo-700 bg-indigo-50 rounded-md px-2.5 py-1.5 inline-flex items-center gap-1.5 mb-2">
+                            <span className="text-sm">{catEmoji(cat)}</span> {cat} <span className="text-indigo-400 font-semibold">({items.length})</span>
+                          </p>
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                            {items.map(p => (
+                              <div key={p.id} className={`relative border-2 rounded-xl p-3 pt-2.5 transition hover:border-indigo-200 ${p.available ? 'border-slate-100 bg-white' : 'border-slate-100 bg-slate-50 opacity-70'}`}>
+                                <div className="flex items-start gap-2.5">
+                                  <div className="h-11 w-11 shrink-0 rounded-lg bg-indigo-50 flex items-center justify-center text-2xl select-none">{catEmoji(p.category)}</div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="font-semibold text-sm break-words leading-snug">{p.name}</p>
+                                    <p className="text-[11px] text-muted-foreground">{[p.packSize, p.sku].filter(Boolean).join(' · ') || '—'}</p>
+                                  </div>
+                                  <span className="font-bold text-indigo-700 text-sm whitespace-nowrap">{money(p.price, sym)}{p.unit ? <span className="text-[10px] text-muted-foreground font-normal">/{p.unit}</span> : ''}</span>
+                                </div>
+                                <div className="flex items-center justify-between mt-2.5">
+                                  <Badge variant="outline" className={p.available ? 'bg-emerald-50 text-emerald-700 border-emerald-300 text-[10px]' : 'bg-red-50 text-red-600 border-red-200 text-[10px]'}>
+                                    {p.available ? 'In stock' : 'Out of stock'}
+                                  </Badge>
+                                  <div className="flex gap-1">
+                                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => setProductDialog({ open: true, product: p })} title="Edit"><Pencil className="h-3.5 w-3.5" /></Button>
+                                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-500 hover:bg-red-50" onClick={() => deleteProduct(p)} title="Delete"><Trash2 className="h-3.5 w-3.5" /></Button>
+                                  </div>
+                                </div>
+                                {p.notes && <p className="text-[11px] text-muted-foreground italic mt-1.5">{p.notes}</p>}
+                              </div>
+                            ))}
                           </div>
-                          <div className="flex items-center justify-between mt-2">
-                            <Badge variant="outline" className={p.available ? 'bg-emerald-50 text-emerald-700 border-emerald-300 text-[10px]' : 'bg-slate-100 text-slate-500 border-slate-300 text-[10px]'}>
-                              {p.available ? 'Available' : 'Out of stock'}
-                            </Badge>
-                            <div className="flex gap-1">
-                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => setProductDialog({ open: true, product: p })} title="Edit"><Pencil className="h-3.5 w-3.5" /></Button>
-                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-500 hover:bg-red-50" onClick={() => deleteProduct(p)} title="Delete"><Trash2 className="h-3.5 w-3.5" /></Button>
-                            </div>
-                          </div>
-                          {p.notes && <p className="text-[11px] text-muted-foreground italic mt-1.5">{p.notes}</p>}
                         </div>
                       ))}
                     </div>

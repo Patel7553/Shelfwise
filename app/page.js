@@ -749,6 +749,48 @@ function App() {
     return () => clearInterval(t)
   }, [authed, isSupplier])
 
+  // PUSH KEEPALIVE (Aug 2026 fix) — browsers can silently drop/rotate the
+  // push subscription while the app sits open. Re-verify it when the app
+  // regains focus AND every 20 min: if the subscription vanished, re-subscribe
+  // with the server's VAPID key and re-register it, so alerts keep flowing
+  // without needing to close/reopen the app.
+  useEffect(() => {
+    if (!authed) return
+    let stopped = false
+    const ensureSubscription = async () => {
+      try {
+        if (stopped) return
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
+        if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+        if (localStorage.getItem('sw_notifications_enabled') !== '1') return
+        const reg = await navigator.serviceWorker.getRegistration() || await navigator.serviceWorker.register('/sw.js')
+        if (!reg) return
+        let sub = await reg.pushManager.getSubscription()
+        if (!sub) {
+          // Browser dropped it — get the VAPID key and re-subscribe
+          const keyRes = await fetch('/api/push/public-key')
+          if (!keyRes.ok) return
+          const { key } = await keyRes.json()
+          if (!key) return
+          const raw = atob(key.replace(/-/g, '+').replace(/_/g, '/').padEnd(key.length + (4 - key.length % 4) % 4, '='))
+          const appKey = new Uint8Array([...raw].map(c => c.charCodeAt(0)))
+          sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey })
+          await fetch('/api/push/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ subscription: sub.toJSON(), userLabel: me?.personName || me?.userEmail || '' }),
+          })
+        }
+      } catch { /* best-effort */ }
+    }
+    ensureSubscription()
+    const onVisible = () => { if (document.visibilityState === 'visible') ensureSubscription() }
+    document.addEventListener('visibilitychange', onVisible)
+    const t = setInterval(ensureSubscription, 20 * 60 * 1000)
+    return () => { stopped = true; document.removeEventListener('visibilitychange', onVisible); clearInterval(t) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authed])
+
   // PUSH RE-BIND (Aug 2026 bug fix) — a browser/device has ONE push
   // subscription shared by whichever account logs in. Re-register it for the
   // CURRENT account on every login, so notifications always go to (and are

@@ -24,6 +24,7 @@ import {
   LayoutGrid, List, PackagePlus,
 } from 'lucide-react'
 import { apiFetch, apiJson } from '@/lib/apiClient'
+import { catEmoji } from '@/components/shelfwise/shared'
 import { downloadOrderSummaryCsv, printOrderSummary } from '@/components/shelfwise/supplier'
 
 const money = (n, sym = '£') => `${sym}${(Number(n) || 0).toFixed(2)}`
@@ -35,23 +36,6 @@ const STATUS_STYLE = {
   fulfilled:  { label: 'Delivered',  cls: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
   cancelled:  { label: 'Cancelled',  cls: 'bg-slate-100 text-slate-500 border-slate-300' },
 }
-
-// Category → icon for product cards (supplier catalogs have no photos)
-const CAT_EMOJI = [
-  [/dairy|milk|cheese|yogh?urt|cream|butter/i, '🥛'],
-  [/egg/i, '🥚'],
-  [/meat|beef|pork|lamb|chicken|poultry|sausage|bacon/i, '🥩'],
-  [/fish|seafood|prawn|salmon/i, '🐟'],
-  [/fruit/i, '🍎'],
-  [/veg|produce|salad|green|herb/i, '🥬'],
-  [/bak|bread|pastr|cake/i, '🥖'],
-  [/frozen|ice/i, '🧊'],
-  [/drink|beverage|juice|water|soda|coffee|tea/i, '🥤'],
-  [/oil|sauce|condiment|spice|season/i, '🫙'],
-  [/dry|grain|pasta|rice|flour|store|tinned|canned/i, '🌾'],
-  [/clean|hygiene|chemical|paper|packaging/i, '🧴'],
-]
-const catEmoji = (cat) => { for (const [re, e] of CAT_EMOJI) { if (re.test(cat || '')) return e } return '📦' }
 
 const daysAgoLabel = (iso) => {
   if (!iso) return ''

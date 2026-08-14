@@ -137,3 +137,24 @@ export function withBackToolbar(html) {
   if (/<body[^>]*>/i.test(html)) return html.replace(/<body[^>]*>/i, m => m + toolbar)
   return toolbar + html
 }
+
+// Category → icon for product displays (shared by the kitchen Order screen
+// and the supplier Catalog screen so both look consistent)
+const CAT_EMOJI_RULES = [
+  [/dairy|milk|cheese|yogh?urt|cream|butter/i, '🥛'],
+  [/egg/i, '🥚'],
+  [/meat|beef|pork|lamb|chicken|poultry|sausage|bacon/i, '🥩'],
+  [/fish|seafood|prawn|salmon/i, '🐟'],
+  [/fruit/i, '🍎'],
+  [/veg|produce|salad|green|herb/i, '🥬'],
+  [/bak|bread|pastr|cake/i, '🥖'],
+  [/frozen|ice/i, '🧊'],
+  [/drink|beverage|juice|water|soda|coffee|tea/i, '🥤'],
+  [/oil|sauce|condiment|spice|season/i, '🫙'],
+  [/dry|grain|pasta|rice|flour|store|tinned|canned/i, '🌾'],
+  [/clean|hygiene|chemical|paper|packaging/i, '🧴'],
+]
+export const catEmoji = (cat) => {
+  for (const [re, e] of CAT_EMOJI_RULES) { if (re.test(cat || '')) return e }
+  return '📦'
+}
