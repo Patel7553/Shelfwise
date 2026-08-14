@@ -117,3 +117,23 @@ export async function safeJson(res) {
 export function escapeText(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
 }
+
+// ---------------------------------------------------------------------------
+// BACK-BUTTON STANDARD (Aug 2026, permanent rule): every generated print /
+// summary page MUST include a visible way back. This helper injects a fixed
+// "← Back" + "🖨️ Print / Save PDF" toolbar into any print-window HTML.
+// The toolbar is hidden automatically when actually printing.
+// ---------------------------------------------------------------------------
+export function withBackToolbar(html) {
+  const toolbar = `
+<div class="sw-back-toolbar" style="position:sticky;top:0;z-index:9999;display:flex;gap:10px;align-items:center;background:#0f172a;padding:10px 14px;margin:-40px -40px 24px;box-shadow:0 2px 8px rgba(0,0,0,.25)">
+  <button onclick="(window.opener||window.history.length>1)?(window.close(),setTimeout(function(){history.back()},150)):history.back()"
+    style="background:#334155;color:#fff;border:none;border-radius:8px;padding:9px 18px;font-size:14px;font-weight:700;cursor:pointer">&larr; Back</button>
+  <button onclick="window.print()"
+    style="background:#059669;color:#fff;border:none;border-radius:8px;padding:9px 18px;font-size:14px;font-weight:700;cursor:pointer">&#128424;&#65039; Print / Save PDF</button>
+  <span style="color:#94a3b8;font-size:12px;margin-left:auto">ShelfWise</span>
+</div>
+<style>@media print{.sw-back-toolbar{display:none!important}}</style>`
+  if (/<body[^>]*>/i.test(html)) return html.replace(/<body[^>]*>/i, m => m + toolbar)
+  return toolbar + html
+}

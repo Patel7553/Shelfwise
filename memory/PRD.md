@@ -109,3 +109,6 @@ RECEIPTS (nav "Receipts", all inventory roles):
 3. migration-23-receipts.sql updated to the alter-based fixed version (user's DB had an old receipts table).
 Verified via screenshots: owner sees Receipts + correct form order; staff (perms:['orders']) has NO Receipts
 nav; header identity badge works for both. Production needs REDEPLOY.
+
+## ⚠️ PERMANENT STANDING RULES (user-mandated — apply WITHOUT being asked)
+1. **BACK BUTTON STANDARD (Aug 2026):** EVERY screen, sub-screen, modal, wizard step and generated page (incl. print/summary windows) MUST have a working back/close control returning to the correct previous screen. Use `withBackToolbar()` from components/shelfwise/shared.js for any window.open/print HTML. Treat this like a save/close button — non-negotiable baseline for ALL future work on this app.

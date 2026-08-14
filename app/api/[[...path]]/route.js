@@ -4,6 +4,7 @@ import webpush from 'web-push'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
 import { getAuthContext, generateChefCode, signChefToken, newCodeSeed } from '@/lib/auth'
 import { SENSOR_VENDORS, vendorCatalog } from '@/lib/sensorVendors'
+import jwt from 'jsonwebtoken'
 
 // Vercel serverless function config — MUST be at the top of a route file.
 // GPT-4o vision calls on dense HACCP sheets take 30-60s. Setting to 300 (max
@@ -439,6 +440,12 @@ function supplierProductToApi(p) {
 }
 
 function supplierOrderToApi(o) {
+  // Hidden [[markers]] live inside `notes` (no schema change needed) — parse
+  // them out and NEVER show raw markers to users.
+  const rawNotes = o.notes || ''
+  const dnote = /\[\[delivery-note:([^\]]*)\]\]/.exec(rawNotes)
+  const reject = /\[\[reject-reason:([^\]]*)\]\]/.exec(rawNotes)
+  const received = /\[\[received-to-inventory:([^\]]*)\]\]/.exec(rawNotes)
   return {
     id: o.id,
     orderRef: 'ORD-' + String(o.id || '').replace(/-/g, '').slice(0, 6).toUpperCase(),
@@ -451,7 +458,11 @@ function supplierOrderToApi(o) {
     subtotal: Number(o.subtotal) || 0,
     vatRate: Number(o.vat_rate) || 0,
     total: Number(o.total) || 0,
-    notes: o.notes || '',
+    notes: rawNotes.replace(/\s*\[\[[^\]]*\]\]/g, '').trim(),
+    deliveryNote: dnote ? dnote[1] : '',
+    rejectReason: reject ? reject[1] : '',
+    receivedToInventory: !!received,
+    receivedToInventoryAt: received ? received[1] || null : null,
     invoiceNumber: o.invoice_number || '',
     requestedDeliveryDate: o.requested_delivery_date || null,
     createdAt: o.created_at,
@@ -694,16 +705,19 @@ async function runHaccpReminderForKitchen(sb, kid) {
 // Weekly Digest email
 // ============================================================================
 // Small helper that wraps Resend for anywhere in the file.
-async function resendSend({ to, subject, html }) {
+async function resendSend({ to, subject, html, attachments }) {
   const resendKey = process.env.RESEND_API_KEY
   if (!resendKey) return { ok: false, error: 'RESEND_API_KEY not set' }
   if (!to) return { ok: false, error: 'no recipient' }
   const from = process.env.MAIL_FROM || 'ShelfWise <onboarding@resend.dev>'
   try {
+    const payload = { from, to: Array.isArray(to) ? to : [to], subject, html }
+    // Optional file attachments: [{ filename, content (base64 string) }]
+    if (Array.isArray(attachments) && attachments.length > 0) payload.attachments = attachments
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to: Array.isArray(to) ? to : [to], subject, html }),
+      body: JSON.stringify(payload),
     })
     const txt = await r.text()
     if (!r.ok) return { ok: false, status: r.status, error: txt.slice(0, 400) }
@@ -776,6 +790,91 @@ function orderEmailHtml({ order, supplierName, clientCode, heading, intro, sym =
  * event: 'placed' | 'confirmed' | 'fulfilled' | 'updated' | 'cancelled'
  * Best-effort — never throws.
  */
+// ---------------------------------------------------------------------------
+// One-click order actions from EMAIL (Aug 2026): the supplier can Confirm or
+// Reject an order straight from the "New order" email — no login needed.
+// Token = signed JWT tied to that one order + supplier, expires in 7 days.
+// Idempotent: once the order leaves 'pending' the link shows "already handled".
+// ---------------------------------------------------------------------------
+function signOrderActionToken(orderId, supplierId) {
+  const secret = process.env.SHELFWISE_JWT_SECRET
+  if (!secret) return null
+  return jwt.sign({ oid: orderId, sid: supplierId, scope: 'order-action' }, secret, { expiresIn: '7d' })
+}
+function verifyOrderActionToken(token) {
+  try {
+    const p = jwt.verify(token, process.env.SHELFWISE_JWT_SECRET)
+    if (p?.scope !== 'order-action' || !p.oid || !p.sid) return null
+    return p
+  } catch { return null }
+}
+/** Minimal branded HTML page for email-action results (no app login needed). */
+function orderActionPage(title, message, tone = 'ok', extraHtml = '') {
+  const color = tone === 'ok' ? '#059669' : tone === 'warn' ? '#d97706' : '#dc2626'
+  const icon = tone === 'ok' ? '✅' : tone === 'warn' ? 'ℹ️' : '❌'
+  return new Response(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title} — ShelfWise</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f8fafc;margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.card{background:#fff;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,.08);padding:36px 32px;max-width:440px;width:100%;text-align:center}
+h1{font-size:20px;margin:12px 0 8px;color:#0f172a}p{color:#475569;font-size:14px;line-height:1.6;margin:0 0 8px}
+.badge{font-size:40px}.brand{margin-top:20px;font-size:12px;color:#94a3b8;font-weight:700}
+textarea{width:100%;box-sizing:border-box;border:2px solid #e2e8f0;border-radius:10px;padding:10px;font-family:inherit;font-size:14px;min-height:90px;margin:10px 0}
+button{background:${color};color:#fff;border:none;border-radius:10px;padding:12px 24px;font-size:15px;font-weight:700;cursor:pointer;width:100%}
+</style></head><body><div class="card"><div class="badge">${icon}</div><h1 style="color:${color}">${title}</h1><p>${message}</p>${extraHtml}<div class="brand">🥬 ShelfWise</div></div></body></html>`,
+    { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } })
+}
+
+// ---------------------------------------------------------------------------
+// Supplier invoice attachments (Aug 2026): the supplier's OWN invoice file
+// (PDF/image) is stored at a DETERMINISTIC storage path — no DB column needed.
+// ---------------------------------------------------------------------------
+const orderInvoicePath = (orderId) => `order-invoices/${orderId}`
+/** Batch: which of these orders have an invoice file + signed URLs (1h). */
+async function orderInvoiceUrls(sb, orderIds) {
+  const out = {}
+  if (!orderIds || orderIds.length === 0) return out
+  try {
+    const { data: files } = await sb.storage.from('receipts').list('order-invoices', { limit: 1000 })
+    const present = new Set((files || []).map(f => f.name))
+    const paths = orderIds.filter(id => present.has(id)).map(orderInvoicePath)
+    if (paths.length === 0) return out
+    const { data: signed } = await sb.storage.from('receipts').createSignedUrls(paths, 3600)
+    for (const s of (signed || [])) {
+      if (s?.signedUrl && s?.path) out[s.path.replace('order-invoices/', '')] = s.signedUrl
+    }
+  } catch { /* invoices are best-effort */ }
+  return out
+}
+
+/** Look up supplier/kitchen context and fire notifyOrderEvent — used by the
+ *  email one-click actions where there's no authenticated session. */
+async function notifyForEmailAction(sb, event, order) {
+  try {
+    const { data: supRow } = await sb.from('kitchens').select('id,kitchen_name,owner_email,supplier_profile').eq('id', order.supplier_id).maybeSingle()
+    const prof = (supRow?.supplier_profile && typeof supRow.supplier_profile === 'object') ? supRow.supplier_profile : {}
+    let restaurantEmail = order.customer_email || ''
+    if (order.kitchen_id) {
+      const { data: kRow } = await sb.from('kitchens').select('owner_email').eq('id', order.kitchen_id).maybeSingle()
+      if (kRow?.owner_email) restaurantEmail = kRow.owner_email
+    }
+    let clientCode = ''
+    if (order.kitchen_id) {
+      try {
+        const { data: cRow } = await sb.from('supplier_connections').select('client_code').eq('supplier_id', order.supplier_id).eq('kitchen_id', order.kitchen_id).maybeSingle()
+        clientCode = cRow?.client_code || ''
+      } catch {}
+    }
+    await notifyOrderEvent(sb, event, {
+      order,
+      supplierName: prof.businessName || supRow?.kitchen_name || 'Your supplier',
+      restaurantEmail,
+      restaurantName: order.customer_name || '',
+      clientCode,
+      sym: prof.currencySymbol || '£',
+    })
+  } catch (e) { console.error('notifyForEmailAction:', e?.message) }
+}
+
 async function notifyOrderEvent(sb, event, { order, supplierName, supplierEmail, restaurantEmail, restaurantName, clientCode, sym }) {
   try {
     const api = supplierOrderToApi(order)
@@ -792,11 +891,24 @@ async function notifyOrderEvent(sb, event, { order, supplierName, supplierEmail,
         subject: `Order ${ref} submitted to ${supplierName}`,
         html: html('Order submitted ✅', `Your order has been sent to <b>${supplierName}</b>. They'll confirm it shortly — you'll get another email when they do.`),
       }))
-      if (supplierEmail) jobs.push(resendSend({
-        to: supplierEmail,
-        subject: `New order ${ref} from ${restaurantName || 'a customer'}`,
-        html: html('New incoming order 📦', `<b>${restaurantName || 'A customer'}</b> has placed a new order via ShelfWise. Open your Orders queue to confirm it.`),
-      }))
+      if (supplierEmail) {
+        // One-click Confirm / Reject buttons (secure token, no login needed)
+        const token = signOrderActionToken(order.id, order.supplier_id)
+        const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://shelfwise.co.in'
+        const buttons = token ? `
+          <table role="presentation" cellpadding="0" cellspacing="0" style="margin:18px auto 6px"><tr>
+            <td style="padding-right:10px"><a href="${baseUrl}/api/order-action?token=${encodeURIComponent(token)}&action=confirm"
+              style="display:inline-block;background:#059669;color:#ffffff;font-weight:700;font-size:15px;text-decoration:none;padding:13px 26px;border-radius:10px">✓ Confirm Order</a></td>
+            <td><a href="${baseUrl}/api/order-action?token=${encodeURIComponent(token)}&action=reject"
+              style="display:inline-block;background:#ffffff;color:#dc2626;border:2px solid #fca5a5;font-weight:700;font-size:15px;text-decoration:none;padding:11px 26px;border-radius:10px">✕ Reject Order</a></td>
+          </tr></table>
+          <p style="font-size:12px;color:#94a3b8;text-align:center;margin:4px 0 0">One tap — no login needed. Or open your ShelfWise dashboard to manage it there.</p>` : ''
+        jobs.push(resendSend({
+          to: supplierEmail,
+          subject: `New order ${ref} from ${restaurantName || 'a customer'}`,
+          html: html('New incoming order 📦', `<b>${restaurantName || 'A customer'}</b> has placed a new order via ShelfWise. Confirm it with one tap below, or open your Orders queue.${buttons}`),
+        }))
+      }
       if (order.kitchen_id) jobs.push(sendPushToKitchen(sb, order.kitchen_id, { title: `Order ${ref} submitted`, body: `Sent to ${supplierName} — awaiting confirmation` }))
       if (order.supplier_id) jobs.push(sendPushToKitchen(sb, order.supplier_id, { title: `New order ${ref}`, body: `${restaurantName || 'A customer'} placed an order — tap to review` }))
     }
@@ -822,12 +934,30 @@ async function notifyOrderEvent(sb, event, { order, supplierName, supplierEmail,
     }
 
     if (event === 'fulfilled') {
-      if (restaurantEmail) jobs.push(resendSend({
-        to: restaurantEmail,
-        subject: `Order ${ref} delivered — ${supplierName}`,
-        html: html('Order delivered ✅', `Your order from <b>${supplierName}</b> has been marked as delivered/fulfilled. The order summary below is for your records.`),
-      }))
-      if (order.kitchen_id) jobs.push(sendPushToKitchen(sb, order.kitchen_id, { title: `Order ${ref} delivered`, body: `${supplierName} marked your order as fulfilled` }))
+      if (restaurantEmail) {
+        // Attach the supplier's own invoice file if they uploaded one (best-effort)
+        jobs.push((async () => {
+          let attachments
+          try {
+            const { data: file } = await sb.storage.from('receipts').download(orderInvoicePath(order.id))
+            if (file) {
+              const buf = Buffer.from(await file.arrayBuffer())
+              if (buf.length > 0 && buf.length < 9 * 1024 * 1024) {
+                const mime = file.type || 'application/octet-stream'
+                const ext = mime.includes('pdf') ? 'pdf' : mime.includes('png') ? 'png' : mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'bin'
+                attachments = [{ filename: `supplier-invoice-${ref}.${ext}`, content: buf.toString('base64') }]
+              }
+            }
+          } catch { /* no invoice uploaded — send without attachment */ }
+          return resendSend({
+            to: restaurantEmail,
+            subject: `Order ${ref} delivered — ${supplierName}`,
+            html: html('Order delivered ✅', `Your order from <b>${supplierName}</b> has been delivered.${attachments ? ' Their invoice is attached to this email and also available on the order in ShelfWise.' : ' The order summary below is for your records.'}`),
+            attachments,
+          })
+        })())
+      }
+      if (order.kitchen_id) jobs.push(sendPushToKitchen(sb, order.kitchen_id, { title: `Order ${ref} delivered 🎉`, body: `${supplierName} delivered your order` }))
     }
 
     if (event === 'updated') {
@@ -846,6 +976,16 @@ async function notifyOrderEvent(sb, event, { order, supplierName, supplierEmail,
         html: html('Order cancelled ❌', `<b>${restaurantName || 'The customer'}</b> cancelled this order while it was still pending. No action needed.`),
       }))
       if (order.supplier_id) jobs.push(sendPushToKitchen(sb, order.supplier_id, { title: `Order ${ref} cancelled`, body: `${restaurantName || 'A customer'} cancelled their pending order` }))
+    }
+
+    if (event === 'rejected') {
+      const reason = (/\[\[reject-reason:([^\]]*)\]\]/.exec(order.notes || '') || [])[1] || ''
+      if (restaurantEmail) jobs.push(resendSend({
+        to: restaurantEmail,
+        subject: `Order ${ref} declined by ${supplierName}`,
+        html: html('Order declined ❌', `Unfortunately <b>${supplierName}</b> couldn't accept this order${reason ? `: <i>"${reason}"</i>` : '.'} You can adjust it and order again, or contact them directly.`),
+      }))
+      if (order.kitchen_id) jobs.push(sendPushToKitchen(sb, order.kitchen_id, { title: `Order ${ref} declined`, body: reason ? `${supplierName}: "${reason}"` : `${supplierName} couldn't accept this order` }))
     }
 
     await Promise.allSettled(jobs)
@@ -2408,6 +2548,41 @@ export async function GET(request, { params }) {
       })
     }
 
+    // ------- PUBLIC: one-click order Confirm / Reject from the supplier's email
+    // (secure signed token — no login). GET confirm applies immediately; GET
+    // reject shows a small reason form that POSTs back to /api/order-action.
+    if (path === 'order-action') {
+      const url = new URL(request.url)
+      const token = url.searchParams.get('token') || ''
+      const action = url.searchParams.get('action') || ''
+      const p = verifyOrderActionToken(token)
+      if (!p) return orderActionPage('Link expired or invalid', 'This action link is no longer valid (links expire after 7 days). Please log in to your ShelfWise dashboard to manage the order.', 'err')
+      const { data: order } = await sb.from('supplier_orders').select('*').eq('id', p.oid).eq('supplier_id', p.sid).maybeSingle()
+      if (!order) return orderActionPage('Order not found', 'This order no longer exists in ShelfWise.', 'err')
+      const ref = 'ORD-' + String(order.id).replace(/-/g, '').slice(0, 6).toUpperCase()
+      if (order.status !== 'pending') {
+        return orderActionPage('Already handled', `Order <b>${ref}</b> is already <b>${order.status}</b>. This link only works while the order is pending, so nothing was changed.`, 'warn')
+      }
+      if (action === 'confirm') {
+        const { data: updated, error: uErr } = await sb.from('supplier_orders')
+          .update({ status: 'confirmed', updated_at: new Date().toISOString() })
+          .eq('id', order.id).eq('status', 'pending').select().maybeSingle()
+        if (uErr || !updated) return orderActionPage('Already handled', `Order ${ref} was just updated elsewhere — check your dashboard.`, 'warn')
+        await notifyForEmailAction(sb, 'confirmed', updated)
+        return orderActionPage(`Order ${ref} confirmed — thank you!`, `The kitchen has been notified that their order is confirmed. It now shows as <b>Confirmed</b> in both dashboards. You can close this page.`, 'ok')
+      }
+      if (action === 'reject') {
+        return orderActionPage(`Reject order ${ref}?`, 'Optionally tell the kitchen why, then confirm below — they will be notified immediately.', 'err', `
+          <form method="POST" action="/api/order-action">
+            <input type="hidden" name="token" value="${String(token).replace(/"/g, '&quot;')}" />
+            <textarea name="reason" placeholder="Reason (optional) — e.g. out of stock this week"></textarea>
+            <button type="submit">✕ Reject order ${ref}</button>
+          </form>
+          ${order.customer_email ? `<p style="margin-top:12px"><a href="mailto:${order.customer_email}" style="color:#6366f1;font-size:13px">Or contact the kitchen directly instead</a></p>` : ''}`)
+      }
+      return orderActionPage('Unknown action', 'This link appears to be malformed.', 'err')
+    }
+
     // ------- Deployment version (public) — used by clients to auto-refresh
     // stale PWA installs when a new build goes live (fixes the recurring
     // "old version on staff phones" problem).
@@ -2781,7 +2956,8 @@ export async function GET(request, { params }) {
         if (status) q = q.eq('status', status)
         const { data, error: e2 } = await q
         if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
-        return json((data || []).map(supplierOrderToApi))
+        const invoices = await orderInvoiceUrls(sb, (data || []).map(o => o.id))
+        return json((data || []).map(o => ({ ...supplierOrderToApi(o), invoiceUrl: invoices[o.id] || null })))
       }
 
       if (path.startsWith('supplier/orders/')) {
@@ -2789,7 +2965,8 @@ export async function GET(request, { params }) {
         const { data, error: e2 } = await sb.from('supplier_orders').select('*').eq('id', id).eq('supplier_id', sid).maybeSingle()
         if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
         if (!data) return json({ error: 'Order not found' }, 404)
-        return json(supplierOrderToApi(data))
+        const invoices = await orderInvoiceUrls(sb, [data.id])
+        return json({ ...supplierOrderToApi(data), invoiceUrl: invoices[data.id] || null })
       }
 
       if (path === 'supplier/stats') {
@@ -2918,10 +3095,13 @@ export async function GET(request, { params }) {
           const { data: sups } = await sb.from('kitchens').select('id,kitchen_name,supplier_profile').in('id', sids)
           byId = Object.fromEntries((sups || []).map(k => [k.id, k]))
         }
+        // Supplier-uploaded invoice files (signed URLs, batch lookup)
+        const invoices = await orderInvoiceUrls(sb, list.map(o => o.id))
         return json(list.map(o => ({
           ...supplierOrderToApi(o),
           supplierId: o.supplier_id,
           supplierName: (byId[o.supplier_id]?.supplier_profile?.businessName) || byId[o.supplier_id]?.kitchen_name || '(supplier)',
+          invoiceUrl: invoices[o.id] || null,
         })))
       }
     }
@@ -3382,6 +3562,28 @@ export async function POST(request, { params }) {
   try {
     const path = (params?.path || []).join('/')
     const sb = supabaseAdmin
+
+    // ------- PUBLIC: reject-order form submit from the email action page -------
+    if (path === 'order-action') {
+      const form = await request.formData().catch(() => null)
+      const token = String(form?.get('token') || '')
+      const reason = String(form?.get('reason') || '').trim().slice(0, 300).replace(/[\[\]]/g, '')
+      const p = verifyOrderActionToken(token)
+      if (!p) return orderActionPage('Link expired or invalid', 'This action link is no longer valid. Please log in to your ShelfWise dashboard to manage the order.', 'err')
+      const { data: order } = await sb.from('supplier_orders').select('*').eq('id', p.oid).eq('supplier_id', p.sid).maybeSingle()
+      if (!order) return orderActionPage('Order not found', 'This order no longer exists in ShelfWise.', 'err')
+      const ref = 'ORD-' + String(order.id).replace(/-/g, '').slice(0, 6).toUpperCase()
+      if (order.status !== 'pending') {
+        return orderActionPage('Already handled', `Order <b>${ref}</b> is already <b>${order.status}</b> — nothing was changed.`, 'warn')
+      }
+      const notes = `${order.notes || ''}${reason ? ` [[reject-reason:${reason}]]` : ''}`.trim()
+      const { data: updated, error: uErr } = await sb.from('supplier_orders')
+        .update({ status: 'cancelled', notes, updated_at: new Date().toISOString() })
+        .eq('id', order.id).eq('status', 'pending').select().maybeSingle()
+      if (uErr || !updated) return orderActionPage('Already handled', `Order ${ref} was just updated elsewhere — check your dashboard.`, 'warn')
+      await notifyForEmailAction(sb, 'rejected', updated)
+      return orderActionPage(`Order ${ref} rejected`, `The kitchen has been notified${reason ? ' with your reason' : ''}. You can close this page.`, 'ok')
+    }
 
     // ------- Shelves: append a shelf/location name to the kitchen's list -------
     // Allowed for owner AND staff (chef logins) — staff add products daily and
@@ -4227,11 +4429,36 @@ Output strictly valid JSON with no other text.`
     }
 
     // -------- SUPPLIER mutations (supplier accounts only) --------
-    if (path === 'supplier/products' || path === 'supplier/orders' || path === 'supplier/invites' || path === 'supplier/products/sample') {
+    if (path === 'supplier/products' || path === 'supplier/orders' || path === 'supplier/invites' || path === 'supplier/products/sample' || (path.startsWith('supplier/orders/') && path.endsWith('/invoice'))) {
       const { ctx, error } = await requireSupplier(request)
       if (error) return error
       const sid = ctx.kitchen.id
       const body = await request.json()
+
+      // ------- Attach the supplier's OWN invoice file to an order (Aug 2026) -------
+      // Stored at a deterministic path in the receipts bucket; shows up on the
+      // order for BOTH sides and is attached to the "delivered" email to the kitchen.
+      if (path.startsWith('supplier/orders/') && path.endsWith('/invoice')) {
+        const orderId = path.split('/')[2]
+        const { data: order, error: oErr } = await sb.from('supplier_orders').select('id,supplier_id,status').eq('id', orderId).eq('supplier_id', sid).maybeSingle()
+        if (oErr) { const miss = supplierTablesMissing(oErr); if (miss) return miss; throw oErr }
+        if (!order) return json({ error: 'Order not found' }, 404)
+        const dataUrl = String(body.dataUrl || '')
+        const m = /^data:(application\/pdf|image\/jpeg|image\/jpg|image\/png|image\/webp);base64,(.+)$/.exec(dataUrl)
+        if (!m) return json({ error: 'Invoice must be a PDF or image (JPG/PNG/WebP)' }, 400)
+        const mime = m[1] === 'image/jpg' ? 'image/jpeg' : m[1]
+        const buf = Buffer.from(m[2], 'base64')
+        if (buf.length < 100) return json({ error: 'File appears to be empty' }, 400)
+        if (buf.length > 8 * 1024 * 1024) return json({ error: 'Invoice file is too large (max 8 MB)' }, 400)
+        let up = await sb.storage.from('receipts').upload(orderInvoicePath(orderId), buf, { contentType: mime, upsert: true })
+        if (up.error && /bucket.*not found/i.test(up.error.message || '')) {
+          await sb.storage.createBucket('receipts', { public: false }).catch(() => {})
+          up = await sb.storage.from('receipts').upload(orderInvoicePath(orderId), buf, { contentType: mime, upsert: true })
+        }
+        if (up.error) return json({ error: `Could not store the invoice: ${up.error.message}` }, 500)
+        const { data: signed } = await sb.storage.from('receipts').createSignedUrl(orderInvoicePath(orderId), 3600)
+        return json({ ok: true, invoiceUrl: signed?.signedUrl || null })
+      }
 
       // One-click demo catalog: 20 realistic kitchen-supply products.
       // Only allowed when the catalog is EMPTY (prevents duplicates).
@@ -4340,18 +4567,66 @@ Output strictly valid JSON with no other text.`
       }
     }
 
-    // -------- KITCHEN marketplace mutations: connect + place order --------
-    if (path === 'kitchen/suppliers/connect' || path === 'kitchen/orders') {
+    // -------- KITCHEN marketplace mutations: connect + place order + receive --------
+    if (path === 'kitchen/suppliers/connect' || path === 'kitchen/orders' || (path.startsWith('kitchen/orders/') && path.endsWith('/receive'))) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
       if (ctx.kitchen && ctx.kitchen.account_type === 'supplier') {
         return json({ error: 'Supplier accounts cannot access kitchen tools' }, 403)
       }
       const kid = ctx.kitchenId
-      const body = await request.json()
+      const body = await request.json().catch(() => ({}))
       const connsMissing = (e) => /relation .*supplier_connections.* does not exist/i.test(e?.message || '')
         ? json({ error: 'Connections table not found — run supabase/migration-21-supplier-connections.sql in the Supabase SQL editor first.' }, 500)
         : null
+
+      // ------- RECEIVED → INVENTORY (Aug 2026): one tap adds all delivered
+      //         order items into the kitchen's products. Idempotent via a
+      //         hidden [[received-to-inventory:...]] marker in order notes. -------
+      if (path.startsWith('kitchen/orders/') && path.endsWith('/receive')) {
+        const orderId = path.split('/')[2]
+        const { data: order, error: oErr } = await sb.from('supplier_orders').select('*').eq('id', orderId).eq('kitchen_id', kid).maybeSingle()
+        if (oErr) throw oErr
+        if (!order) return json({ error: 'Order not found' }, 404)
+        if (order.status !== 'fulfilled') return json({ error: 'Only delivered orders can be added to inventory' }, 400)
+        if (/\[\[received-to-inventory:/.test(order.notes || '')) {
+          return json({ error: 'This order has already been added to your inventory' }, 409)
+        }
+        const items = (Array.isArray(order.items) ? order.items : []).filter(i => i?.name && Number(i.quantity) > 0)
+        if (items.length === 0) return json({ error: 'This order has no items to add' }, 400)
+        // Supplier display name for the products
+        let supplierName = ''
+        try {
+          const { data: supRow } = await sb.from('kitchens').select('kitchen_name,supplier_profile').eq('id', order.supplier_id).maybeSingle()
+          supplierName = supRow?.supplier_profile?.businessName || supRow?.kitchen_name || ''
+        } catch {}
+        const person = await validatedPersonFromRequest(sb, request, ctx)
+        const today = new Date().toISOString().slice(0, 10)
+        const rows = items.map(i => ({
+          id: uuidv4(),
+          kitchen_id: kid,
+          ...toDb({
+            name: i.name,
+            quantity: Number(i.quantity) || 1,
+            unit: i.unit || 'ea',
+            category: '',
+            storageType: 'Fridge',
+            dateReceived: today,
+            supplier: supplierName,
+            unitCost: Number(i.price) > 0 ? Number(i.price) : undefined,
+            source: 'order',
+            sourceMeta: { orderId: order.id },
+          }),
+          custom_fields: { _dateReceived: today, _addedBy: person, _editedAt: new Date().toISOString() },
+        }))
+        const { data: inserted, error: insErr } = await sb.from('products').insert(rows).select('id')
+        if (insErr) throw insErr
+        const marker = ` [[received-to-inventory:${new Date().toISOString()}]]`
+        await sb.from('supplier_orders').update({ notes: `${order.notes || ''}${marker}`.trim(), updated_at: new Date().toISOString() }).eq('id', order.id).eq('kitchen_id', kid)
+        const ref = 'ORD-' + String(order.id).replace(/-/g, '').slice(0, 6).toUpperCase()
+        await logActivity(sb, kid, person, 'item_added', `${ref} delivery — ${inserted?.length || rows.length} items added to inventory from ${supplierName || 'supplier'}`)
+        return json({ ok: true, inserted: inserted?.length || rows.length })
+      }
 
       // Connect to a supplier — AUTOMATIC (no approval): entering the supplier's
       // code / email / picking them from search is treated as authorization.
@@ -5382,6 +5657,12 @@ export async function PUT(request, { params }) {
         if (!existing) return json({ error: 'Order not found' }, 404)
         const patch = { status, updated_at: new Date().toISOString() }
         if (body.notes !== undefined) patch.notes = String(body.notes).slice(0, 1000)
+        // Optional delivery note ("left with kitchen manager") — hidden marker in notes
+        if (body.deliveryNote !== undefined && String(body.deliveryNote).trim()) {
+          const clean = String(body.deliveryNote).trim().slice(0, 300).replace(/[\[\]]/g, '')
+          const base = patch.notes !== undefined ? patch.notes : (existing.notes || '')
+          patch.notes = `${base} [[delivery-note:${clean}]]`.trim()
+        }
         if (status === 'fulfilled') {
           patch.fulfilled_at = existing.fulfilled_at || new Date().toISOString()
         }

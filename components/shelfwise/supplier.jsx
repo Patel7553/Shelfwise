@@ -7,7 +7,7 @@
    Suppliers log in with email/password only — no staff PINs, no kitchen tools.
    ============================================================================ */
 
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -22,6 +22,7 @@ import {
   Users, Copy, CalendarDays, Download, KeyRound,
 } from 'lucide-react'
 import { apiFetch, apiJson, signOutAll } from '@/lib/apiClient'
+import { withBackToolbar } from '@/components/shelfwise/shared'
 
 const STATUS_STYLE = {
   pending:    { label: 'Pending',    cls: 'bg-amber-100 text-amber-800 border-amber-300' },
@@ -99,7 +100,7 @@ export function printOrderSummary(order, profile, businessName, ownerEmail, clie
   </body></html>`
   const w = window.open('', '_blank')
   if (!w) { toast.error('Pop-up blocked — allow pop-ups to print the summary'); return }
-  w.document.write(html)
+  w.document.write(withBackToolbar(html))
   w.document.close()
 }
 
@@ -340,6 +341,73 @@ function NewOrderDialog({ open, onClose, products, defaultVatRate, currencySymbo
 // ---------------------------------------------------------------------------
 // Order detail dialog
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Mark-as-Delivered dialog (Aug 2026): delivery note + the supplier's OWN
+// invoice file (PDF/image) — attached to the order + emailed to the kitchen.
+// ---------------------------------------------------------------------------
+function MarkDeliveredDialog({ order, onClose, onSubmit, busy }) {
+  const [note, setNote] = useState('')
+  const [file, setFile] = useState(null)      // { name, dataUrl, size }
+  const fileRef = useRef(null)
+  useEffect(() => { if (order) { setNote(''); setFile(null) } }, [order?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (!order) return null
+
+  const pickFile = (f) => {
+    if (!f) return
+    if (f.size > 8 * 1024 * 1024) { toast.error('File too large — max 8 MB'); return }
+    const ok = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(f.type)
+    if (!ok) { toast.error('Invoice must be a PDF or image (JPG/PNG/WebP)'); return }
+    const reader = new FileReader()
+    reader.onload = () => setFile({ name: f.name, dataUrl: reader.result, size: f.size })
+    reader.readAsDataURL(f)
+  }
+
+  return (
+    <Dialog open={!!order} onOpenChange={(v) => { if (!v && !busy) onClose() }}>
+      <DialogContent className="sm:max-w-[480px] max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><ClipboardCheck className="h-5 w-5 text-emerald-600" /> Mark {order.orderRef} as delivered</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">The kitchen gets an in-app notification and an email — with your invoice attached if you add one below.</p>
+          <div>
+            <Label className="text-xs">Delivery note (optional)</Label>
+            <Input value={note} onChange={e => setNote(e.target.value)} maxLength={300} placeholder='e.g. "Left with kitchen manager, signed by Michael"' className="mt-1" />
+          </div>
+          <div>
+            <Label className="text-xs">📎 Attach YOUR invoice (optional — PDF or photo)</Label>
+            <input ref={fileRef} type="file" accept="application/pdf,image/jpeg,image/png,image/webp" className="hidden"
+              onChange={e => pickFile(e.target.files?.[0])} />
+            {!file ? (
+              <button type="button" onClick={() => fileRef.current?.click()}
+                className="mt-1 w-full border-2 border-dashed border-slate-300 hover:border-emerald-400 rounded-xl py-5 text-sm text-slate-500 hover:text-emerald-700 transition">
+                Tap to choose your invoice file<br /><span className="text-[11px]">Your own invoice format — ShelfWise stores it on this order</span>
+              </button>
+            ) : (
+              <div className="mt-1 flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5">
+                <span className="text-xl">📄</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold truncate">{file.name}</p>
+                  <p className="text-[11px] text-muted-foreground">{(file.size / 1024).toFixed(0)} KB — will be attached to the kitchen's email</p>
+                </div>
+                <Button size="sm" variant="ghost" className="text-red-500 h-8 px-2" onClick={() => setFile(null)}><X className="h-4 w-4" /></Button>
+              </div>
+            )}
+          </div>
+        </div>
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={onClose} disabled={busy}>Back</Button>
+          <Button onClick={() => onSubmit(order, { note: note.trim(), dataUrl: file?.dataUrl || null })} disabled={busy}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white">
+            {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Check className="h-4 w-4 mr-2" />}
+            Mark as delivered{file ? ' + send invoice' : ''}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function OrderDetailDialog({ order, onClose, currencySymbol, onStatusChange, busyId, profile, businessName, ownerEmail, clientCode }) {
   if (!order) return null
   const st = STATUS_STYLE[order.status] || STATUS_STYLE.pending
@@ -376,6 +444,15 @@ function OrderDetailDialog({ order, onClose, currencySymbol, onStatusChange, bus
             <p className="text-lg font-bold text-indigo-700">Total {money(order.total, currencySymbol)}</p>
           </div>
           {order.notes && <p className="text-xs text-muted-foreground italic border-l-2 border-indigo-200 pl-3">{order.notes}</p>}
+          {order.deliveryNote && (
+            <p className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg px-2.5 py-1.5">🚚 Delivery note: <b>{order.deliveryNote}</b></p>
+          )}
+          {order.invoiceUrl && (
+            <a href={order.invoiceUrl} target="_blank" rel="noreferrer"
+              className="flex items-center gap-2 text-sm font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2 hover:bg-indigo-100 transition">
+              📎 Supplier Invoice (your uploaded file) <span className="ml-auto text-xs font-normal text-indigo-500">View / download →</span>
+            </a>
+          )}
         </div>
         <DialogFooter className="flex-wrap gap-2">
           {order.status === 'pending' && (
@@ -395,7 +472,7 @@ function OrderDetailDialog({ order, onClose, currencySymbol, onStatusChange, bus
           )}
           {(order.status === 'confirmed' || order.status === 'dispatched') && (
             <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" disabled={busyId === order.id} onClick={() => onStatusChange(order, 'fulfilled')}>
-              {busyId === order.id ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <ClipboardCheck className="h-3.5 w-3.5 mr-1" />} Mark fulfilled + invoice
+              {busyId === order.id ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <ClipboardCheck className="h-3.5 w-3.5 mr-1" />} Mark as delivered
             </Button>
           )}
           {order.status === 'fulfilled' && (
@@ -476,12 +553,33 @@ export default function SupplierDashboard({ me }) {
     return () => { document.removeEventListener('visibilitychange', onVis); clearInterval(iv) }
   }, [loadAll])
 
+  const [deliverOrder, setDeliverOrder] = useState(null)   // order being marked as delivered
+
   const changeStatus = async (order, status) => {
+    // "Delivered" goes through the delivery dialog (note + own-invoice upload)
+    if (status === 'fulfilled') { setDeliverOrder(order); return }
     setStatusBusy(order.id)
     try {
       const updated = await apiJson(`/api/supplier/orders/${order.id}`, { method: 'PUT', body: JSON.stringify({ status }) })
-      toast.success(status === 'fulfilled' ? `Order ${updated.orderRef} fulfilled — order summary ready` : `Order ${status}`)
+      toast.success(`Order ${status}`)
       setViewOrder(v => (v && v.id === order.id) ? updated : v)
+      loadAll()
+    } catch (e) { toast.error(e.message || 'Update failed') } finally { setStatusBusy(null) }
+  }
+
+  const completeDelivery = async (order, { note, dataUrl }) => {
+    setStatusBusy(order.id)
+    try {
+      if (dataUrl) {
+        await apiJson(`/api/supplier/orders/${order.id}/invoice`, { method: 'POST', body: JSON.stringify({ dataUrl }) })
+      }
+      const updated = await apiJson(`/api/supplier/orders/${order.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ status: 'fulfilled', ...(note ? { deliveryNote: note } : {}) }),
+      })
+      toast.success(`Order ${updated.orderRef} marked as delivered 🎉 — the kitchen has been notified${dataUrl ? ' (invoice attached)' : ''}`)
+      setViewOrder(v => (v && v.id === order.id) ? updated : v)
+      setDeliverOrder(null)
       loadAll()
     } catch (e) { toast.error(e.message || 'Update failed') } finally { setStatusBusy(null) }
   }
@@ -955,6 +1053,7 @@ export default function SupplierDashboard({ me }) {
       <ProductDialog open={productDialog.open} product={productDialog.product} onClose={() => setProductDialog({ open: false, product: null })} onSaved={loadAll} />
       <NewOrderDialog open={orderDialog} onClose={() => setOrderDialog(false)} products={products} defaultVatRate={Number(profile?.defaultVatRate) || 0} currencySymbol={sym} onSaved={loadAll} />
       <OrderDetailDialog order={viewOrder} onClose={() => setViewOrder(null)} currencySymbol={sym} onStatusChange={changeStatus} busyId={statusBusy} profile={profile} businessName={businessName} ownerEmail={ownerEmail} clientCode={clientCodeFor(viewOrder)} />
+      <MarkDeliveredDialog order={deliverOrder} onClose={() => setDeliverOrder(null)} onSubmit={completeDelivery} busy={!!statusBusy} />
     </div>
   )
 }

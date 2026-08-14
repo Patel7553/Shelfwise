@@ -20,7 +20,7 @@ import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
 import { useT } from '@/lib/i18n'
-import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText, safeJson } from '@/components/shelfwise/shared'
+import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText, safeJson, withBackToolbar } from '@/components/shelfwise/shared'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
 const fetch = apiFetch
@@ -326,7 +326,7 @@ export function TempLogbookView({ temps, haccpLocations, onLog, onScan, onEdit, 
          </div>`
       : ''
 
-    doc.write(`<!doctype html><html><head><title>${title}</title>
+    doc.write(withBackToolbar(`<!doctype html><html><head><title>${title}</title>
 <style>
   *{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
   body{margin:0;padding:20px;color:#0f172a;background:#f8fafc}
@@ -415,7 +415,7 @@ ${printLocs.length > 0 ? `<table>
     }, 100);
   }
 </script>
-</body></html>`)
+</body></html>`))
     doc.close()
   }
 
@@ -1084,7 +1084,7 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
 </div>
 <script>window.onload=()=>{setTimeout(()=>window.print(),400)}</script>
 </body></html>`
-      w.document.write(html); w.document.close()
+      w.document.write(withBackToolbar(html)); w.document.close()
     } catch (e) { toast.error(e.message) }
   }
 

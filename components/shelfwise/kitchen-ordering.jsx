@@ -21,7 +21,7 @@ import {
   Truck, Plus, Minus, Trash2, Loader2, Check, X, Search, ShoppingCart,
   ArrowLeft, ArrowRight, CalendarDays, ClipboardCheck, Store, Link2,
   History, RotateCcw, PackageX, CheckCircle2, Unlink, Pencil, Ban, Download, Info, FileText,
-  LayoutGrid, List,
+  LayoutGrid, List, PackagePlus,
 } from 'lucide-react'
 import { apiFetch, apiJson } from '@/lib/apiClient'
 import { downloadOrderSummaryCsv, printOrderSummary } from '@/components/shelfwise/supplier'
@@ -650,6 +650,16 @@ export function MarketplaceView() {
 
   // Cancel a PENDING order (with confirmation prompt)
   const [cancelBusy, setCancelBusy] = useState(null)
+  // One-tap "Received → Inventory" for delivered orders (Aug 2026)
+  const [receiveBusy, setReceiveBusy] = useState(null)
+  const receiveOrder = async (o) => {
+    setReceiveBusy(o.id)
+    try {
+      const res = await apiJson(`/api/kitchen/orders/${o.id}/receive`, { method: 'POST', body: JSON.stringify({}) })
+      toast.success(`${res.inserted} item${res.inserted === 1 ? '' : 's'} from ${o.orderRef} added to your inventory 📦`)
+      load()
+    } catch (e) { toast.error(e.message || 'Could not add the items') } finally { setReceiveBusy(null) }
+  }
   const cancelOrder = async (o) => {
     if (!window.confirm(`Are you sure you want to cancel order ${o.orderRef}? This cannot be undone.`)) return
     setCancelBusy(o.id)
@@ -839,12 +849,36 @@ export function MarketplaceView() {
                           ))}
                         </div>
                         {o.notes && <p className="text-xs text-muted-foreground italic">📝 {o.notes}</p>}
+                        {o.deliveryNote && (
+                          <p className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg px-2.5 py-1.5">🚚 Delivery note: <b>{o.deliveryNote}</b></p>
+                        )}
+                        {o.rejectReason && (
+                          <p className="text-xs bg-red-50 border border-red-200 text-red-800 rounded-lg px-2.5 py-1.5">❌ Declined by supplier: <b>{o.rejectReason}</b></p>
+                        )}
+                        {o.invoiceUrl && (
+                          <a href={o.invoiceUrl} target="_blank" rel="noreferrer"
+                            className="flex items-center gap-2 text-sm font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2 hover:bg-indigo-100 transition">
+                            📎 Supplier Invoice <span className="text-[10px] font-normal text-indigo-400">(their own invoice file)</span>
+                            <span className="ml-auto text-xs font-normal text-indigo-500">View / download →</span>
+                          </a>
+                        )}
                         {o.status === 'confirmed' && (
                           <p className="text-xs flex items-center gap-1.5 text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-2.5 py-1.5">
                             <Info className="h-3.5 w-3.5 shrink-0" /> This order is confirmed — contact your supplier directly to change or add items to a confirmed order.
                           </p>
                         )}
                         <div className="flex justify-end flex-wrap gap-2">
+                          {o.status === 'fulfilled' && (
+                            o.receivedToInventory ? (
+                              <Button size="sm" variant="outline" disabled className="border-emerald-300 text-emerald-700 opacity-80">
+                                <Check className="h-3.5 w-3.5 mr-1.5" /> Added to inventory
+                              </Button>
+                            ) : (
+                              <Button size="sm" disabled={receiveBusy === o.id} onClick={() => receiveOrder(o)} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+                                {receiveBusy === o.id ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <PackagePlus className="h-3.5 w-3.5 mr-1.5" />} Add to inventory
+                              </Button>
+                            )
+                          )}
                           {o.status === 'pending' && (
                             <>
                               <Button size="sm" variant="outline" onClick={() => editOrder(o, 'browse')}>
