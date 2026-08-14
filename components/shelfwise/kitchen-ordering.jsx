@@ -21,6 +21,7 @@ import {
   Truck, Plus, Minus, Trash2, Loader2, Check, X, Search, ShoppingCart,
   ArrowLeft, ArrowRight, CalendarDays, ClipboardCheck, Store, Link2,
   History, RotateCcw, PackageX, CheckCircle2, Unlink, Pencil, Ban, Download, Info, FileText,
+  LayoutGrid, List,
 } from 'lucide-react'
 import { apiFetch, apiJson } from '@/lib/apiClient'
 import { downloadOrderSummaryCsv, printOrderSummary } from '@/components/shelfwise/supplier'
@@ -28,10 +29,34 @@ import { downloadOrderSummaryCsv, printOrderSummary } from '@/components/shelfwi
 const money = (n, sym = '£') => `${sym}${(Number(n) || 0).toFixed(2)}`
 
 const STATUS_STYLE = {
-  pending:   { label: 'Pending',   cls: 'bg-amber-100 text-amber-800 border-amber-300' },
-  confirmed: { label: 'Confirmed', cls: 'bg-sky-100 text-sky-800 border-sky-300' },
-  fulfilled: { label: 'Fulfilled', cls: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
-  cancelled: { label: 'Cancelled', cls: 'bg-slate-100 text-slate-500 border-slate-300' },
+  pending:    { label: 'Pending',    cls: 'bg-amber-100 text-amber-800 border-amber-300' },
+  confirmed:  { label: 'Confirmed',  cls: 'bg-sky-100 text-sky-800 border-sky-300' },
+  dispatched: { label: 'Dispatched', cls: 'bg-indigo-100 text-indigo-800 border-indigo-300' },
+  fulfilled:  { label: 'Delivered',  cls: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
+  cancelled:  { label: 'Cancelled',  cls: 'bg-slate-100 text-slate-500 border-slate-300' },
+}
+
+// Category → icon for product cards (supplier catalogs have no photos)
+const CAT_EMOJI = [
+  [/dairy|milk|cheese|yogh?urt|cream|butter/i, '🥛'],
+  [/egg/i, '🥚'],
+  [/meat|beef|pork|lamb|chicken|poultry|sausage|bacon/i, '🥩'],
+  [/fish|seafood|prawn|salmon/i, '🐟'],
+  [/fruit/i, '🍎'],
+  [/veg|produce|salad|green|herb/i, '🥬'],
+  [/bak|bread|pastr|cake/i, '🥖'],
+  [/frozen|ice/i, '🧊'],
+  [/drink|beverage|juice|water|soda|coffee|tea/i, '🥤'],
+  [/oil|sauce|condiment|spice|season/i, '🫙'],
+  [/dry|grain|pasta|rice|flour|store|tinned|canned/i, '🌾'],
+  [/clean|hygiene|chemical|paper|packaging/i, '🧴'],
+]
+const catEmoji = (cat) => { for (const [re, e] of CAT_EMOJI) { if (re.test(cat || '')) return e } return '📦' }
+
+const daysAgoLabel = (iso) => {
+  if (!iso) return ''
+  const d = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000))
+  return d === 0 ? 'Delivered today' : d === 1 ? 'Delivered yesterday' : `Delivered ${d} days ago`
 }
 
 // ---------------------------------------------------------------------------
@@ -46,25 +71,26 @@ function OrderStatusTracker({ status }) {
       </div>
     )
   }
-  const stage = status === 'fulfilled' ? 2 : status === 'confirmed' ? 1 : 0
+  const stage = status === 'fulfilled' ? 3 : status === 'dispatched' ? 2 : status === 'confirmed' ? 1 : 0
   const steps = [
-    { label: 'Order Placed', sub: 'Sent to supplier' },
-    { label: 'Confirmed', sub: 'Accepted by supplier' },
-    { label: 'Delivered', sub: 'Order fulfilled' },
+    { label: 'Placed', sub: 'Sent to supplier' },
+    { label: 'Confirmed', sub: 'Accepted' },
+    { label: 'Dispatched', sub: 'On its way' },
+    { label: 'Delivered', sub: 'Fulfilled' },
   ]
   return (
-    <div className="flex items-start w-full py-1" aria-label={`Order progress: step ${stage + 1} of 3`}>
+    <div className="flex items-start w-full py-1" aria-label={`Order progress: step ${stage + 1} of 4`}>
       {steps.map((s, i) => {
         const done = i < stage
         const current = i === stage
         return (
           <React.Fragment key={i}>
-            <div className="flex flex-col items-center text-center" style={{ minWidth: 76 }}>
+            <div className="flex flex-col items-center text-center" style={{ minWidth: 64 }}>
               <div className={`h-8 w-8 rounded-full flex items-center justify-center border-2 transition
-                ${done || (current && stage === 2) ? 'bg-emerald-500 border-emerald-500 text-white'
+                ${done || (current && stage === 3) ? 'bg-emerald-500 border-emerald-500 text-white'
                   : current ? 'bg-indigo-600 border-indigo-600 text-white animate-pulse'
                   : 'bg-white border-slate-300 text-slate-300'}`}>
-                {done || (current && stage === 2) ? <Check className="h-4 w-4" /> : <span className="text-xs font-bold">{i + 1}</span>}
+                {done || (current && stage === 3) ? <Check className="h-4 w-4" /> : <span className="text-xs font-bold">{i + 1}</span>}
               </div>
               <p className={`text-[11px] font-semibold mt-1 leading-tight ${done || current ? 'text-slate-800' : 'text-slate-400'}`}>{s.label}</p>
               <p className={`text-[9px] leading-tight ${done || current ? 'text-muted-foreground' : 'text-slate-300'}`}>{s.sub}</p>
@@ -170,10 +196,15 @@ function OrderWizard({ supplier, initialCart = {}, editOrder = null, startStep =
   const [supInfo, setSupInfo] = useState(supplier)
   const [cart, setCart] = useState(initialCart)       // productId -> qty
   const [filter, setFilter] = useState('')
+  const [chip, setChip] = useState('all')             // 'bought' | 'all' | <category>
+  const [viewMode, setViewMode] = useState('grid')    // 'grid' | 'list' (persisted per device)
   const [deliveryDate, setDeliveryDate] = useState(editOrder?.requestedDeliveryDate || '')
   const [notes, setNotes] = useState(editOrder?.notes || '')
   const [placing, setPlacing] = useState(false)
   const [placedOrder, setPlacedOrder] = useState(null)
+
+  useEffect(() => { try { const v = localStorage.getItem('sw_order_view'); if (v === 'grid' || v === 'list') setViewMode(v) } catch {} }, [])
+  const switchView = (v) => { setViewMode(v); try { localStorage.setItem('sw_order_view', v) } catch {} }
 
   const sym = supInfo?.currencySymbol || '£'
 
@@ -181,7 +212,10 @@ function OrderWizard({ supplier, initialCart = {}, editOrder = null, startStep =
     (async () => {
       try {
         const data = await apiJson(`/api/kitchen/suppliers/${supplier.supplierId}/catalog`)
-        setCatalog(Array.isArray(data.products) ? data.products : [])
+        const prods = Array.isArray(data.products) ? data.products : []
+        setCatalog(prods)
+        // "Bought Before" is the default chip when this kitchen has history
+        setChip(prods.some(p => p.boughtBefore) ? 'bought' : 'all')
         if (data.supplier) setSupInfo(s => ({ ...s, ...data.supplier }))
       } catch (e) {
         toast.error(e.message || 'Could not load catalog')
@@ -201,18 +235,24 @@ function OrderWizard({ supplier, initialCart = {}, editOrder = null, startStep =
 
   const setQty = (id, qty) => setCart(c => ({ ...c, [id]: Math.max(0, Math.min(9999, qty)) }))
 
-  // Group visible products by category
-  const grouped = useMemo(() => {
+  // Categories present in this supplier's catalog (for the filter chips)
+  const categories = useMemo(() => {
+    const set = new Set()
+    for (const p of catalog) set.add(p.category || 'Other')
+    return [...set].sort()
+  }, [catalog])
+  const hasBoughtBefore = useMemo(() => catalog.some(p => p.boughtBefore), [catalog])
+
+  // Products visible under the current search + chip
+  const visible = useMemo(() => {
     const f = filter.trim().toLowerCase()
-    const vis = catalog.filter(p => !f || p.name.toLowerCase().includes(f) || (p.category || '').toLowerCase().includes(f))
-    const g = {}
-    for (const p of vis) {
-      const cat = p.category || 'Other'
-      if (!g[cat]) g[cat] = []
-      g[cat].push(p)
-    }
-    return Object.keys(g).sort().map(cat => ({ cat, items: g[cat] }))
-  }, [catalog, filter])
+    return catalog.filter(p => {
+      if (f && !(`${p.name} ${p.category || ''}`.toLowerCase().includes(f))) return false
+      if (chip === 'bought') return p.boughtBefore
+      if (chip !== 'all') return (p.category || 'Other') === chip
+      return true
+    })
+  }, [catalog, filter, chip])
 
   const placeOrder = async () => {
     if (cartItems.length === 0) { toast.error('Your cart is empty'); return }
@@ -292,27 +332,33 @@ function OrderWizard({ supplier, initialCart = {}, editOrder = null, startStep =
 
   return (
     <div className="space-y-4">
-      {/* Wizard header */}
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={step === 'review' ? () => setStep('browse') : onBack}>
-            <ArrowLeft className="h-4 w-4 mr-1" /> {step === 'review' ? 'Back to catalog' : 'Back'}
-          </Button>
-          <div>
-            <p className="font-bold leading-tight">{supInfo.businessName}</p>
-            <p className="text-xs text-muted-foreground">
-              {supInfo.deliveryDays ? `Delivers: ${supInfo.deliveryDays}` : 'Catalog'}
-              {minOrder > 0 ? ` · Min order ${money(minOrder, sym)}` : ''}
-            </p>
+      {/* Wizard header — sticky so the cart total pill stays visible while browsing */}
+      <div className="sticky top-0 z-30 -mx-1 px-1 py-2 bg-white/95 backdrop-blur rounded-b-xl">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1 min-w-0">
+            <Button variant="ghost" size="sm" onClick={step === 'review' ? () => setStep('browse') : onBack} className="shrink-0 px-2">
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <div className="min-w-0">
+              <p className="font-bold leading-tight truncate">Order from Suppliers</p>
+              <p className="text-xs text-muted-foreground truncate">
+                {supInfo.businessName}
+                {supInfo.deliveryDays ? ` · Delivers: ${supInfo.deliveryDays}` : ''}
+                {minOrder > 0 ? ` · Min ${money(minOrder, sym)}` : ''}
+              </p>
+            </div>
           </div>
-        </div>
-        {/* Step indicator */}
-        <div className="flex items-center gap-1.5 text-xs font-semibold">
-          <span className={`px-2.5 py-1 rounded-full ${step === 'browse' ? 'bg-indigo-600 text-white' : 'bg-indigo-100 text-indigo-700'}`}>1. Products</span>
-          <ArrowRight className="h-3 w-3 text-slate-400" />
-          <span className={`px-2.5 py-1 rounded-full ${step === 'review' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>2. Review</span>
-          <ArrowRight className="h-3 w-3 text-slate-400" />
-          <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-500">3. Confirm</span>
+          {/* Persistent cart total pill */}
+          <button
+            type="button"
+            onClick={() => { if (cartItems.length > 0 && step === 'browse') setStep('review') }}
+            title={cartItems.length > 0 ? 'Review your cart' : 'Cart is empty'}
+            className={`shrink-0 inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 font-bold text-sm shadow-sm border-2 transition
+              ${cartItems.length > 0 ? 'bg-indigo-600 border-indigo-600 text-white hover:bg-indigo-700' : 'bg-white border-slate-200 text-slate-400'}`}
+          >
+            <ShoppingCart className="h-4 w-4" /> {money(subtotal, sym)}
+            {cartItems.length > 0 && <span className="text-[10px] font-semibold bg-white/25 rounded-full px-1.5 py-0.5">{cartItems.length}</span>}
+          </button>
         </div>
       </div>
 
@@ -329,33 +375,135 @@ function OrderWizard({ supplier, initialCart = {}, editOrder = null, startStep =
             </CardContent></Card>
           ) : (
             <>
-              <div className="relative max-w-md">
+              {/* Search */}
+              <div className="relative">
                 <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <Input className="pl-9" placeholder="Filter products…" value={filter} onChange={e => setFilter(e.target.value)} />
+                <Input className="pl-9" placeholder="Search products…" value={filter} onChange={e => setFilter(e.target.value)} />
               </div>
-              <div className="space-y-5 pb-24">
-                {grouped.map(({ cat, items }) => (
-                  <div key={cat}>
-                    <p className="text-xs font-bold uppercase tracking-wider text-indigo-700 bg-indigo-50 rounded-md px-2.5 py-1.5 inline-block mb-2">{cat} <span className="text-indigo-400">({items.length})</span></p>
-                    <div className="border rounded-xl divide-y overflow-hidden">
-                      {items.map(p => (
-                        <div key={p.id} className="flex items-center gap-3 px-3.5 py-2.5 bg-white hover:bg-indigo-50/30 transition">
-                          <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-sm break-words">{p.name}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {money(p.price, sym)}{p.unit ? ` / ${p.unit}` : ''}{p.packSize ? ` · ${p.packSize}` : ''}{p.sku ? ` · ${p.sku}` : ''}
-                            </p>
-                          </div>
-                          {(cart[p.id] || 0) > 0 && (
-                            <span className="text-sm font-bold text-indigo-700 whitespace-nowrap">{money((cart[p.id] || 0) * p.price, sym)}</span>
+
+              {/* Filter chips + view toggle */}
+              <div className="flex items-center gap-2">
+                <div className="flex-1 flex gap-1.5 overflow-x-auto pb-1 -mb-1" style={{ scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch' }}>
+                  {hasBoughtBefore && (
+                    <button type="button" onClick={() => setChip('bought')}
+                      className={`shrink-0 text-xs font-semibold rounded-full border-2 px-3 py-1.5 transition ${chip === 'bought' ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'}`}>
+                      ⭐ Bought Before
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setChip('all')}
+                    className={`shrink-0 text-xs font-semibold rounded-full border-2 px-3 py-1.5 transition ${chip === 'all' ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'}`}>
+                    All Items
+                  </button>
+                  {categories.map(c => (
+                    <button key={c} type="button" onClick={() => setChip(c)}
+                      className={`shrink-0 text-xs font-semibold rounded-full border-2 px-3 py-1.5 transition ${chip === c ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'}`}>
+                      {catEmoji(c)} {c}
+                    </button>
+                  ))}
+                </div>
+                <div className="shrink-0 flex rounded-lg border-2 border-slate-200 bg-white p-0.5">
+                  <button type="button" onClick={() => switchView('grid')} title="Grid view" aria-label="Grid view"
+                    className={`h-7 w-8 rounded-md flex items-center justify-center transition ${viewMode === 'grid' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-600'}`}>
+                    <LayoutGrid className="h-4 w-4" />
+                  </button>
+                  <button type="button" onClick={() => switchView('list')} title="List view" aria-label="List view"
+                    className={`h-7 w-8 rounded-md flex items-center justify-center transition ${viewMode === 'list' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-600'}`}>
+                    <List className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Promo banner — set by the supplier in their profile (not hardcoded) */}
+              {supInfo.promoText && (
+                <div className="rounded-xl bg-gradient-to-r from-emerald-800 via-green-800 to-emerald-900 text-white px-4 py-3 flex items-center gap-3 shadow-sm">
+                  <span className="text-2xl shrink-0">🎉</span>
+                  <p className="text-sm font-semibold leading-snug">{supInfo.promoText}</p>
+                </div>
+              )}
+
+              {/* Catalog */}
+              {visible.length === 0 ? (
+                <p className="text-center text-sm text-muted-foreground py-10">
+                  {chip === 'bought' ? "No previously ordered items match — try \u201CAll Items\u201D." : 'No products match your search.'}
+                </p>
+              ) : viewMode === 'grid' ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 pb-24">
+                  {visible.map(p => {
+                    const qty = cart[p.id] || 0
+                    const out = p.available === false
+                    return (
+                      <div key={p.id} className={`relative bg-white border-2 rounded-xl p-3 pt-8 flex flex-col transition ${qty > 0 ? 'border-indigo-400 shadow-sm' : 'border-slate-100 hover:border-indigo-200'} ${out ? 'opacity-70' : ''}`}>
+                        {p.boughtBefore && (
+                          <span className="absolute top-2 left-2 text-[9px] font-bold uppercase tracking-wide bg-amber-100 text-amber-800 border border-amber-300 rounded-full px-1.5 py-0.5">Bought before</span>
+                        )}
+                        <span className={`absolute top-2 right-2 text-[9px] font-bold rounded-full px-1.5 py-0.5 border ${out ? 'bg-red-50 text-red-600 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                          {out ? 'Out of stock' : 'In stock'}
+                        </span>
+                        <div className="text-4xl text-center py-2 select-none">{catEmoji(p.category)}</div>
+                        <p className="text-[10px] text-muted-foreground text-center mb-1">
+                          {p.rating ? <>★ {Number(p.rating).toFixed(1)} · </> : null}
+                          {p.orderCount > 0 ? `${p.orderCount} order${p.orderCount === 1 ? '' : 's'}` : '✨ New'}
+                        </p>
+                        <p className="font-semibold text-sm leading-snug break-words">{p.name}</p>
+                        {p.packSize ? <p className="text-[10px] text-muted-foreground">{p.packSize}</p> : null}
+                        {p.boughtBefore ? (
+                          <p className="text-[10px] text-emerald-700 font-medium mt-0.5">🚚 {daysAgoLabel(p.lastOrderedAt)}</p>
+                        ) : supInfo.deliveryDays ? (
+                          <p className="text-[10px] text-muted-foreground mt-0.5">🚚 Delivers: {supInfo.deliveryDays}</p>
+                        ) : null}
+                        <div className="mt-auto pt-2 flex items-center justify-between gap-1">
+                          <span className="font-bold text-sm text-slate-900">{money(p.price, sym)}<span className="text-[10px] font-normal text-muted-foreground">{p.unit ? `/${p.unit}` : ''}</span></span>
+                          {qty === 0 ? (
+                            <button type="button" onClick={() => setQty(p.id, 1)} disabled={out} aria-label={`Add ${p.name} to cart`}
+                              className="h-8 w-8 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-30 flex items-center justify-center shadow-sm shrink-0">
+                              <Plus className="h-4 w-4" />
+                            </button>
+                          ) : (
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button type="button" onClick={() => setQty(p.id, qty - 1)} className="h-7 w-7 rounded-full border-2 border-indigo-200 text-indigo-700 hover:bg-indigo-50 flex items-center justify-center"><Minus className="h-3 w-3" /></button>
+                              <span className="w-6 text-center text-sm font-bold text-indigo-700">{qty}</span>
+                              <button type="button" onClick={() => setQty(p.id, qty + 1)} className="h-7 w-7 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 flex items-center justify-center"><Plus className="h-3 w-3" /></button>
+                            </div>
                           )}
-                          <Stepper p={p} />
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="border rounded-xl divide-y overflow-hidden pb-0 mb-24 bg-white">
+                  {visible.map(p => {
+                    const qty = cart[p.id] || 0
+                    const out = p.available === false
+                    return (
+                      <div key={p.id} className={`flex items-center gap-3 px-3 py-2.5 hover:bg-indigo-50/30 transition ${out ? 'opacity-70' : ''}`}>
+                        <span className="text-2xl select-none shrink-0">{catEmoji(p.category)}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <p className="font-semibold text-sm break-words">{p.name}</p>
+                            {p.boughtBefore && <span className="text-[9px] font-bold uppercase bg-amber-100 text-amber-800 border border-amber-300 rounded-full px-1.5 py-0.5">Bought before</span>}
+                            {out && <span className="text-[9px] font-bold bg-red-50 text-red-600 border border-red-200 rounded-full px-1.5 py-0.5">Out of stock</span>}
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            {money(p.price, sym)}{p.unit ? `/${p.unit}` : ''}{p.packSize ? ` · ${p.packSize}` : ''}
+                            {p.rating ? ` · ★ ${Number(p.rating).toFixed(1)}` : ''}
+                            {p.orderCount > 0 ? ` · ${p.orderCount} order${p.orderCount === 1 ? '' : 's'}` : ' · ✨ New'}
+                            {p.boughtBefore && p.lastOrderedAt ? ` · ${daysAgoLabel(p.lastOrderedAt)}` : ''}
+                          </p>
+                        </div>
+                        {qty > 0 && (
+                          <span className="text-sm font-bold text-indigo-700 whitespace-nowrap">{money(qty * p.price, sym)}</span>
+                        )}
+                        {out && qty === 0 ? (
+                          <Button size="sm" variant="outline" disabled className="h-8 opacity-40">Unavailable</Button>
+                        ) : (
+                          <Stepper p={p} />
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
 
               {/* Sticky cart bar */}
               {cartItems.length > 0 && (
@@ -518,6 +666,12 @@ export function MarketplaceView() {
 
   return (
     <div className="space-y-5">
+      {/* Page header */}
+      <div>
+        <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2"><ShoppingCart className="h-6 w-6 text-indigo-600" /> Order from Suppliers</h2>
+        <p className="text-sm text-muted-foreground mt-0.5">Browse catalogs, build a cart and track deliveries — all in one place</p>
+      </div>
+
       {migrationNeeded && (
         <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
           <b>One-time setup needed:</b> run <code className="bg-amber-100 px-1 rounded">supabase/migration-21-supplier-connections.sql</code> in the Supabase SQL editor, then refresh.
@@ -569,22 +723,92 @@ export function MarketplaceView() {
         </CardContent>
       </Card>
 
+      {/* Active orders — live tracking */}
+      {(() => {
+        const activeOrders = orders.filter(o => ['pending', 'confirmed', 'dispatched'].includes(o.status))
+        if (activeOrders.length === 0) return null
+        return (
+          <Card className="border-0 shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-lg"><Truck className="h-5 w-5 text-indigo-600" /> Active orders</CardTitle>
+              <CardDescription>Track your open orders — status is updated live by your suppliers</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {activeOrders.map(o => {
+                const st = STATUS_STYLE[o.status] || STATUS_STYLE.pending
+                return (
+                  <div key={o.id} className="border-2 border-indigo-100 rounded-xl p-3.5 space-y-3">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-sm truncate">{o.supplierName}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {o.orderRef} · {o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB') : ''}
+                          {o.requestedDeliveryDate ? ` · Delivery: ${new Date(o.requestedDeliveryDate + 'T00:00:00').toLocaleDateString('en-GB')}` : ''}
+                        </p>
+                      </div>
+                      <span className="font-bold text-sm text-indigo-700 whitespace-nowrap">{money(o.total)}</span>
+                      <Badge variant="outline" className={`${st.cls} text-[10px] shrink-0`}>{st.label}</Badge>
+                    </div>
+                    <div className="bg-white border rounded-lg px-4 py-2.5">
+                      <OrderStatusTracker status={o.status} />
+                    </div>
+                    <div className="border rounded-lg divide-y bg-white">
+                      {(o.items || []).map((i, idx) => (
+                        <div key={idx} className="px-3 py-1.5 flex justify-between gap-2 text-sm">
+                          <span className="min-w-0 flex-1 break-words">{i.name}</span>
+                          <span className="text-muted-foreground text-right shrink-0">{i.quantity} {i.unit || ''} × {money(i.price)}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {o.notes && <p className="text-xs text-muted-foreground italic">📝 {o.notes}</p>}
+                    <div className="flex justify-end flex-wrap gap-2">
+                      {o.status === 'pending' && (
+                        <>
+                          <Button size="sm" variant="outline" onClick={() => editOrder(o, 'browse')}>
+                            <Plus className="h-3.5 w-3.5 mr-1.5" /> Add items
+                          </Button>
+                          <Button size="sm" variant="outline" onClick={() => editOrder(o, 'review')}>
+                            <Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit order
+                          </Button>
+                          <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50" disabled={cancelBusy === o.id} onClick={() => cancelOrder(o)}>
+                            {cancelBusy === o.id ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Ban className="h-3.5 w-3.5 mr-1.5" />} Cancel
+                          </Button>
+                        </>
+                      )}
+                      <Button size="sm" variant="outline" onClick={() => {
+                        const sup = suppliers.find(s => s.supplierId === o.supplierId)
+                        printOrderSummary(o, { currencySymbol: sup?.currencySymbol || '£' }, o.supplierName, sup?.email || '', sup?.clientCode || '')
+                      }}>
+                        <FileText className="h-3.5 w-3.5 mr-1.5" /> Summary
+                      </Button>
+                      <Button size="sm" onClick={() => reorder(o)} className="bg-indigo-600 hover:bg-indigo-700 text-white">
+                        <RotateCcw className="h-3.5 w-3.5 mr-1.5" /> Reorder
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })}
+            </CardContent>
+          </Card>
+        )
+      })()}
+
       {/* Order history */}
       <Card className="border-0 shadow-sm">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-lg"><History className="h-5 w-5 text-indigo-600" /> Order history</CardTitle>
-          <CardDescription>Orders placed with your connected suppliers</CardDescription>
+          <CardDescription>Completed and cancelled orders</CardDescription>
         </CardHeader>
         <CardContent>
-          {orders.length === 0 ? (
+          {orders.filter(o => !['pending', 'confirmed', 'dispatched'].includes(o.status)).length === 0 ? (
             <div className="text-center py-10 text-muted-foreground">
               <ClipboardCheck className="h-10 w-10 mx-auto mb-2 opacity-30" />
-              <p className="font-medium text-sm">No orders yet</p>
-              <p className="text-xs">Connect a supplier above and place your first order.</p>
+              <p className="font-medium text-sm">{orders.length === 0 ? 'No orders yet' : 'No completed orders yet'}</p>
+              <p className="text-xs">{orders.length === 0 ? 'Connect a supplier above and place your first order.' : 'Delivered and cancelled orders will appear here.'}</p>
             </div>
           ) : (
             <div className="space-y-2">
-              {orders.map(o => {
+              {orders.filter(o => !['pending', 'confirmed', 'dispatched'].includes(o.status)).map(o => {
                 const st = STATUS_STYLE[o.status] || STATUS_STYLE.pending
                 const isOpen = expanded === o.id
                 return (

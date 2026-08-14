@@ -24,10 +24,11 @@ import {
 import { apiFetch, apiJson, signOutAll } from '@/lib/apiClient'
 
 const STATUS_STYLE = {
-  pending:   { label: 'Pending',   cls: 'bg-amber-100 text-amber-800 border-amber-300' },
-  confirmed: { label: 'Confirmed', cls: 'bg-sky-100 text-sky-800 border-sky-300' },
-  fulfilled: { label: 'Fulfilled', cls: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
-  cancelled: { label: 'Cancelled', cls: 'bg-slate-100 text-slate-500 border-slate-300' },
+  pending:    { label: 'Pending',    cls: 'bg-amber-100 text-amber-800 border-amber-300' },
+  confirmed:  { label: 'Confirmed',  cls: 'bg-sky-100 text-sky-800 border-sky-300' },
+  dispatched: { label: 'Dispatched', cls: 'bg-indigo-100 text-indigo-800 border-indigo-300' },
+  fulfilled:  { label: 'Fulfilled',  cls: 'bg-emerald-100 text-emerald-800 border-emerald-300' },
+  cancelled:  { label: 'Cancelled',  cls: 'bg-slate-100 text-slate-500 border-slate-300' },
 }
 
 const money = (n, sym = '£') => `${sym}${(Number(n) || 0).toFixed(2)}`
@@ -388,6 +389,11 @@ function OrderDetailDialog({ order, onClose, currencySymbol, onStatusChange, bus
             </>
           )}
           {order.status === 'confirmed' && (
+            <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white" disabled={busyId === order.id} onClick={() => onStatusChange(order, 'dispatched')}>
+              {busyId === order.id ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Truck className="h-3.5 w-3.5 mr-1" />} Mark dispatched
+            </Button>
+          )}
+          {(order.status === 'confirmed' || order.status === 'dispatched') && (
             <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" disabled={busyId === order.id} onClick={() => onStatusChange(order, 'fulfilled')}>
               {busyId === order.id ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <ClipboardCheck className="h-3.5 w-3.5 mr-1" />} Mark fulfilled + invoice
             </Button>
@@ -542,6 +548,7 @@ export default function SupplierDashboard({ me }) {
     invoiceFooter: profile.invoiceFooter || '',
     deliveryDays: profile.deliveryDays || '',
     minOrderValue: profile.minOrderValue ?? 0,
+    promoText: profile.promoText || '',
   })
   useEffect(() => { if (tab === 'profile' && !pForm) openProfileForm() }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
   const saveProfile = async () => {
@@ -671,6 +678,11 @@ export default function SupplierDashboard({ me }) {
                                 </Button>
                               )}
                               {o.status === 'confirmed' && (
+                                <Button size="sm" className="h-8 bg-indigo-600 hover:bg-indigo-700 text-white" disabled={statusBusy === o.id} onClick={() => changeStatus(o, 'dispatched')}>
+                                  {statusBusy === o.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Truck className="h-3.5 w-3.5" />}<span className="hidden sm:inline ml-1">Dispatch</span>
+                                </Button>
+                              )}
+                              {(o.status === 'confirmed' || o.status === 'dispatched') && (
                                 <Button size="sm" className="h-8 bg-emerald-600 hover:bg-emerald-700 text-white" disabled={statusBusy === o.id} onClick={() => changeStatus(o, 'fulfilled')}>
                                   {statusBusy === o.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ClipboardCheck className="h-3.5 w-3.5" />}<span className="hidden sm:inline ml-1">Fulfil</span>
                                 </Button>
@@ -917,6 +929,10 @@ export default function SupplierDashboard({ me }) {
                     <div>
                       <Label className="text-xs">Minimum order value</Label>
                       <Input type="number" min="0" step="0.01" value={pForm.minOrderValue} onChange={e => setPForm({ ...pForm, minOrderValue: e.target.value })} placeholder="0 = no minimum" />
+                    </div>
+                    <div className="col-span-2">
+                      <Label className="text-xs">🎉 Promo banner <span className="text-muted-foreground">(shown to customers on their ordering screen — leave empty to hide)</span></Label>
+                      <Input value={pForm.promoText} onChange={e => setPForm({ ...pForm, promoText: e.target.value })} maxLength={160} placeholder="e.g. Free delivery on orders over £150 this week" />
                     </div>
                     <div className="col-span-2">
                       <Label className="text-xs">Summary footer note</Label>

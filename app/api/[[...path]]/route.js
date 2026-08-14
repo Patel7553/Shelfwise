@@ -509,6 +509,7 @@ function supplierPublicInfo(k) {
     minOrderValue: Number(prof.minOrderValue) || 0,
     currencySymbol: prof.currencySymbol || '£',
     defaultVatRate: Number(prof.defaultVatRate) || 0,
+    promoText: prof.promoText || '',
   }
 }
 
@@ -808,6 +809,16 @@ async function notifyOrderEvent(sb, event, { order, supplierName, supplierEmail,
         html: html('Order confirmed 🎉', `Good news — your order has been accepted by <b>${supplierName}</b>${when}.`),
       }))
       if (order.kitchen_id) jobs.push(sendPushToKitchen(sb, order.kitchen_id, { title: `Order ${ref} confirmed`, body: delivery ? `Expected delivery: ${delivery}` : `Confirmed by ${supplierName}` }))
+    }
+
+    if (event === 'dispatched') {
+      const when = delivery ? ` — expected ${delivery}` : ''
+      if (restaurantEmail) jobs.push(resendSend({
+        to: restaurantEmail,
+        subject: `Order ${ref} dispatched by ${supplierName}`,
+        html: html('Order dispatched 🚚', `Your order from <b>${supplierName}</b> is on its way${when}.`),
+      }))
+      if (order.kitchen_id) jobs.push(sendPushToKitchen(sb, order.kitchen_id, { title: `Order ${ref} dispatched 🚚`, body: delivery ? `On its way — expected ${delivery}` : `${supplierName} dispatched your order` }))
     }
 
     if (event === 'fulfilled') {
@@ -2839,11 +2850,43 @@ export async function GET(request, { params }) {
         if (cErr) { const miss = connsMissing(cErr); if (miss) return miss; throw cErr }
         if (!conn) return json({ error: 'Not connected to this supplier' }, 403)
         const { data: supRow } = await sb.from('kitchens').select('id,kitchen_name,owner_email,supplier_profile,supplier_code').eq('id', supplierId).maybeSingle()
-        const { data: prods, error: pErr } = await sb.from('supplier_products').select('*').eq('supplier_id', supplierId).eq('available', true).order('category', { ascending: true }).order('name', { ascending: true }).limit(2000)
+        // Include unavailable products too so the UI can show real "Out of stock"
+        const { data: prods, error: pErr } = await sb.from('supplier_products').select('*').eq('supplier_id', supplierId).order('category', { ascending: true }).order('name', { ascending: true }).limit(2000)
         if (pErr) { const miss = supplierTablesMissing(pErr); if (miss) return miss; throw pErr }
+        // ---- REAL order aggregates (redesign, Aug 2026) ----
+        // (a) THIS kitchen's history with this supplier → "Bought before" + "Delivered X days ago"
+        // (b) ALL kitchens' orders with this supplier → order counts per product
+        const lastByProduct = {}    // productId -> most recent ISO date this kitchen received/ordered it
+        const countByProduct = {}   // productId -> number of orders (all kitchens) containing it
+        try {
+          const { data: allOrds } = await sb.from('supplier_orders')
+            .select('kitchen_id,items,status,created_at,fulfilled_at')
+            .eq('supplier_id', supplierId)
+            .neq('status', 'cancelled')
+            .order('created_at', { ascending: false })
+            .limit(2000)
+          for (const o of (allOrds || [])) {
+            const when = o.fulfilled_at || o.created_at
+            const seen = new Set()
+            for (const it of (Array.isArray(o.items) ? o.items : [])) {
+              const pid = it?.productId
+              if (!pid || seen.has(pid)) continue
+              seen.add(pid)
+              countByProduct[pid] = (countByProduct[pid] || 0) + 1
+              if (o.kitchen_id === kid && when && (!lastByProduct[pid] || when > lastByProduct[pid])) {
+                lastByProduct[pid] = when
+              }
+            }
+          }
+        } catch { /* aggregates are best-effort — catalog still loads */ }
         return json({
           supplier: supRow ? supplierPublicInfo(supRow) : null,
-          products: (prods || []).map(supplierProductToApi),
+          products: (prods || []).map(p => ({
+            ...supplierProductToApi(p),
+            boughtBefore: !!lastByProduct[p.id],
+            lastOrderedAt: lastByProduct[p.id] || null,
+            orderCount: countByProduct[p.id] || 0,
+          })),
         })
       }
 
@@ -5331,7 +5374,7 @@ export async function PUT(request, { params }) {
       // produces a neutral "Order Summary" (record only). Suppliers issue their own
       // official invoices via their existing accounting software.
       if (segs[1] === 'orders' && segs[2]) {
-        const VALID = ['pending', 'confirmed', 'fulfilled', 'cancelled']
+        const VALID = ['pending', 'confirmed', 'dispatched', 'fulfilled', 'cancelled']
         const status = String(body.status || '').toLowerCase()
         if (!VALID.includes(status)) return json({ error: `status must be one of: ${VALID.join(', ')}` }, 400)
         const { data: existing, error: rErr } = await sb.from('supplier_orders').select('*').eq('id', segs[2]).eq('supplier_id', sid).maybeSingle()
@@ -5344,8 +5387,8 @@ export async function PUT(request, { params }) {
         }
         const { data, error: e2 } = await sb.from('supplier_orders').update(patch).eq('id', segs[2]).eq('supplier_id', sid).select().single()
         if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
-        // Notify the restaurant on confirm / fulfil (email + web-push, best-effort)
-        if (status === 'confirmed' || status === 'fulfilled') {
+        // Notify the restaurant on confirm / dispatch / fulfil (email + web-push, best-effort)
+        if (status === 'confirmed' || status === 'dispatched' || status === 'fulfilled') {
           const prof = (ctx.kitchen.supplier_profile && typeof ctx.kitchen.supplier_profile === 'object') ? ctx.kitchen.supplier_profile : {}
           let restaurantEmail = data.customer_email || ''
           if (data.kitchen_id) {
@@ -5403,6 +5446,8 @@ export async function PUT(request, { params }) {
           // B2B ordering (migration-21): shown to connected kitchens
           deliveryDays: String(body.deliveryDays ?? current.deliveryDays ?? '').slice(0, 120),
           minOrderValue: Math.max(0, Number(body.minOrderValue ?? current.minOrderValue) || 0),
+          // Promo banner shown to connected kitchens on the ordering screen
+          promoText: String(body.promoText ?? current.promoText ?? '').slice(0, 160),
         }
         const patch = { supplier_profile: profile }
         // Business name doubles as the account display name.

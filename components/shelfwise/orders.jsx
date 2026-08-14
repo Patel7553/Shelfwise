@@ -27,10 +27,6 @@ export function OrdersView() {
   // ordering flow now. Legacy dialogs below are kept for reference but unused.
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-3xl font-bold tracking-tight">Suppliers & Orders</h2>
-        <p className="text-muted-foreground mt-1">Connect to your suppliers and order in-app — orders land in their queue instantly</p>
-      </div>
       <MarketplaceView />
     </div>
   )
