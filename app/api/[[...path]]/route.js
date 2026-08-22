@@ -446,6 +446,7 @@ function supplierOrderToApi(o) {
   const dnote = /\[\[delivery-note:([^\]]*)\]\]/.exec(rawNotes)
   const reject = /\[\[reject-reason:([^\]]*)\]\]/.exec(rawNotes)
   const received = /\[\[received-to-inventory:([^\]]*)\]\]/.exec(rawNotes)
+  const checked = /\[\[delivery-checked:([^\]]*)\]\]/.exec(rawNotes)
   return {
     id: o.id,
     orderRef: 'ORD-' + String(o.id || '').replace(/-/g, '').slice(0, 6).toUpperCase(),
@@ -463,6 +464,8 @@ function supplierOrderToApi(o) {
     rejectReason: reject ? reject[1] : '',
     receivedToInventory: !!received,
     receivedToInventoryAt: received ? received[1] || null : null,
+    deliveryChecked: !!checked,
+    deliveryCheckedAt: checked ? checked[1] || null : null,
     invoiceNumber: o.invoice_number || '',
     requestedDeliveryDate: o.requested_delivery_date || null,
     createdAt: o.created_at,
@@ -3048,6 +3051,17 @@ export async function GET(request, { params }) {
         return json((data || []).map(o => ({ ...supplierOrderToApi(o), invoiceUrl: invoices[o.id] || null })))
       }
 
+      if (path.startsWith('supplier/orders/') && path.endsWith('/delivery-check')) {
+        const id = path.split('/')[2]
+        const { data: order } = await sb.from('supplier_orders').select('id').eq('id', id).eq('supplier_id', sid).maybeSingle()
+        if (!order) return json({ error: 'Order not found' }, 404)
+        try {
+          const { data: file } = await sb.storage.from('receipts').download(`order-checks/${id}.json`)
+          if (!file) return json({ error: 'No delivery check saved for this order' }, 404)
+          return json(JSON.parse(await file.text()))
+        } catch { return json({ error: 'No delivery check saved for this order' }, 404) }
+      }
+
       if (path.startsWith('supplier/orders/')) {
         const id = path.split('/')[2]
         const { data, error: e2 } = await sb.from('supplier_orders').select('*').eq('id', id).eq('supplier_id', sid).maybeSingle()
@@ -3077,7 +3091,7 @@ export async function GET(request, { params }) {
     }
 
     // ----- KITCHEN ↔ SUPPLIER marketplace (kitchen accounts, migration-21) -----
-    if (path === 'kitchen/suppliers' || path.startsWith('kitchen/suppliers/') || path === 'kitchen/orders') {
+    if (path === 'kitchen/suppliers' || path.startsWith('kitchen/suppliers/') || path === 'kitchen/orders' || (path.startsWith('kitchen/orders/') && path.endsWith('/delivery-check'))) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
       if (ctx.kitchen && ctx.kitchen.account_type === 'supplier') {
@@ -3170,6 +3184,18 @@ export async function GET(request, { params }) {
           clientCode: c.client_code || '',
           ...(byId[c.supplier_id] ? supplierPublicInfo(byId[c.supplier_id]) : { supplierId: c.supplier_id, businessName: '(unknown supplier)' }),
         })))
+      }
+
+      // Saved delivery check for one order (view later)
+      if (path.startsWith('kitchen/orders/') && path.endsWith('/delivery-check')) {
+        const orderId = path.split('/')[2]
+        const { data: order } = await sb.from('supplier_orders').select('id').eq('id', orderId).eq('kitchen_id', kid).maybeSingle()
+        if (!order) return json({ error: 'Order not found' }, 404)
+        try {
+          const { data: file } = await sb.storage.from('receipts').download(`order-checks/${orderId}.json`)
+          if (!file) return json({ error: 'No delivery check saved for this order' }, 404)
+          return json(JSON.parse(await file.text()))
+        } catch { return json({ error: 'No delivery check saved for this order' }, 404) }
       }
 
       // Kitchen's order history across all suppliers
@@ -4674,7 +4700,7 @@ Output strictly valid JSON with no other text.`
     }
 
     // -------- KITCHEN marketplace mutations: connect + place order + receive --------
-    if (path === 'kitchen/suppliers/connect' || path === 'kitchen/orders' || (path.startsWith('kitchen/orders/') && path.endsWith('/receive'))) {
+    if (path === 'kitchen/suppliers/connect' || path === 'kitchen/orders' || (path.startsWith('kitchen/orders/') && (path.endsWith('/receive') || path.endsWith('/delivery-check')))) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
       if (ctx.kitchen && ctx.kitchen.account_type === 'supplier') {
@@ -4685,6 +4711,64 @@ Output strictly valid JSON with no other text.`
       const connsMissing = (e) => /relation .*supplier_connections.* does not exist/i.test(e?.message || '')
         ? json({ error: 'Connections table not found — run supabase/migration-21-supplier-connections.sql in the Supabase SQL editor first.' }, 500)
         : null
+
+      // ------- DELIVERY CHECK (Aug 2026): staff tick off every item as
+      //         Received / Not received / Missing-Damaged when the delivery
+      //         arrives. Saved against the order; supplier is notified
+      //         (email + push) whenever there are issues or a note. -------
+      if (path.startsWith('kitchen/orders/') && path.endsWith('/delivery-check')) {
+        const orderId = path.split('/')[2]
+        const { data: order, error: oErr } = await sb.from('supplier_orders').select('*').eq('id', orderId).eq('kitchen_id', kid).maybeSingle()
+        if (oErr) throw oErr
+        if (!order) return json({ error: 'Order not found' }, 404)
+        if (!['dispatched', 'fulfilled'].includes(order.status)) return json({ error: 'You can only check orders that are dispatched or delivered' }, 400)
+        if (/\[\[delivery-checked:/.test(order.notes || '')) return json({ error: 'This delivery has already been checked' }, 409)
+        const VALID_ITEM = ['received', 'not_received', 'damaged']
+        const items = (Array.isArray(body.items) ? body.items : []).slice(0, 200).map(i => ({
+          name: String(i?.name || '').slice(0, 120),
+          quantity: Number(i?.quantity) || 0,
+          unit: String(i?.unit || '').slice(0, 20),
+          status: VALID_ITEM.includes(i?.status) ? i.status : 'received',
+        })).filter(i => i.name)
+        if (items.length === 0) return json({ error: 'No items to check' }, 400)
+        const note = String(body.note || '').trim().slice(0, 500)
+        const person = await validatedPersonFromRequest(sb, request, ctx)
+        const check = { items, note, checkedBy: person, checkedAt: new Date().toISOString() }
+        // Store the full check as JSON in storage (deterministic path, no migration)
+        const up = await sb.storage.from('receipts').upload(`order-checks/${orderId}.json`, Buffer.from(JSON.stringify(check)), { contentType: 'application/json', upsert: true })
+        if (up.error) return json({ error: `Could not save the check: ${up.error.message}` }, 500)
+        await sb.from('supplier_orders').update({
+          notes: `${order.notes || ''} [[delivery-checked:${check.checkedAt}]]`.trim(),
+          updated_at: new Date().toISOString(),
+        }).eq('id', orderId).eq('kitchen_id', kid)
+        const ref = 'ORD-' + String(orderId).replace(/-/g, '').slice(0, 6).toUpperCase()
+        const issues = items.filter(i => i.status !== 'received')
+        await logActivity(sb, kid, person, 'delivery_check', `${ref} delivery checked — ${issues.length === 0 ? 'all items received' : `${issues.length} item${issues.length === 1 ? '' : 's'} with issues`}${note ? ` — "${note}"` : ''}`)
+        // Notify the supplier if anything was wrong or a note was left
+        if (issues.length > 0 || note) {
+          try {
+            const { data: supRow } = await sb.from('kitchens').select('owner_email,kitchen_name,supplier_profile').eq('id', order.supplier_id).maybeSingle()
+            const kitchenName = ctx.kitchen?.kitchen_name || 'A customer'
+            const issueLines = issues.map(i => `<li><b>${i.name}</b> (${i.quantity} ${i.unit}) — ${i.status === 'damaged' ? 'missing / damaged' : 'not received'}</li>`).join('')
+            if (supRow?.owner_email) {
+              await resendSend({
+                to: supRow.owner_email,
+                subject: issues.length > 0 ? `⚠️ Delivery issues reported — ${ref} (${kitchenName})` : `Delivery note from ${kitchenName} — ${ref}`,
+                html: `<div style="font-family:sans-serif;max-width:560px"><h2 style="color:#dc2626">${issues.length > 0 ? 'Delivery issues reported' : 'Delivery note'}</h2>
+<p><b>${kitchenName}</b> checked delivery <b>${ref}</b>${check.checkedBy ? ` (checked by ${check.checkedBy})` : ''}:</p>
+${issues.length > 0 ? `<ul>${issueLines}</ul>` : '<p>All items received ✓</p>'}
+${note ? `<p style="background:#fef9c3;border:1px solid #fde047;border-radius:8px;padding:10px"><b>Note from the kitchen:</b> ${note.replace(/</g, '&lt;')}</p>` : ''}
+<p style="color:#6b7280;font-size:12px">Sent automatically by ShelfWise when the kitchen completed their delivery check.</p></div>`,
+              })
+            }
+            await sendPushToKitchen(sb, order.supplier_id, {
+              title: issues.length > 0 ? `⚠️ Delivery issues — ${ref}` : `Delivery note — ${ref}`,
+              body: issues.length > 0 ? `${kitchenName}: ${issues.length} item${issues.length === 1 ? '' : 's'} not received/damaged${note ? ` — "${note.slice(0, 80)}"` : ''}` : `${kitchenName}: "${note.slice(0, 100)}"`,
+            })
+          } catch (e) { console.error('delivery check notify failed (non-fatal):', e?.message) }
+        }
+        return json({ ok: true, issues: issues.length, notified: issues.length > 0 || !!note })
+      }
 
       // ------- RECEIVED → INVENTORY (Aug 2026): one tap adds all delivered
       //         order items into the kitchen's products. Idempotent via a
@@ -5798,6 +5882,39 @@ export async function PUT(request, { params }) {
             clientCode,
             sym: prof.currencySymbol || '£',
           })
+          // AUTO-SAVE to the kitchen's RECEIPTS (Aug 2026): the moment the
+          // order is delivered, the Order Summary PDF lands in Receipts —
+          // tagged with supplier + date — so it joins the finance/export
+          // workflow with zero action from the kitchen. Best-effort.
+          if (status === 'fulfilled' && data.kitchen_id && !/\[\[receipt-saved\]\]/.test(data.notes || '')) {
+            try {
+              const supplierName = prof.businessName || ctx.kitchen.kitchen_name || 'Supplier'
+              const pdfB64 = await buildOrderSummaryPdfBase64({ order: data, supplierName, clientCode, sym: prof.currencySymbol || '£' })
+              if (pdfB64) {
+                const rid = uuidv4()
+                const rPath = `${data.kitchen_id}/${rid}.pdf`
+                const up = await sb.storage.from('receipts').upload(rPath, Buffer.from(pdfB64, 'base64'), { contentType: 'application/pdf', upsert: true })
+                if (!up.error) {
+                  const ref = 'ORD-' + String(data.id).replace(/-/g, '').slice(0, 6).toUpperCase()
+                  await sb.from('receipts').insert({
+                    id: rid,
+                    kitchen_id: data.kitchen_id,
+                    receipt_date: new Date().toISOString().slice(0, 10),
+                    supplier: supplierName,
+                    amount: Number(data.total) || null,
+                    currency: '',
+                    status: 'pending',
+                    color: '',
+                    notes: `Auto-saved order summary — ${ref} delivered`,
+                    image_path: rPath,
+                    file_type: 'pdf',
+                    added_by: 'ShelfWise (auto)',
+                  })
+                  await sb.from('supplier_orders').update({ notes: `${data.notes || ''} [[receipt-saved]]`.trim() }).eq('id', data.id).eq('supplier_id', sid)
+                }
+              }
+            } catch (e) { console.error('auto receipt save failed (non-fatal):', e?.message) }
+          }
         }
         return json(supplierOrderToApi(data))
       }

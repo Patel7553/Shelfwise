@@ -44,6 +44,98 @@ const daysAgoLabel = (iso) => {
 }
 
 // ---------------------------------------------------------------------------
+// DELIVERY CHECK (Aug 2026): staff tick off each item as Received /
+// Not received / Missing-Damaged when the delivery arrives, leave an optional
+// note to the supplier, then "Close invoice". Issues are sent to the supplier
+// automatically (email + push). Includes a Back button (app standard).
+// ---------------------------------------------------------------------------
+const CHECK_OPTS = [
+  { v: 'received', label: '✓ Received', on: 'bg-emerald-600 border-emerald-600 text-white', off: 'border-slate-200 text-slate-500 hover:border-emerald-300' },
+  { v: 'not_received', label: '✕ Not received', on: 'bg-red-600 border-red-600 text-white', off: 'border-slate-200 text-slate-500 hover:border-red-300' },
+  { v: 'damaged', label: '⚠ Missing/Damaged', on: 'bg-amber-500 border-amber-500 text-white', off: 'border-slate-200 text-slate-500 hover:border-amber-300' },
+]
+function DeliveryCheckDialog({ order, onClose, onDone, readonlyData }) {
+  const ro = !!readonlyData
+  const [statuses, setStatuses] = useState({})
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (order && !ro) { setStatuses({}); setNote('') }
+  }, [order?.id, ro]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (!order) return null
+  const items = ro ? (readonlyData.items || []) : (order.items || [])
+
+  const submit = async () => {
+    setBusy(true)
+    try {
+      const payload = {
+        items: (order.items || []).map((i, idx) => ({ name: i.name, quantity: i.quantity, unit: i.unit || '', status: statuses[idx] || 'received' })),
+        note: note.trim(),
+      }
+      const res = await apiJson(`/api/kitchen/orders/${order.id}/delivery-check`, { method: 'POST', body: JSON.stringify(payload) })
+      if (res.notified) toast.success(`Delivery check saved — supplier notified of ${res.issues > 0 ? `${res.issues} issue${res.issues === 1 ? '' : 's'}` : 'your note'} 📨`)
+      else toast.success('Delivery check saved — all items received ✓')
+      onDone()
+    } catch (e) { toast.error(e.message || 'Could not save the check') } finally { setBusy(false) }
+  }
+
+  return (
+    <Dialog open={!!order} onOpenChange={(v) => { if (!v && !busy) onClose() }}>
+      <DialogContent className="sm:max-w-[560px] max-h-[92vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><ClipboardCheck className="h-5 w-5 text-indigo-600" /> {ro ? `Delivery check — ${order.orderRef}` : `Check delivery — ${order.orderRef}`}</DialogTitle>
+        </DialogHeader>
+        {ro && (
+          <p className="text-xs text-muted-foreground -mt-1">Checked by <b className="capitalize">{readonlyData.checkedBy || '—'}</b> on {readonlyData.checkedAt ? new Date(readonlyData.checkedAt).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}</p>
+        )}
+        <div className="space-y-2">
+          {items.map((i, idx) => {
+            const current = ro ? i.status : (statuses[idx] || 'received')
+            return (
+              <div key={idx} className="border rounded-lg p-2.5 bg-white">
+                <div className="flex justify-between gap-2 mb-1.5">
+                  <p className="font-semibold text-sm break-words">{i.name}</p>
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">{i.quantity} {i.unit || ''}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {CHECK_OPTS.map(o => (
+                    <button key={o.v} type="button" disabled={ro}
+                      onClick={() => !ro && setStatuses(s => ({ ...s, [idx]: o.v }))}
+                      className={`text-[11px] font-semibold rounded-lg border-2 px-1.5 py-1.5 transition ${current === o.v ? o.on : o.off} ${ro ? 'cursor-default' : ''}`}>
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+        <div>
+          <Label className="text-xs">📝 Note to supplier (optional)</Label>
+          {ro ? (
+            <p className="text-sm mt-1 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{readonlyData.note || <span className="text-muted-foreground">No note left</span>}</p>
+          ) : (
+            <Input value={note} onChange={e => setNote(e.target.value)} maxLength={500} placeholder='e.g. "2 boxes of tomatoes were missing"' className="mt-1" />
+          )}
+        </div>
+        {!ro && (
+          <p className="text-[11px] text-muted-foreground">If anything is marked as not received/damaged — or you leave a note — the supplier is notified automatically by email and in-app alert.</p>
+        )}
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={onClose} disabled={busy}>Back</Button>
+          {!ro && (
+            <Button onClick={submit} disabled={busy} className="bg-indigo-600 hover:bg-indigo-700 text-white">
+              {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Check className="h-4 w-4 mr-2" />}
+              Close invoice — done
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Amazon-style order progress tracker:
 //   Order Placed → Confirmed by Supplier → Delivered
 // ---------------------------------------------------------------------------
@@ -636,6 +728,15 @@ export function MarketplaceView() {
   const [cancelBusy, setCancelBusy] = useState(null)
   // One-tap "Received → Inventory" for delivered orders (Aug 2026)
   const [receiveBusy, setReceiveBusy] = useState(null)
+  // Delivery check (Aug 2026): new check + view saved check
+  const [checkTarget, setCheckTarget] = useState(null)
+  const [checkViewData, setCheckViewData] = useState(null)
+  const openSavedCheck = async (o) => {
+    try {
+      const d = await apiJson(`/api/kitchen/orders/${o.id}/delivery-check`)
+      setCheckViewData({ order: o, data: d })
+    } catch (e) { toast.error(e.message || 'Could not load the delivery check') }
+  }
   const receiveOrder = async (o) => {
     setReceiveBusy(o.id)
     try {
@@ -769,6 +870,16 @@ export function MarketplaceView() {
                           </Button>
                         </>
                       )}
+                      {o.status === 'dispatched' && !o.deliveryChecked && (
+                        <Button size="sm" onClick={() => setCheckTarget(o)} className="bg-amber-500 hover:bg-amber-600 text-white">
+                          <ClipboardCheck className="h-3.5 w-3.5 mr-1.5" /> Check delivery
+                        </Button>
+                      )}
+                      {o.deliveryChecked && (
+                        <Button size="sm" variant="outline" onClick={() => openSavedCheck(o)} className="border-emerald-300 text-emerald-700">
+                          <Check className="h-3.5 w-3.5 mr-1.5" /> Delivery checked
+                        </Button>
+                      )}
                       <Button size="sm" variant="outline" onClick={() => {
                         const sup = suppliers.find(s => s.supplierId === o.supplierId)
                         printOrderSummary(o, { currencySymbol: sup?.currencySymbol || '£' }, o.supplierName, sup?.email || '', sup?.clientCode || '')
@@ -852,6 +963,16 @@ export function MarketplaceView() {
                           </p>
                         )}
                         <div className="flex justify-end flex-wrap gap-2">
+                          {o.status === 'fulfilled' && !o.deliveryChecked && (
+                            <Button size="sm" disabled={false} onClick={() => setCheckTarget(o)} className="bg-amber-500 hover:bg-amber-600 text-white">
+                              <ClipboardCheck className="h-3.5 w-3.5 mr-1.5" /> Check delivery
+                            </Button>
+                          )}
+                          {o.deliveryChecked && (
+                            <Button size="sm" variant="outline" onClick={() => openSavedCheck(o)} className="border-emerald-300 text-emerald-700">
+                              <Check className="h-3.5 w-3.5 mr-1.5" /> Delivery checked
+                            </Button>
+                          )}
                           {o.status === 'fulfilled' && (
                             o.receivedToInventory ? (
                               <Button size="sm" variant="outline" disabled className="border-emerald-300 text-emerald-700 opacity-80">
@@ -905,6 +1026,10 @@ export function MarketplaceView() {
           )}
         </CardContent>
       </Card>
+
+      {/* Delivery check dialogs (new + readonly view) */}
+      <DeliveryCheckDialog order={checkTarget} onClose={() => setCheckTarget(null)} onDone={() => { setCheckTarget(null); load() }} />
+      <DeliveryCheckDialog order={checkViewData?.order || null} readonlyData={checkViewData?.data || null} onClose={() => setCheckViewData(null)} onDone={() => setCheckViewData(null)} />
     </div>
   )
 }

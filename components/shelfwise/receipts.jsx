@@ -185,7 +185,7 @@ function warp(imageData, corners) {
   const tl = corners[0], tr = corners[1], br = corners[2], bl = corners[3];
   let W = Math.max(32, Math.round(Math.max(dist2(tl, tr), dist2(bl, br))));
   let H = Math.max(32, Math.round(Math.max(dist2(tl, bl), dist2(tr, br))));
-  const cap = 2600, s = Math.min(1, cap / Math.max(W, H));
+  const cap = 3200, s = Math.min(1, cap / Math.max(W, H));
   W = Math.round(W * s); H = Math.round(H * s);
   // Homography mapping unit square -> source quad (q0=tl q1=tr q2=br q3=bl)
   const q0 = tl, q1 = tr, q2 = br, q3 = bl;
@@ -347,7 +347,7 @@ function canvasToJpegSafe(canvas, quality, fallback) {
   return fallback
 }
 
-function fileToJpegDataUrl(file, maxSide = 2600, quality = 0.9) {
+function fileToJpegDataUrl(file, maxSide = 3200, quality = 0.92) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file)
     const img = new Image()
@@ -807,9 +807,9 @@ function CropEditor({ dataUrl, onDone, onRetake }) {
       try {
         let srcCanvas = img
         let sCorners = orderCorners(corners)
-        const sc = Math.min(1, 2600 / Math.max(img.width, img.height))
+        const sc = Math.min(1, 3200 / Math.max(img.width, img.height))
         if (sc < 1) {
-          srcCanvas = scaleCanvas(img, 2600)
+          srcCanvas = scaleCanvas(img, 3200)
           sCorners = sCorners.map(p => ({ x: p.x * sc, y: p.y * sc }))
         }
         const ictx = srcCanvas.getContext('2d')

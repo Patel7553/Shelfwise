@@ -6217,3 +6217,98 @@ agent_communication:
       message: "Focused round. SUPPLIER AUTH NOW POSSIBLE: 1) POST {SUPABASE_URL}/auth/v1/admin/generate_link (service key) {type:'magiclink', email:'parth511.patel@gmail.com'} -> hashed_token. 2) POST {SUPABASE_URL}/auth/v1/verify (anon key) {type:'magiclink', token_hash} -> access_token. Use as Authorization Bearer for /api/supplier/* calls. Test: create kitchen order (chef JWT kitchen a2573e6a..., supplier 995016c0..., >= £100), supplier PUT status confirmed -> dispatched -> fulfilled with deliveryNote; verify kitchen GET shows deliveryNote + status; check server logs for 'order summary pdf failed' (must NOT appear). Test PUBLIC POST /api/push/resubscribe: 404 for unknown oldEndpoint, 400 for bad body. Cleanup: delete test order via service-role REST."
     - agent: "testing"
       message: "✅ FOCUSED TEST COMPLETE - Order Summary PDF + Push Resubscribe (13/13 tests passed). FEATURE 1 (Order Summary PDF): Kitchen order created (£123.12, exceeds £100 min), supplier Bearer token generated via Supabase admin API, order status flow working perfectly (pending → confirmed → dispatched → fulfilled with deliveryNote 'left with kitchen manager TEST'), PDF generation working (NO 'order summary pdf failed' in logs), kitchen GET shows correct status/deliveryNote/notes without '[[' markers. FEATURE 2 (Push Resubscribe): PUBLIC POST /api/push/resubscribe validates correctly (404 for unknown oldEndpoint with error 'Unknown subscription', 400 for bad body missing keys, 400 for empty body). CLEANUP: Test order deleted via service-role REST and verified gone. Test file: /app/backend_test_order_pdf.py. No critical issues found. All features working perfectly. Ready for main agent to summarize and finish."
+
+backend:
+  - task: "Auto-save Order Summary PDF into kitchen Receipts on delivery + Delivery Check flow"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js, components/shelfwise/kitchen-ordering.jsx, components/shelfwise/inventory.jsx, components/shelfwise/receipts.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "1) On supplier PUT status=fulfilled: Order Summary PDF auto-uploaded to receipts storage (<kitchenId>/<rid>.pdf) + receipts row inserted (supplier name, amount=total, file_type pdf, added_by 'ShelfWise (auto)', notes 'Auto-saved order summary — <ref> delivered'); [[receipt-saved]] marker prevents duplicates. Email attach already existed. 2) POST /api/kitchen/orders/:id/delivery-check {items:[{name,quantity,unit,status: received|not_received|damaged}], note} -> stores JSON at order-checks/<id>.json, appends [[delivery-checked:ts]], notifies supplier (email+push) when issues/note, logs 'delivery_check'. 409 on repeat, 400 unless status dispatched/fulfilled. GET kitchen+supplier /orders/:id/delivery-check returns saved JSON. supplierOrderToApi adds deliveryChecked/deliveryCheckedAt. 3) 'Added by' timestamp removed from inventory card. 4) Scanner processing caps raised 2600->3200px."
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ COMPLETE TEST - Auto-save Order Summary PDF + Delivery Check (12/12 tests passed):
+            
+            **CONTEXT:**
+            - Real production DB (Supabase project sabsvsolekdhztzqafuc)
+            - Kitchen JWT: kitchen_id=a2573e6a-70f0-4a6d-97d0-ccf09b444643, person=Xyz
+            - Supplier Bearer token: parth511.patel@gmail.com (via Supabase magic link)
+            - All test orders tagged "TEST ORDER" and cleaned up at the end
+            
+            **BUG FIXED:**
+            - Auto-save receipt insert was failing silently due to missing 'ocr_text' column in receipts table
+            - Fixed by removing 'ocr_text' field from receipt insert (line 5912 in route.js)
+            - After fix, auto-save works perfectly
+            
+            **FEATURE A: Auto-save Order Summary PDF to kitchen Receipts on delivery (6/6 passed):**
+            - Test 1: Kitchen created order via POST /api/kitchen/orders (supplier 995016c0-249b-48e7-aa24-51de2ecde382, 2 items totalling £123.60, notes "TEST ORDER AUTORECEIPT") → 201 ✓
+            - Test 2: Supplier confirmed order via PUT /api/supplier/orders/:id {"status":"confirmed"} → 200 ✓
+            - Test 3: Supplier fulfilled order via PUT /api/supplier/orders/:id {"status":"fulfilled"} → 200 ✓
+            - Test 4: Verified auto-saved receipt in receipts table (service-role REST API) → NEW row exists ✓
+              * Supplier: "PATEL FOOD" ✓
+              * File type: "pdf" ✓
+              * Added by: "ShelfWise (auto)" ✓
+              * Notes: "Auto-saved order summary — ORD-196AED delivered" ✓
+              * Amount: £123.60 (matches order total) ✓
+              * Image path: a2573e6a-70f0-4a6d-97d0-ccf09b444643/337a0456-bd7d-479f-9edb-ed55559f8cf2.pdf ✓
+            - Test 5: Kitchen GET /api/receipts → auto receipt appears with signed fileUrl ✓
+              * fileUrl present and valid (Supabase signed URL) ✓
+            - Test 6: Order notes contain [[receipt-saved]] marker (prevents duplicates) ✓
+            
+            **FEATURE B: Delivery Check (6/6 passed):**
+            - Test 7: Kitchen POST /api/kitchen/orders/:id/delivery-check with {"items":[{"name":"...","quantity":10,"unit":"case","status":"received"},{"name":"Fake Missing Item","quantity":2,"unit":"box","status":"not_received"}],"note":"2 boxes were missing TEST"} → 200 ✓
+              * Response: {ok:true, issues:1, notified:true} ✓
+            - Test 8: Kitchen GET /api/kitchen/orders → order shows deliveryChecked:true and deliveryCheckedAt set ✓
+              * Notes do NOT contain [[ markers (cleaned by supplierOrderToApi) ✓
+            - Test 9: Kitchen GET /api/kitchen/orders/:id/delivery-check → returns saved JSON ✓
+              * Items: 2 (both items present) ✓
+              * Note: "2 boxes were missing TEST" ✓
+              * Checked by: "Xyz" (from JWT person) ✓
+              * Checked at: ISO timestamp ✓
+            - Test 10: Supplier GET /api/supplier/orders/:id/delivery-check (Bearer token) → returns same JSON ✓
+            - Test 11: Repeat POST delivery-check → 409 "This delivery has already been checked" ✓
+            - Test 12: Validation - POST delivery-check on PENDING order → 400 "You can only check orders that are dispatched or delivered" ✓
+            
+            **CLEANUP:**
+            - Deleted 2 test orders from supplier_orders ✓
+            - Deleted 1 auto-created receipt from receipts table ✓
+            - Deleted 2 storage objects (PDF + delivery-check JSON) ✓
+            - Verified no TEST orders remain ✓
+            
+            **Key Validations:**
+            - ✅ Auto-save receipt triggered on order fulfillment (status=fulfilled)
+            - ✅ Receipt saved with correct supplier name, amount, file type, and notes
+            - ✅ Receipt appears in kitchen receipts API with signed fileUrl
+            - ✅ [[receipt-saved]] marker prevents duplicate auto-saves
+            - ✅ Delivery check stores JSON in storage (order-checks/<orderId>.json)
+            - ✅ Delivery check appends [[delivery-checked:ts]] marker to order notes
+            - ✅ Delivery check notifies supplier when issues/note present
+            - ✅ Both kitchen and supplier can retrieve delivery check JSON
+            - ✅ Repeat delivery check returns 409 (idempotent)
+            - ✅ Delivery check validation: only dispatched/fulfilled orders allowed
+            - ✅ supplierOrderToApi exposes deliveryChecked/deliveryCheckedAt fields
+            - ✅ All [[ markers hidden from API responses (cleaned by supplierOrderToApi)
+            
+            **Test file:** /app/backend_test_autoreceipt_delivery.py (can be re-run anytime)
+            
+            No critical issues found. Both features working perfectly in production.
+
+test_plan:
+  current_focus:
+    - "Auto-save Order Summary PDF into kitchen Receipts on delivery + Delivery Check flow"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    - agent: "main"
+      message: "Same auth setup as previous round (chef JWT kitchen a2573e6a..., supplier session via magiclink for parth511.patel@gmail.com). Flow: create TEST order >= £100, supplier PUT confirmed then fulfilled, then verify: receipts table has new auto row for the kitchen (service-role REST query receipts where notes like 'Auto-saved order summary%'), then kitchen POST delivery-check with one not_received item + note, verify notified:true, GET delivery-check JSON, deliveryChecked:true on kitchen orders GET, 409 on repeat. CLEANUP: delete test order, the auto receipt row, storage objects <kitchenId>/<rid>.pdf and order-checks/<orderId>.json."
+    - agent: "testing"
+      message: "✅ BOTH FEATURES TESTED AND WORKING (12/12 tests passed). BUG FIXED: Auto-save receipt insert was failing silently due to missing 'ocr_text' column - removed from insert statement (line 5912). After fix, both features work perfectly: (A) Auto-save Order Summary PDF to kitchen Receipts on delivery - receipt auto-saved with correct details, appears in kitchen API with signed fileUrl, [[receipt-saved]] marker prevents duplicates. (B) Delivery Check - stores JSON in storage, appends [[delivery-checked:ts]] marker, notifies supplier, both sides can retrieve JSON, 409 on repeat, 400 on PENDING orders. All test artifacts cleaned up. Test file: /app/backend_test_autoreceipt_delivery.py. Main agent: please summarize and finish."
+
