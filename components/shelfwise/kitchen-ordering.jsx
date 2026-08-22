@@ -73,7 +73,8 @@ function DeliveryCheckDialog({ order, onClose, onDone, readonlyData }) {
         note: note.trim(),
       }
       const res = await apiJson(`/api/kitchen/orders/${order.id}/delivery-check`, { method: 'POST', body: JSON.stringify(payload) })
-      if (res.notified) toast.success(`Delivery check saved — supplier notified of ${res.issues > 0 ? `${res.issues} issue${res.issues === 1 ? '' : 's'}` : 'your note'} 📨`)
+      if (res.creditTotal > 0) toast.success(`Delivery check saved — credit request of £${res.creditTotal.toFixed(2)} sent to the supplier 💳`)
+      else if (res.notified) toast.success('Delivery check saved — supplier notified of your note 📨')
       else toast.success('Delivery check saved — all items received ✓')
       onDone()
     } catch (e) { toast.error(e.message || 'Could not save the check') } finally { setBusy(false) }
@@ -949,6 +950,11 @@ export function MarketplaceView() {
                         )}
                         {o.rejectReason && (
                           <p className="text-xs bg-red-50 border border-red-200 text-red-800 rounded-lg px-2.5 py-1.5">❌ Declined by supplier: <b>{o.rejectReason}</b></p>
+                        )}
+                        {o.creditStatus && (
+                          <p className={`text-xs rounded-lg px-2.5 py-1.5 border ${o.creditStatus === 'approved' ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : o.creditStatus === 'declined' ? 'bg-slate-50 border-slate-200 text-slate-600' : 'bg-indigo-50 border-indigo-200 text-indigo-900'}`}>
+                            💳 Credit request £{(o.creditTotal || 0).toFixed(2)} — {o.creditStatus === 'requested' ? 'awaiting supplier approval' : o.creditStatus === 'approved' ? 'approved by supplier ✓' : 'declined by supplier'}
+                          </p>
                         )}
                         {o.invoiceUrl && (
                           <a href={o.invoiceUrl} target="_blank" rel="noreferrer"

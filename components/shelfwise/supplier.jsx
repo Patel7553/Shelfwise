@@ -385,7 +385,67 @@ function MarkDeliveredDialog({ order, onClose, onSubmit, busy }) {
   )
 }
 
-function OrderDetailDialog({ order, onClose, currencySymbol, onStatusChange, busyId, profile, businessName, ownerEmail, clientCode }) {
+// ---------------------------------------------------------------------------
+// CREDIT REQUEST PANEL (Aug 2026): shows the auto-created credit request from
+// the kitchen's delivery check; supplier can Approve or Decline (with a note).
+// ---------------------------------------------------------------------------
+function CreditPanel({ order, onDecided }) {
+  const [credit, setCredit] = useState(null)
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(null)   // 'approved' | 'declined' while submitting
+  useEffect(() => {
+    setCredit(null); setNote('')
+    if (!order?.creditStatus) return
+    apiJson(`/api/supplier/orders/${order.id}/credit`).then(setCredit).catch(() => {})
+  }, [order?.id, order?.creditStatus]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (!order?.creditStatus || !credit) return null
+
+  const decide = async (decision) => {
+    setBusy(decision)
+    try {
+      const res = await apiJson(`/api/supplier/orders/${order.id}/credit-decision`, {
+        method: 'POST', body: JSON.stringify({ decision, note: note.trim() }),
+      })
+      toast.success(decision === 'approved' ? `Credit of £${(credit.total || 0).toFixed(2)} approved — kitchen notified ✅` : 'Credit request declined — kitchen notified')
+      onDecided?.(res)
+    } catch (e) { toast.error(e.message || 'Could not save the decision') } finally { setBusy(null) }
+  }
+
+  const decided = order.creditStatus !== 'requested'
+  return (
+    <div className={`rounded-xl border-2 p-3 space-y-2 ${order.creditStatus === 'approved' ? 'border-emerald-200 bg-emerald-50/60' : order.creditStatus === 'declined' ? 'border-slate-200 bg-slate-50' : 'border-indigo-200 bg-indigo-50/60'}`}>
+      <p className="text-sm font-bold flex items-center gap-1.5">💳 Credit request — £{(Number(credit.total) || 0).toFixed(2)}
+        {decided && <Badge variant="outline" className={`ml-auto text-[10px] ${order.creditStatus === 'approved' ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-300'}`}>{order.creditStatus === 'approved' ? 'Approved ✓' : 'Declined'}</Badge>}
+      </p>
+      <ul className="text-xs space-y-1">
+        {(credit.items || []).map((i, idx) => (
+          <li key={idx} className="flex justify-between gap-2">
+            <span className="break-words">{i.name} <span className="text-muted-foreground">({i.quantity} {i.unit || ''} — {i.reason})</span></span>
+            <span className="font-semibold whitespace-nowrap">£{(Number(i.amount) || 0).toFixed(2)}</span>
+          </li>
+        ))}
+      </ul>
+      {credit.note && <p className="text-xs bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">📝 Kitchen: "{credit.note}"</p>}
+      {decided ? (
+        credit.decisionNote ? <p className="text-xs text-muted-foreground italic">Your note: "{credit.decisionNote}"</p> : null
+      ) : (
+        <>
+          <Input value={note} onChange={e => setNote(e.target.value)} maxLength={300} placeholder="Optional note to the kitchen…" className="h-9 text-sm bg-white" />
+          <div className="grid grid-cols-2 gap-2">
+            <Button size="sm" onClick={() => decide('approved')} disabled={!!busy} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+              {busy === 'approved' ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <Check className="h-3.5 w-3.5 mr-1.5" />} Approve £{(Number(credit.total) || 0).toFixed(2)}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => decide('declined')} disabled={!!busy} className="border-red-200 text-red-600 hover:bg-red-50">
+              {busy === 'declined' ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : <X className="h-3.5 w-3.5 mr-1.5" />} Decline
+            </Button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function OrderDetailDialog({ order, onClose, currencySymbol, onStatusChange, busyId, profile, businessName, ownerEmail, clientCode, onCreditDecided }) {
   if (!order) return null
   const st = STATUS_STYLE[order.status] || STATUS_STYLE.pending
   return (
@@ -430,6 +490,7 @@ function OrderDetailDialog({ order, onClose, currencySymbol, onStatusChange, bus
               📎 Supplier Invoice (your uploaded file) <span className="ml-auto text-xs font-normal text-indigo-500">View / download →</span>
             </a>
           )}
+          <CreditPanel order={order} onDecided={onCreditDecided} />
         </div>
         <DialogFooter className="flex-wrap gap-2">
           {order.status === 'pending' && (
@@ -734,6 +795,7 @@ export default function SupplierDashboard({ me }) {
                               <p className="font-semibold text-sm truncate">
                                 {o.customerName}
                                 {o.placedVia === 'shelfwise' && <span className="ml-1.5 text-[9px] font-bold uppercase tracking-wide bg-indigo-100 text-indigo-700 rounded px-1.5 py-0.5 align-middle">via ShelfWise</span>}
+                                {o.creditStatus === 'requested' && <span className="ml-1.5 text-[9px] font-bold uppercase tracking-wide bg-amber-100 text-amber-800 border border-amber-300 rounded px-1.5 py-0.5 align-middle">💳 Credit to review</span>}
                               </p>
                               <p className="text-xs text-muted-foreground">
                                 {o.orderRef} · {(o.items || []).length} item{(o.items || []).length !== 1 ? 's' : ''} · {o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB') : ''}
@@ -1040,7 +1102,7 @@ export default function SupplierDashboard({ me }) {
       {/* Dialogs */}
       <ProductDialog open={productDialog.open} product={productDialog.product} onClose={() => setProductDialog({ open: false, product: null })} onSaved={loadAll} />
       <NewOrderDialog open={orderDialog} onClose={() => setOrderDialog(false)} products={products} defaultVatRate={Number(profile?.defaultVatRate) || 0} currencySymbol={sym} onSaved={loadAll} />
-      <OrderDetailDialog order={viewOrder} onClose={() => setViewOrder(null)} currencySymbol={sym} onStatusChange={changeStatus} busyId={statusBusy} profile={profile} businessName={businessName} ownerEmail={ownerEmail} clientCode={clientCodeFor(viewOrder)} />
+      <OrderDetailDialog order={viewOrder} onClose={() => setViewOrder(null)} currencySymbol={sym} onStatusChange={changeStatus} busyId={statusBusy} profile={profile} businessName={businessName} ownerEmail={ownerEmail} clientCode={clientCodeFor(viewOrder)} onCreditDecided={(updated) => { setViewOrder(v => v ? { ...v, ...updated } : v); loadAll() }} />
       <MarkDeliveredDialog order={deliverOrder} onClose={() => setDeliverOrder(null)} onSubmit={completeDelivery} busy={!!statusBusy} />
     </div>
   )

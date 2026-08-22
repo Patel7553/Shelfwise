@@ -447,6 +447,10 @@ function supplierOrderToApi(o) {
   const reject = /\[\[reject-reason:([^\]]*)\]\]/.exec(rawNotes)
   const received = /\[\[received-to-inventory:([^\]]*)\]\]/.exec(rawNotes)
   const checked = /\[\[delivery-checked:([^\]]*)\]\]/.exec(rawNotes)
+  const creditReq = /\[\[credit-requested:([^\]]*)\]\]/.exec(rawNotes)
+  const creditApproved = /\[\[credit-approved:([^\]]*)\]\]/.exec(rawNotes)
+  const creditDeclined = /\[\[credit-declined:([^\]]*)\]\]/.exec(rawNotes)
+  const creditTotalM = /\[\[credit-total:([^\]]*)\]\]/.exec(rawNotes)
   return {
     id: o.id,
     orderRef: 'ORD-' + String(o.id || '').replace(/-/g, '').slice(0, 6).toUpperCase(),
@@ -466,6 +470,8 @@ function supplierOrderToApi(o) {
     receivedToInventoryAt: received ? received[1] || null : null,
     deliveryChecked: !!checked,
     deliveryCheckedAt: checked ? checked[1] || null : null,
+    creditStatus: creditApproved ? 'approved' : creditDeclined ? 'declined' : creditReq ? 'requested' : null,
+    creditTotal: creditTotalM ? (Number(creditTotalM[1]) || 0) : 0,
     invoiceNumber: o.invoice_number || '',
     requestedDeliveryDate: o.requested_delivery_date || null,
     createdAt: o.created_at,
@@ -3051,6 +3057,17 @@ export async function GET(request, { params }) {
         return json((data || []).map(o => ({ ...supplierOrderToApi(o), invoiceUrl: invoices[o.id] || null })))
       }
 
+      if (path.startsWith('supplier/orders/') && path.endsWith('/credit')) {
+        const id = path.split('/')[2]
+        const { data: order } = await sb.from('supplier_orders').select('id').eq('id', id).eq('supplier_id', sid).maybeSingle()
+        if (!order) return json({ error: 'Order not found' }, 404)
+        try {
+          const { data: file } = await sb.storage.from('receipts').download(`order-credits/${id}.json`)
+          if (!file) return json({ error: 'No credit request for this order' }, 404)
+          return json(JSON.parse(await file.text()))
+        } catch { return json({ error: 'No credit request for this order' }, 404) }
+      }
+
       if (path.startsWith('supplier/orders/') && path.endsWith('/delivery-check')) {
         const id = path.split('/')[2]
         const { data: order } = await sb.from('supplier_orders').select('id').eq('id', id).eq('supplier_id', sid).maybeSingle()
@@ -3091,7 +3108,7 @@ export async function GET(request, { params }) {
     }
 
     // ----- KITCHEN ↔ SUPPLIER marketplace (kitchen accounts, migration-21) -----
-    if (path === 'kitchen/suppliers' || path.startsWith('kitchen/suppliers/') || path === 'kitchen/orders' || (path.startsWith('kitchen/orders/') && path.endsWith('/delivery-check'))) {
+    if (path === 'kitchen/suppliers' || path.startsWith('kitchen/suppliers/') || path === 'kitchen/orders' || (path.startsWith('kitchen/orders/') && (path.endsWith('/delivery-check') || path.endsWith('/credit')))) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
       if (ctx.kitchen && ctx.kitchen.account_type === 'supplier') {
@@ -3184,6 +3201,18 @@ export async function GET(request, { params }) {
           clientCode: c.client_code || '',
           ...(byId[c.supplier_id] ? supplierPublicInfo(byId[c.supplier_id]) : { supplierId: c.supplier_id, businessName: '(unknown supplier)' }),
         })))
+      }
+
+      // Saved credit request for one order (kitchen view)
+      if (path.startsWith('kitchen/orders/') && path.endsWith('/credit')) {
+        const orderId = path.split('/')[2]
+        const { data: order } = await sb.from('supplier_orders').select('id').eq('id', orderId).eq('kitchen_id', kid).maybeSingle()
+        if (!order) return json({ error: 'Order not found' }, 404)
+        try {
+          const { data: file } = await sb.storage.from('receipts').download(`order-credits/${orderId}.json`)
+          if (!file) return json({ error: 'No credit request for this order' }, 404)
+          return json(JSON.parse(await file.text()))
+        } catch { return json({ error: 'No credit request for this order' }, 404) }
       }
 
       // Saved delivery check for one order (view later)
@@ -4561,11 +4590,68 @@ Output strictly valid JSON with no other text.`
     }
 
     // -------- SUPPLIER mutations (supplier accounts only) --------
-    if (path === 'supplier/products' || path === 'supplier/orders' || path === 'supplier/invites' || path === 'supplier/products/sample' || (path.startsWith('supplier/orders/') && path.endsWith('/invoice'))) {
+    if (path === 'supplier/products' || path === 'supplier/orders' || path === 'supplier/invites' || path === 'supplier/products/sample' || (path.startsWith('supplier/orders/') && (path.endsWith('/invoice') || path.endsWith('/credit-decision')))) {
       const { ctx, error } = await requireSupplier(request)
       if (error) return error
       const sid = ctx.kitchen.id
       const body = await request.json()
+
+      // ------- CREDIT DECISION (Aug 2026): supplier approves or declines the
+      //         auto-created credit request; the kitchen is notified. -------
+      if (path.startsWith('supplier/orders/') && path.endsWith('/credit-decision')) {
+        const orderId = path.split('/')[2]
+        const decision = body.decision === 'approved' ? 'approved' : body.decision === 'declined' ? 'declined' : null
+        if (!decision) return json({ error: "decision must be 'approved' or 'declined'" }, 400)
+        const decisionNote = String(body.note || '').trim().slice(0, 300).replace(/[\[\]]/g, '')
+        const { data: order, error: oErr } = await sb.from('supplier_orders').select('*').eq('id', orderId).eq('supplier_id', sid).maybeSingle()
+        if (oErr) throw oErr
+        if (!order) return json({ error: 'Order not found' }, 404)
+        if (!/\[\[credit-requested:/.test(order.notes || '')) return json({ error: 'No credit request on this order' }, 404)
+        if (/\[\[credit-(approved|declined):/.test(order.notes || '')) return json({ error: 'This credit request has already been decided' }, 409)
+        // Update the stored credit JSON
+        let credit = null
+        try {
+          const { data: file } = await sb.storage.from('receipts').download(`order-credits/${orderId}.json`)
+          if (file) credit = JSON.parse(await file.text())
+        } catch {}
+        if (!credit) return json({ error: 'Credit request data not found' }, 404)
+        const decidedAt = new Date().toISOString()
+        credit.status = decision
+        credit.decisionNote = decisionNote
+        credit.decidedAt = decidedAt
+        await sb.storage.from('receipts').upload(`order-credits/${orderId}.json`, Buffer.from(JSON.stringify(credit)), { contentType: 'application/json', upsert: true })
+        const { data: updated, error: uErr } = await sb.from('supplier_orders')
+          .update({ notes: `${order.notes || ''} [[credit-${decision}:${decidedAt}]]`.trim(), updated_at: decidedAt })
+          .eq('id', orderId).eq('supplier_id', sid).select().single()
+        if (uErr) throw uErr
+        // Notify the kitchen (email + push + logbook)
+        const ref = 'ORD-' + String(orderId).replace(/-/g, '').slice(0, 6).toUpperCase()
+        const prof = (ctx.kitchen.supplier_profile && typeof ctx.kitchen.supplier_profile === 'object') ? ctx.kitchen.supplier_profile : {}
+        const supplierName = prof.businessName || ctx.kitchen.kitchen_name || 'Your supplier'
+        const total = Number(credit.total) || 0
+        try {
+          if (order.kitchen_id) {
+            const { data: kRow } = await sb.from('kitchens').select('owner_email').eq('id', order.kitchen_id).maybeSingle()
+            if (kRow?.owner_email) {
+              await resendSend({
+                to: kRow.owner_email,
+                subject: decision === 'approved' ? `✅ Credit approved — £${total.toFixed(2)} (${ref})` : `Credit request declined — ${ref}`,
+                html: `<div style="font-family:sans-serif;max-width:560px"><h2 style="color:${decision === 'approved' ? '#059669' : '#dc2626'}">Credit request ${decision}</h2>
+<p><b>${supplierName}</b> has ${decision} the credit request of <b>£${total.toFixed(2)}</b> for order <b>${ref}</b>.</p>
+<ul>${(credit.items || []).map(i => `<li>${String(i.name).replace(/</g, '&lt;')} — ${i.quantity} ${i.unit || ''} (£${(Number(i.amount) || 0).toFixed(2)}) — ${i.reason}</li>`).join('')}</ul>
+${decisionNote ? `<p style="background:#f1f5f9;border-radius:8px;padding:10px"><b>Supplier's note:</b> ${decisionNote.replace(/</g, '&lt;')}</p>` : ''}
+<p style="color:#6b7280;font-size:12px">Sent automatically by ShelfWise.</p></div>`,
+              })
+            }
+            await sendPushToKitchen(sb, order.kitchen_id, {
+              title: decision === 'approved' ? `✅ Credit approved — £${total.toFixed(2)}` : `Credit declined — ${ref}`,
+              body: decision === 'approved' ? `${supplierName} approved your credit for ${ref}` : `${supplierName} declined the credit for ${ref}${decisionNote ? `: "${decisionNote.slice(0, 80)}"` : ''}`,
+            })
+            await logActivity(sb, order.kitchen_id, supplierName, 'credit_update', `${ref} credit request £${total.toFixed(2)} ${decision}${decisionNote ? ` — "${decisionNote}"` : ''}`)
+          }
+        } catch (e) { console.error('credit decision notify failed (non-fatal):', e?.message) }
+        return json({ ok: true, ...supplierOrderToApi(updated), credit })
+      }
 
       // ------- Attach the supplier's OWN invoice file to an order (Aug 2026) -------
       // Stored at a deterministic path in the receipts bucket; shows up on the
@@ -4737,13 +4823,29 @@ Output strictly valid JSON with no other text.`
         // Store the full check as JSON in storage (deterministic path, no migration)
         const up = await sb.storage.from('receipts').upload(`order-checks/${orderId}.json`, Buffer.from(JSON.stringify(check)), { contentType: 'application/json', upsert: true })
         if (up.error) return json({ error: `Could not save the check: ${up.error.message}` }, 500)
-        await sb.from('supplier_orders').update({
-          notes: `${order.notes || ''} [[delivery-checked:${check.checkedAt}]]`.trim(),
-          updated_at: new Date().toISOString(),
-        }).eq('id', orderId).eq('kitchen_id', kid)
         const ref = 'ORD-' + String(orderId).replace(/-/g, '').slice(0, 6).toUpperCase()
         const issues = items.filter(i => i.status !== 'received')
-        await logActivity(sb, kid, person, 'delivery_check', `${ref} delivery checked — ${issues.length === 0 ? 'all items received' : `${issues.length} item${issues.length === 1 ? '' : 's'} with issues`}${note ? ` — "${note}"` : ''}`)
+        // AUTO CREDIT NOTE (Aug 2026): every missing/damaged line automatically
+        // becomes a credit request the supplier can approve or decline.
+        let creditTotal = 0
+        if (issues.length > 0) {
+          const priceByName = {}
+          for (const it of (Array.isArray(order.items) ? order.items : [])) priceByName[String(it.name || '').toLowerCase()] = Number(it.price) || 0
+          const creditItems = issues.map(i => {
+            const price = priceByName[i.name.toLowerCase()] ?? 0
+            const amount = Math.round(price * i.quantity * 100) / 100
+            creditTotal += amount
+            return { name: i.name, quantity: i.quantity, unit: i.unit, price, amount, reason: i.status === 'damaged' ? 'missing / damaged' : 'not received' }
+          })
+          creditTotal = Math.round(creditTotal * 100) / 100
+          const credit = { status: 'requested', items: creditItems, total: creditTotal, note, requestedBy: person, requestedAt: check.checkedAt }
+          await sb.storage.from('receipts').upload(`order-credits/${orderId}.json`, Buffer.from(JSON.stringify(credit)), { contentType: 'application/json', upsert: true }).catch(() => {})
+        }
+        await sb.from('supplier_orders').update({
+          notes: `${order.notes || ''} [[delivery-checked:${check.checkedAt}]]${issues.length > 0 ? ` [[credit-requested:${check.checkedAt}]] [[credit-total:${creditTotal}]]` : ''}`.trim(),
+          updated_at: new Date().toISOString(),
+        }).eq('id', orderId).eq('kitchen_id', kid)
+        await logActivity(sb, kid, person, 'delivery_check', `${ref} delivery checked — ${issues.length === 0 ? 'all items received' : `${issues.length} item${issues.length === 1 ? '' : 's'} with issues (credit request £${creditTotal.toFixed(2)} sent)`}${note ? ` — "${note}"` : ''}`)
         // Notify the supplier if anything was wrong or a note was left
         if (issues.length > 0 || note) {
           try {
@@ -4758,16 +4860,17 @@ Output strictly valid JSON with no other text.`
 <p><b>${kitchenName}</b> checked delivery <b>${ref}</b>${check.checkedBy ? ` (checked by ${check.checkedBy})` : ''}:</p>
 ${issues.length > 0 ? `<ul>${issueLines}</ul>` : '<p>All items received ✓</p>'}
 ${note ? `<p style="background:#fef9c3;border:1px solid #fde047;border-radius:8px;padding:10px"><b>Note from the kitchen:</b> ${note.replace(/</g, '&lt;')}</p>` : ''}
+${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;padding:10px">💳 A <b>credit request for £${creditTotal.toFixed(2)}</b> has been created automatically — approve or decline it from the order in your ShelfWise dashboard.</p>` : ''}
 <p style="color:#6b7280;font-size:12px">Sent automatically by ShelfWise when the kitchen completed their delivery check.</p></div>`,
               })
             }
             await sendPushToKitchen(sb, order.supplier_id, {
               title: issues.length > 0 ? `⚠️ Delivery issues — ${ref}` : `Delivery note — ${ref}`,
-              body: issues.length > 0 ? `${kitchenName}: ${issues.length} item${issues.length === 1 ? '' : 's'} not received/damaged${note ? ` — "${note.slice(0, 80)}"` : ''}` : `${kitchenName}: "${note.slice(0, 100)}"`,
+              body: issues.length > 0 ? `${kitchenName}: ${issues.length} item${issues.length === 1 ? '' : 's'} not received/damaged — credit request £${creditTotal.toFixed(2)} awaiting your approval` : `${kitchenName}: "${note.slice(0, 100)}"`,
             })
           } catch (e) { console.error('delivery check notify failed (non-fatal):', e?.message) }
         }
-        return json({ ok: true, issues: issues.length, notified: issues.length > 0 || !!note })
+        return json({ ok: true, issues: issues.length, notified: issues.length > 0 || !!note, creditTotal })
       }
 
       // ------- RECEIVED → INVENTORY (Aug 2026): one tap adds all delivered
