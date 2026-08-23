@@ -12,9 +12,10 @@ import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from 'sonner'
-import { Truck, Plus, Pencil, Trash2, Loader2, Check, X, AlertTriangle, PackageX, RefreshCw, Copy, ShieldCheck, Send, Mail, Phone, StickyNote, Store } from 'lucide-react'
+import { Truck, Plus, Pencil, Trash2, Loader2, Check, X, AlertTriangle, PackageX, RefreshCw, Copy, ShieldCheck, Send, Mail, Phone, StickyNote, Store, ShoppingCart } from 'lucide-react'
 import { apiFetch } from '@/lib/apiClient'
 import { MarketplaceView } from '@/components/shelfwise/kitchen-ordering'
+import { StockLevelsView } from '@/components/shelfwise/stock-levels'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
 const fetch = apiFetch
@@ -25,8 +26,26 @@ export function OrdersView() {
   // Aug 2026: the legacy "Low Stock & Email Orders" section was removed at the
   // user's request — in-app supplier ordering (MarketplaceView) is the only
   // ordering flow now. Legacy dialogs below are kept for reference but unused.
+  const [showStock, setShowStock] = useState(false)
+  if (showStock) {
+    return <StockLevelsView onBack={() => setShowStock(false)} />
+  }
   return (
     <div className="space-y-6">
+      {/* Stock Levels — see current inventory by supplier before ordering */}
+      <button
+        onClick={() => setShowStock(true)}
+        className="w-full flex items-center gap-3 p-4 rounded-2xl border-2 border-indigo-200 bg-gradient-to-r from-indigo-50 to-violet-50 hover:border-indigo-300 hover:shadow-sm transition text-left"
+      >
+        <div className="h-10 w-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
+          <ShoppingCart className="h-5 w-5" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="font-bold text-sm text-indigo-950">Stock Levels</p>
+          <p className="text-xs text-indigo-900/60">See everything you have, grouped by supplier — tap items to build orders</p>
+        </div>
+        <span className="text-indigo-400 font-bold">→</span>
+      </button>
       <MarketplaceView />
     </div>
   )
