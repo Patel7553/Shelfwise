@@ -68,6 +68,7 @@ export function StockLevelsView({ onBack, currency = '£' }) {
   const [suppliers, setSuppliers] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [supFilter, setSupFilter] = useState('all')   // 'all' | group key
   const [sel, setSel] = useState({})            // aggKey -> order qty
   const [reviewOpen, setReviewOpen] = useState(false)
   const [reviewGroups, setReviewGroups] = useState([])   // built when review opens
@@ -107,12 +108,11 @@ export function StockLevelsView({ onBack, currency = '£' }) {
     return [...map.values()]
   }, [products])
 
-  // ---- group by supplier ----
-  const groups = useMemo(() => {
-    const q = norm(search)
+  // ---- group ALL items by supplier (before search/filter, so the filter
+  //      chips always list every supplier) ----
+  const baseGroups = useMemo(() => {
     const bySup = new Map()
     for (const it of items) {
-      if (q && !norm(it.name).includes(q) && !norm(it.supplierRaw).includes(q)) continue
       const conn = findConnected(it.supplierRaw, suppliers)
       const label = conn ? conn.businessName : (it.supplierRaw || 'No supplier linked')
       const gk = conn ? `c:${conn.supplierId}` : (it.supplierRaw ? `t:${norm(it.supplierRaw)}` : 'z:none')
@@ -128,7 +128,19 @@ export function StockLevelsView({ onBack, currency = '£' }) {
       return a.label.localeCompare(b.label)
     })
     return list
-  }, [items, suppliers, search])
+  }, [items, suppliers])
+
+  // ---- displayed groups = supplier filter + search combined ----
+  const groups = useMemo(() => {
+    const q = norm(search)
+    return baseGroups
+      .filter(g => supFilter === 'all' || g.gk === supFilter)
+      .map(g => ({
+        ...g,
+        items: q ? g.items.filter(it => norm(it.name).includes(q) || norm(g.label).includes(q)) : g.items,
+      }))
+      .filter(g => g.items.length > 0)
+  }, [baseGroups, supFilter, search])
 
   const selCount = Object.values(sel).filter(q => q > 0).length
   const selSupplierCount = useMemo(() => {
@@ -258,12 +270,33 @@ export function StockLevelsView({ onBack, currency = '£' }) {
         <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search products or suppliers…" className="pl-9" />
       </div>
 
+      {/* Supplier filter — works together with search */}
+      {baseGroups.length > 1 && (
+        <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+          <button
+            onClick={() => setSupFilter('all')}
+            className={`shrink-0 text-xs font-semibold rounded-full px-3 py-1.5 border-2 transition ${supFilter === 'all' ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'}`}
+          >
+            All Suppliers
+          </button>
+          {baseGroups.map(g => (
+            <button
+              key={g.gk}
+              onClick={() => setSupFilter(supFilter === g.gk ? 'all' : g.gk)}
+              className={`shrink-0 text-xs font-semibold rounded-full px-3 py-1.5 border-2 transition whitespace-nowrap ${supFilter === g.gk ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'}`}
+            >
+              {g.label} <span className={supFilter === g.gk ? 'opacity-80' : 'text-muted-foreground'}>({g.items.length})</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {loading ? (
         <div className="flex items-center justify-center py-16 text-muted-foreground"><Loader2 className="h-6 w-6 animate-spin mr-2" /> Loading stock…</div>
       ) : groups.length === 0 ? (
         <div className="text-center py-16 text-muted-foreground">
           <PackageX className="h-10 w-10 mx-auto mb-2 opacity-40" />
-          {search ? 'Nothing matches your search' : 'No inventory yet — add products by barcode, invoice or manually'}
+          {search || supFilter !== 'all' ? 'Nothing matches your search or filter' : 'No inventory yet — add products by barcode, invoice or manually'}
         </div>
       ) : (
         groups.map(g => (
