@@ -80,6 +80,53 @@ export function InventoryView({ products, loading, statusFilter, setStatusFilter
   // Preview names of items being deleted (first 6)
   const previewSelected = products.filter(p => selectedIds.has(p.id)).slice(0, 6)
 
+  // -------- BULK ASSIGN TO SUPPLIER --------
+  const [assignOpen, setAssignOpen] = useState(false)
+  const [assignChoice, setAssignChoice] = useState('')
+  const [assignCustom, setAssignCustom] = useState('')
+  const [assignOptions, setAssignOptions] = useState([])
+  const [assigning, setAssigning] = useState(false)
+
+  const openAssign = async () => {
+    setAssignChoice(''); setAssignCustom('')
+    setAssignOpen(true)
+    // options = connected suppliers + supplier names already used on products
+    const opts = new Map()
+    try {
+      const res = await fetch('/api/kitchen/suppliers')
+      const list = await res.json().catch(() => [])
+      if (Array.isArray(list)) for (const s of list) if (s.businessName) opts.set(s.businessName.toLowerCase(), { name: s.businessName, connected: true })
+    } catch (_) {}
+    for (const p of products) {
+      const n = (p.supplier || '').trim()
+      if (n && !opts.has(n.toLowerCase())) opts.set(n.toLowerCase(), { name: n, connected: false })
+    }
+    setAssignOptions([...opts.values()].sort((a, b) => (a.connected === b.connected ? a.name.localeCompare(b.name) : a.connected ? -1 : 1)))
+  }
+
+  const confirmAssign = async () => {
+    const supplier = (assignCustom.trim() || assignChoice).trim()
+    if (!supplier) { toast.error('Pick a supplier or type a name'); return }
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) { setAssignOpen(false); return }
+    setAssigning(true)
+    try {
+      const res = await fetch('/api/products/assign-supplier', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productIds: ids, supplier }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Assign failed')
+      toast.success(`Linked ${data.updated} item${data.updated !== 1 ? 's' : ''} to ${supplier} ✅`)
+      setAssignOpen(false)
+      setSelectedIds(new Set())
+      try { window.dispatchEvent(new Event('shelfwise-inventory-refresh')) } catch (_) {}
+    } catch (e) {
+      toast.error(e.message || 'Assign failed')
+    } finally { setAssigning(false) }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between flex-wrap gap-4">
@@ -88,7 +135,18 @@ export function InventoryView({ products, loading, statusFilter, setStatusFilter
           <p className="text-muted-foreground mt-1">Showing {products.length} item{products.length !== 1 ? 's' : ''}{statusFilter !== 'All' ? ` · filtered by ${STATUS_META[statusFilter]?.label || statusFilter}` : ''}</p>
         </div>
         <div className="flex gap-2 flex-wrap">
-          {/* Bulk delete button — only shows when something is selected */}
+          {/* Bulk actions — only show when something is selected */}
+          {selectedIds.size > 0 && (
+            <Button
+              onClick={openAssign}
+              disabled={assigning}
+              className="bg-indigo-600 hover:bg-indigo-700 font-semibold"
+              title="Link all selected items to a supplier"
+            >
+              <Truck className="h-4 w-4 mr-2" />
+              Assign to Supplier ({selectedIds.size})
+            </Button>
+          )}
           {selectedIds.size > 0 && (
             <Button
               variant="destructive"
@@ -342,6 +400,47 @@ export function InventoryView({ products, loading, statusFilter, setStatusFilter
           <DialogFooter>
             <Button variant="ghost" onClick={() => setConfirmBulkOpen(false)} disabled={bulkDeleting} className="w-full">
               Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk "Assign to Supplier" dialog */}
+      <Dialog open={assignOpen} onOpenChange={v => { if (!v && !assigning) setAssignOpen(false) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Truck className="h-5 w-5 text-indigo-600" /> Assign {selectedIds.size} item{selectedIds.size !== 1 ? 's' : ''} to supplier
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            {assignOptions.length > 0 && (
+              <div className="space-y-1.5 max-h-52 overflow-y-auto">
+                {assignOptions.map(o => (
+                  <button
+                    key={o.name}
+                    onClick={() => { setAssignChoice(o.name); setAssignCustom('') }}
+                    className={`w-full flex items-center gap-2 p-2.5 rounded-xl border-2 text-left transition ${assignChoice === o.name && !assignCustom ? 'border-indigo-500 bg-indigo-50' : 'border-slate-100 hover:border-indigo-200'}`}
+                  >
+                    <Truck className={`h-4 w-4 shrink-0 ${o.connected ? 'text-indigo-600' : 'text-slate-400'}`} />
+                    <span className="text-sm font-medium flex-1 truncate">{o.name}</span>
+                    {o.connected && <Badge className="bg-indigo-100 text-indigo-700 hover:bg-indigo-100 border-0 text-[10px]">connected</Badge>}
+                    {assignChoice === o.name && !assignCustom && <Check className="h-4 w-4 text-indigo-600 shrink-0" />}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div>
+              <Label className="text-xs">{assignOptions.length > 0 ? 'Or type a new supplier name' : 'Supplier name'}</Label>
+              <Input value={assignCustom} onChange={e => setAssignCustom(e.target.value)} placeholder="e.g. Patel Food Suppliers" className="mt-1" />
+            </div>
+            <p className="text-[11px] text-muted-foreground">Linked items appear under this supplier on the Stock Levels screen for one-tap ordering.</p>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="ghost" onClick={() => setAssignOpen(false)} disabled={assigning}>Cancel</Button>
+            <Button onClick={confirmAssign} disabled={assigning || (!assignChoice && !assignCustom.trim())} className="bg-indigo-600 hover:bg-indigo-700">
+              {assigning ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Check className="h-4 w-4 mr-2" />}
+              Link {selectedIds.size} item{selectedIds.size !== 1 ? 's' : ''}
             </Button>
           </DialogFooter>
         </DialogContent>

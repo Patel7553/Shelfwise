@@ -5079,7 +5079,7 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
     }
 
     // -------- Kitchen-scoped mutations --------
-    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract','receipts/ocr','receipts/line-items','barcodes'].some(p => path === p)
+    const kitchenScoped = ['products','products/bulk','products/assign-supplier','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract','receipts/ocr','receipts/line-items','barcodes'].some(p => path === p)
       || (path.startsWith('recipes/') && (path.endsWith('/favorite') || path.endsWith('/cook')))
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
@@ -5649,6 +5649,22 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
         }
         await logActivity(sb, kid, await validatedPersonFromRequest(sb, request, ctx), 'item_added', data.name)
         return json(enrichWith(await fetchAlertDays(sb, kid, ctx.kitchen))(fromDb(data)), 201)
+      }
+
+      // Bulk assign a supplier to many products at once (inventory multi-select).
+      if (path === 'products/assign-supplier') {
+        const body = await request.json()
+        const ids = Array.isArray(body.productIds) ? body.productIds.map(String).filter(Boolean).slice(0, 500) : []
+        const supplier = String(body.supplier || '').trim().slice(0, 120)
+        if (!ids.length) return json({ error: 'productIds required' }, 400)
+        if (!supplier) return json({ error: 'supplier required' }, 400)
+        const { data, error } = await sb.from('products')
+          .update({ supplier, updated_at: new Date().toISOString() })
+          .eq('kitchen_id', kid)
+          .in('id', ids)
+          .select('id')
+        if (error) throw error
+        return json({ updated: (data || []).length, supplier })
       }
 
       if (path === 'products/bulk') {
