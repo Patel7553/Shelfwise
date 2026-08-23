@@ -66,6 +66,7 @@ function qtyTone(q) {
 export function StockLevelsView({ onBack, currency = '£' }) {
   const [products, setProducts] = useState([])
   const [suppliers, setSuppliers] = useState([])
+  const [catalogs, setCatalogs] = useState({})   // supplierId -> { products, sym }
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [supFilter, setSupFilter] = useState('all')   // 'all' | group key
@@ -85,6 +86,17 @@ export function StockLevelsView({ onBack, currency = '£' }) {
         if (dead) return
         setProducts(Array.isArray(plist) ? plist : [])
         setSuppliers(Array.isArray(slist) ? slist : [])
+        // load every connected supplier's catalog so PRICES show on the list
+        // itself (single source of truth: the supplier catalog entry)
+        ;(Array.isArray(slist) ? slist : []).forEach(async (s) => {
+          try {
+            const res = await fetch(`/api/kitchen/suppliers/${s.supplierId}/catalog`)
+            const data = await res.json().catch(() => ({}))
+            if (!dead && res.ok) {
+              setCatalogs(prev => ({ ...prev, [s.supplierId]: { products: Array.isArray(data.products) ? data.products : [], sym: data.supplier?.currencySymbol || currency } }))
+            }
+          } catch { /* price column degrades gracefully */ }
+        })
       } catch {
         if (!dead) toast.error('Could not load stock levels')
       } finally { if (!dead) setLoading(false) }
@@ -317,6 +329,19 @@ export function StockLevelsView({ onBack, currency = '£' }) {
               {g.items.map(it => {
                 const q = sel[it.key] || 0
                 const selected = q > 0
+                // price straight from the linked supplier's catalog entry
+                let priceEl = null
+                if (g.connected) {
+                  const cat = catalogs[g.supplierId]
+                  if (!cat) {
+                    priceEl = <span className="text-[10px] text-muted-foreground w-16 text-right shrink-0">…</span>
+                  } else {
+                    const m = matchCatalog(it.name, cat.products)
+                    if (!m) priceEl = <span className="text-[10px] text-muted-foreground w-16 text-right shrink-0">—</span>
+                    else if (!(Number(m.price) > 0)) priceEl = <span className="text-[10px] font-medium text-amber-600 w-16 text-right shrink-0">No price set</span>
+                    else priceEl = <span className="text-xs font-bold text-slate-700 w-16 text-right shrink-0">{cat.sym}{Number(m.price).toFixed(2)}</span>
+                  }
+                }
                 return (
                   <div
                     key={it.key}
@@ -330,6 +355,7 @@ export function StockLevelsView({ onBack, currency = '£' }) {
                       <p className="text-sm font-medium truncate">{it.name}</p>
                       {it.batches > 1 && <p className="text-[10px] text-muted-foreground">{it.batches} batches combined</p>}
                     </div>
+                    {priceEl}
                     <span className={`text-xs font-bold border rounded-full px-2.5 py-1 whitespace-nowrap ${qtyTone(it.qty)}`}>
                       {it.qty} {it.unit}
                     </span>

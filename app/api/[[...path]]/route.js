@@ -5331,7 +5331,7 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
         const results = []
         for (const it of items) {
           const { data: prod, error: pErr } = await sb.from('products')
-            .select('id,name,quantity,unit,custom_fields')
+            .select('id,name,quantity,unit,custom_fields,reorder_point')
             .eq('id', it.id).eq('kitchen_id', kid).maybeSingle()
           if (pErr || !prod) { results.push({ id: it.id, ok: false, reason: 'not found' }); continue }
           const from = Number(prod.quantity) || 0
@@ -5352,6 +5352,16 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
           }
           if (!uErr) {
             await logActivity(sb, kid, person, 'item_used', `${prod.name} — ${it.used} ${prod.unit || ''} used in cooking${removed ? ' (all used — removed from inventory)' : ''}`)
+            // ---- LOW STOCK ALERT: push when quantity crosses the reorder
+            //      threshold (product's own reorder point, else 2) ----
+            try {
+              const thr = Number(prod.reorder_point) > 0 ? Number(prod.reorder_point) : 2
+              if (removed) {
+                await sendPushToKitchen(sb, kid, { title: '📦 Out of stock', body: `${prod.name} is fully used and removed from inventory — reorder if needed` })
+              } else if (from > thr && to <= thr) {
+                await sendPushToKitchen(sb, kid, { title: '⚠️ Low stock', body: `${prod.name} is down to ${to} ${prod.unit || ''} — time to reorder?` })
+              }
+            } catch { /* best-effort */ }
           }
           results.push({ id: it.id, name: prod.name, unit: prod.unit || '', ok: !uErr, from, used: it.used, to, removed })
         }
@@ -6031,6 +6041,8 @@ export async function PUT(request, { params }) {
 
       // PUT /api/supplier/products/:id — edit a catalog product
       if (segs[1] === 'products' && segs[2]) {
+        // capture the old row first so we can detect price changes
+        const { data: oldRow } = await sb.from('supplier_products').select('id,name,price').eq('id', segs[2]).eq('supplier_id', sid).maybeSingle()
         const patch = { updated_at: new Date().toISOString() }
         if (body.name !== undefined) {
           const n = String(body.name).trim().slice(0, 160)
@@ -6047,6 +6059,36 @@ export async function PUT(request, { params }) {
         const { data, error: e2 } = await sb.from('supplier_products').update(patch).eq('id', segs[2]).eq('supplier_id', sid).select().maybeSingle()
         if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
         if (!data) return json({ error: 'Product not found' }, 404)
+
+        // ---- PRICE CHANGE ALERT: push to connected kitchens that stock this
+        //      item (inventory name match) or bought it before (order history) ----
+        try {
+          if (oldRow && patch.price !== undefined && Number(oldRow.price) !== Number(data.price)) {
+            const { data: conns } = await sb.from('supplier_connections').select('kitchen_id').eq('supplier_id', sid).eq('status', 'active').limit(50)
+            const { data: supRow } = await sb.from('kitchens').select('id,kitchen_name,owner_email,supplier_profile').eq('id', sid).maybeSingle()
+            const supInfo = supRow ? supplierPublicInfo(supRow) : {}
+            const supName = supInfo.businessName || 'Your supplier'
+            const sym = supInfo.currencySymbol || '£'
+            const bnorm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim()
+            const pn = bnorm(data.name)
+            for (const c of (conns || [])) {
+              let relevant = false
+              const { data: prods } = await sb.from('products').select('name').eq('kitchen_id', c.kitchen_id).limit(1000)
+              relevant = (prods || []).some(p => { const n = bnorm(p.name); return n && pn && (n === pn || n.includes(pn) || pn.includes(n)) })
+              if (!relevant) {
+                const { data: ords } = await sb.from('supplier_orders').select('items').eq('supplier_id', sid).eq('kitchen_id', c.kitchen_id).limit(100)
+                relevant = (ords || []).some(o => (o.items || []).some(i => i.productId === data.id))
+              }
+              if (relevant) {
+                await sendPushToKitchen(sb, c.kitchen_id, {
+                  title: `💷 Price change at ${supName}`,
+                  body: `${data.name}: ${sym}${(Number(oldRow.price) || 0).toFixed(2)} → ${sym}${(Number(data.price) || 0).toFixed(2)} — check before your next order`,
+                })
+              }
+            }
+          }
+        } catch { /* alerts are best-effort — never block the edit */ }
+
         return json(supplierProductToApi(data))
       }
 
@@ -6419,6 +6461,14 @@ export async function PUT(request, { params }) {
         }
         delete patch.custom_fields._editedBy
       } catch { /* attribution is best-effort */ }
+      // low-stock transition detection needs the quantity BEFORE the update
+      let prevQty = null
+      try {
+        if (body.quantity !== undefined) {
+          const { data: prev } = await sb.from('products').select('quantity').eq('id', id).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+          prevQty = prev ? Number(prev.quantity) : null
+        }
+      } catch {}
       let { data, error: e2 } = await sb.from('products').update(patch).eq('id', id).eq('kitchen_id', ctx.kitchenId).select().single()
       if (e2 && /column .* does not exist|schema cache/i.test(e2.message || '')) {
         // Migration 8 not run yet — retry without new columns
@@ -6437,6 +6487,14 @@ export async function PUT(request, { params }) {
         return json({ error: (e2.message || 'Update failed') + hint }, 500)
       }
       await logActivity(sb, ctx.kitchenId, await validatedPersonFromRequest(sb, request, ctx), 'item_updated', data?.name || segs[1])
+      // ---- LOW STOCK ALERT on manual quantity edits ----
+      try {
+        const newQty = Number(data?.quantity)
+        const thr = Number(data?.reorder_point) > 0 ? Number(data.reorder_point) : 2
+        if (prevQty !== null && Number.isFinite(newQty) && prevQty > thr && newQty <= thr) {
+          await sendPushToKitchen(sb, ctx.kitchenId, { title: '⚠️ Low stock', body: `${data.name} is down to ${newQty} ${data.unit || ''} — time to reorder?` })
+        }
+      } catch { /* best-effort */ }
       return json(enrichWith(await fetchAlertDays(sb, ctx.kitchenId, ctx.kitchen))(fromDb(data)))
     }
 
