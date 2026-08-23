@@ -118,7 +118,11 @@ export function InventoryView({ products, loading, statusFilter, setStatusFilter
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || 'Assign failed')
-      toast.success(`Linked ${data.updated} item${data.updated !== 1 ? 's' : ''} to ${supplier} ✅`)
+      if (data.catalogAdded > 0) {
+        toast.success(`Linked ${data.updated} item${data.updated !== 1 ? 's' : ''} to ${supplier} ✅ — ${data.catalogAdded} auto-added to ${data.catalogSupplier || supplier}'s catalog (now orderable)`)
+      } else {
+        toast.success(`Linked ${data.updated} item${data.updated !== 1 ? 's' : ''} to ${supplier} ✅`)
+      }
       setAssignOpen(false)
       setSelectedIds(new Set())
       try { window.dispatchEvent(new Event('shelfwise-inventory-refresh')) } catch (_) {}

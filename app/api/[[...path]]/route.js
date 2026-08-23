@@ -5653,6 +5653,9 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
       }
 
       // Bulk assign a supplier to many products at once (inventory multi-select).
+      // If the supplier is a CONNECTED supplier account, any assigned item that's
+      // missing from their catalog is auto-added — assigning a supplier means the
+      // item becomes orderable immediately (never a separate manual step).
       if (path === 'products/assign-supplier') {
         const body = await request.json()
         const ids = Array.isArray(body.productIds) ? body.productIds.map(String).filter(Boolean).slice(0, 500) : []
@@ -5663,9 +5666,63 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
           .update({ supplier, updated_at: new Date().toISOString() })
           .eq('kitchen_id', kid)
           .in('id', ids)
-          .select('id')
+          .select('*')
         if (error) throw error
-        return json({ updated: (data || []).length, supplier })
+        const updatedRows = data || []
+
+        // ---- auto-sync into the connected supplier's catalog ----
+        let catalogAdded = 0
+        let catalogSupplier = ''
+        try {
+          const bnorm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim()
+          const want = bnorm(supplier)
+          if (want && updatedRows.length) {
+            const { data: conns } = await sb.from('supplier_connections').select('supplier_id').eq('kitchen_id', kid).eq('status', 'active')
+            const sids = [...new Set((conns || []).map(c => c.supplier_id))]
+            if (sids.length) {
+              const { data: sups } = await sb.from('kitchens').select('id,kitchen_name,owner_email,supplier_profile,supplier_code').in('id', sids)
+              const match = (sups || []).find(k => {
+                const bn = bnorm(supplierPublicInfo(k).businessName)
+                return bn && (bn === want || bn.includes(want) || want.includes(bn))
+              })
+              if (match) {
+                catalogSupplier = supplierPublicInfo(match).businessName
+                const { data: catRows } = await sb.from('supplier_products').select('id,name').eq('supplier_id', match.id).limit(2000)
+                const catNames = (catRows || []).map(p => bnorm(p.name)).filter(Boolean)
+                const inCatalog = (nm) => {
+                  const n = bnorm(nm)
+                  return !!n && catNames.some(c => c === n || c.includes(n) || n.includes(c))
+                }
+                const seen = new Set()
+                const inserts = []
+                for (const p of updatedRows) {
+                  const nm = String(p.name || '').trim()
+                  const key = bnorm(nm)
+                  if (!nm || !key || seen.has(key) || inCatalog(nm)) continue
+                  seen.add(key)
+                  inserts.push({
+                    id: uuidv4(),
+                    supplier_id: match.id,
+                    name: nm.slice(0, 160),
+                    category: String(p.category || '').slice(0, 80),
+                    unit: String(p.unit || '').slice(0, 30),
+                    pack_size: '',
+                    price: Math.max(0, Number(p.unit_cost) || 0),
+                    sku: '',
+                    available: true,
+                    notes: 'Auto-added from kitchen inventory (Assign to Supplier) — set your price',
+                  })
+                }
+                if (inserts.length) {
+                  const { data: ins, error: insErr } = await sb.from('supplier_products').insert(inserts).select('id')
+                  if (!insErr) catalogAdded = (ins || []).length
+                }
+              }
+            }
+          }
+        } catch { /* catalog sync is best-effort — supplier link itself always succeeds */ }
+
+        return json({ updated: updatedRows.length, supplier, catalogAdded, catalogSupplier })
       }
 
       if (path === 'products/bulk') {
