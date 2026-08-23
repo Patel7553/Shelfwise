@@ -1025,6 +1025,32 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
   const modeRef = useRef(initialMode)
   const mapRef = useRef({})
   const productsRef = useRef([])
+  const audioCtxRef = useRef(null)
+
+  // Supermarket-checkout beep — instant audible confirmation of a read.
+  // AudioContext is created/resumed on the user's first tap (iOS requirement).
+  const unlockAudio = () => {
+    try {
+      const Ctx = typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext)
+      if (!Ctx) return
+      if (!audioCtxRef.current) audioCtxRef.current = new Ctx()
+      if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume().catch(() => {})
+    } catch {}
+  }
+  const beep = () => {
+    try {
+      const ctx = audioCtxRef.current
+      if (!ctx || ctx.state !== 'running') return
+      const o = ctx.createOscillator()
+      const g = ctx.createGain()
+      o.type = 'square'
+      o.frequency.value = 1450
+      g.gain.setValueAtTime(0.18, ctx.currentTime)
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.14)
+      o.connect(g); g.connect(ctx.destination)
+      o.start(); o.stop(ctx.currentTime + 0.15)
+    } catch {}
+  }
   const detectBusyRef = useRef(false)
   const pausedRef = useRef(false)
   const phaseRef = useRef('scan')
@@ -1054,6 +1080,7 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
     if (!force && phaseRef.current !== 'scan') return   // ignore late decoder callbacks once we've moved on
     detectBusyRef.current = true
     phaseRef.current = 'handling'
+    beep()                                     // supermarket-style instant confirmation
     try { navigator.vibrate?.(60) } catch {}
     pauseScanner()
     setCode(c)
@@ -1187,6 +1214,12 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
     fetch('/api/barcodes').then(r => r.json()).then(m => { if (m && typeof m === 'object') mapRef.current = m }).catch(() => {})
     fetch('/api/products').then(r => r.json()).then(list => { if (Array.isArray(list)) productsRef.current = list }).catch(() => {})
 
+    // unlock the checkout beep on the user's first tap (iOS gesture rule)
+    unlockAudio()
+    const onFirstTap = () => unlockAudio()
+    document.addEventListener('pointerdown', onFirstTap, { passive: true })
+    document.addEventListener('touchstart', onFirstTap, { passive: true })
+
     let cancelled = false
     let scanner
     let nativeTimer = null
@@ -1219,28 +1252,52 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
         )
         if (cancelled) return
         setScanning(true)
-        // ---- Guaranteed completion path: our OWN native BarcodeDetector loop
-        // runs alongside html5-qrcode. The instant EITHER decodes a value,
-        // handleDetect fires and the flow advances automatically. ----
+        // ---- Guaranteed completion path: a zxing-wasm decode loop runs on the
+        // live video alongside html5-qrcode. iPhones/Safari have NO native
+        // BarcodeDetector and their JS decoder fails on EAN-13 grocery codes —
+        // the wasm ponyfill (same zxing-cpp engine as retail scanners) decodes
+        // them instantly. First decoder to read a value wins → handleDetect. ----
         try {
+          const FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'itf', 'qr_code', 'data_matrix']
+          let Detector = null
+          let formats = FORMATS
           if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
-            const supported = (await window.BarcodeDetector.getSupportedFormats?.()) || []
-            const want = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'itf', 'qr_code', 'data_matrix'].filter(f => supported.includes(f))
-            if (want.length) {
-              const det = new window.BarcodeDetector({ formats: want })
-              nativeTimer = setInterval(async () => {
-                if (cancelled || detectBusyRef.current || pausedRef.current || phaseRef.current !== 'scan') return
-                const vid = document.getElementById('bf-reader-region')?.querySelector('video')
-                if (!vid || vid.readyState < 2) return
-                try {
-                  const found = await det.detect(vid)
-                  const hit = (found || []).find(b => String(b.rawValue || '').trim())
-                  if (hit && !cancelled) handleDetect(hit.rawValue)
-                } catch { /* frame not ready — try again next tick */ }
-              }, 300)
-            }
+            try {
+              const supported = (await window.BarcodeDetector.getSupportedFormats?.()) || []
+              const want = FORMATS.filter(f => supported.includes(f))
+              // only trust the native detector when it can actually read retail 1D codes
+              if (want.includes('ean_13')) { Detector = window.BarcodeDetector; formats = want }
+            } catch {}
           }
-        } catch { /* native detector unavailable — html5-qrcode still runs */ }
+          if (!Detector) {
+            // zxing-wasm ponyfill — works on iOS Safari / all browsers
+            const bd = await import('barcode-detector/ponyfill')
+            Detector = bd.BarcodeDetector
+          }
+          if (Detector && !cancelled) {
+            const det = new Detector({ formats })
+            // Grab each frame onto a canvas before decoding — drawImage(video)
+            // is the most reliable capture path on iOS Safari.
+            const grab = document.createElement('canvas')
+            const gctx = grab.getContext('2d', { willReadFrequently: true })
+            let detecting = false
+            nativeTimer = setInterval(async () => {
+              if (cancelled || detecting || detectBusyRef.current || pausedRef.current || phaseRef.current !== 'scan') return
+              const vid = document.getElementById('bf-reader-region')?.querySelector('video')
+              if (!vid || vid.readyState < 2 || !vid.videoWidth) return
+              detecting = true
+              try {
+                grab.width = vid.videoWidth
+                grab.height = vid.videoHeight
+                gctx.drawImage(vid, 0, 0)
+                const found = await det.detect(grab)
+                const hit = (found || []).find(b => String(b.rawValue || '').trim())
+                if (hit && !cancelled) handleDetect(hit.rawValue)
+              } catch { /* frame not ready — try again next tick */ }
+              detecting = false
+            }, 250)
+          }
+        } catch { /* wasm decoder unavailable — html5-qrcode still runs */ }
         // Close-up focus + exposure for fridges / dim dry stores (best-effort)
         const tuneCamera = () => {
           try {
@@ -1271,6 +1328,8 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
     })()
     return () => {
       cancelled = true
+      document.removeEventListener('pointerdown', onFirstTap)
+      document.removeEventListener('touchstart', onFirstTap)
       if (nativeTimer) { clearInterval(nativeTimer); nativeTimer = null }
       const s = scannerRef.current
       if (s) { try { s.stop().then(() => s.clear()).catch(() => {}) } catch {} ; scannerRef.current = null }

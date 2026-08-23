@@ -6581,3 +6581,32 @@ agent_communication:
         
         All endpoints working correctly with real production Supabase DB. Test data cleaned up successfully.
         No critical issues found. Feature is production-ready.
+
+frontend:
+  - task: "Barcode scan never completes on iPhone (stuck on Watching)"
+    implemented: true
+    working: "NA"
+    file: "components/shelfwise/scanners.jsx, package.json (barcode-detector)"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            ROOT CAUSE (user screenshots showed iPhone/iOS): iOS Safari has NO native BarcodeDetector,
+            so previous fix silently fell back to html5-qrcode's ZXing-JS decoder which fails on EAN-13.
+            FIX: installed barcode-detector@3.2.2 (zxing-wasm ponyfill). Scanner loop now: native
+            BarcodeDetector if it supports ean_13 (Android Chrome), else wasm ponyfill (iOS/everything).
+            Each 250ms tick grabs video frame via drawImage->canvas->detect (most reliable iOS path).
+            Added supermarket checkout beep (WebAudio, unlocked on first tap) + kept vibration.
+            VERIFIED: temp in-browser test page decoded user's exact barcode 5060336506244 (EAN-13
+            drawn on canvas) via wasm ponyfill = PASS 210ms. Full dialog regression: decode->instant
+            advance, Add mode, Use mode (not-in-stock branch), skip/rescan all PASS via screenshot tool.
+            Real iPhone camera verification pending by USER.
+
+agent_communication:
+    - agent: "main"
+      message: |
+        iPhone barcode fix shipped (zxing-wasm ponyfill decoder + frame-grab loop + beep).
+        Frontend-only change, no backend testing needed. Awaiting user verification on real iPhone.
