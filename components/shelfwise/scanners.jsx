@@ -1027,9 +1027,11 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
   const productsRef = useRef([])
   const detectBusyRef = useRef(false)
   const pausedRef = useRef(false)
+  const phaseRef = useRef('scan')
   const onDoneRef = useRef(onDone)
   useEffect(() => { onDoneRef.current = onDone }, [onDone])
   useEffect(() => { modeRef.current = mode }, [mode])
+  useEffect(() => { phaseRef.current = phase }, [phase])
 
   const pauseScanner = () => {
     try { if (scannerRef.current && !pausedRef.current) { scannerRef.current.pause(true); pausedRef.current = true } } catch {}
@@ -1038,16 +1040,20 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
     try { if (scannerRef.current && pausedRef.current) { scannerRef.current.resume(); pausedRef.current = false } } catch {}
   }
   const scanNext = () => {
-    setPhase('scan'); setPrefill(null); setUseTarget(null); setCode('')
+    setPhase('scan'); phaseRef.current = 'scan'
+    setPrefill(null); setUseTarget(null); setCode('')
     detectBusyRef.current = false
     resumeScanner()
   }
 
   // ---- detection brain ----
-  const handleDetect = async (raw) => {
+  // force=true lets "Add it instead" re-run the code from a non-scan phase.
+  const handleDetect = async (raw, force = false) => {
     const c = String(raw || '').trim()
     if (!c || detectBusyRef.current) return
+    if (!force && phaseRef.current !== 'scan') return   // ignore late decoder callbacks once we've moved on
     detectBusyRef.current = true
+    phaseRef.current = 'handling'
     try { navigator.vibrate?.(60) } catch {}
     pauseScanner()
     setCode(c)
@@ -1164,14 +1170,15 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
   const addInstead = () => {
     setMode('add'); modeRef.current = 'add'
     detectBusyRef.current = false
-    handleDetect(code)
+    handleDetect(code, true)
   }
 
   // ---- camera lifecycle: start once per open, pause/resume between scans ----
   useEffect(() => {
     if (!open) return
     setMode(initialMode); modeRef.current = initialMode
-    setPhase('scan'); setPrefill(null); setUseTarget(null); setCode('')
+    setPhase('scan'); phaseRef.current = 'scan'
+    setPrefill(null); setUseTarget(null); setCode('')
     setScannerError(''); setShowManual(false); setManualCode('')
     setTorchOn(false); setHasTorch(false); setScanning(false)
     detectBusyRef.current = false
@@ -1182,6 +1189,7 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
 
     let cancelled = false
     let scanner
+    let nativeTimer = null
     ;(async () => {
       try {
         const mod = await import('html5-qrcode')
@@ -1195,17 +1203,44 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
             Html5QrcodeSupportedFormats.CODE_93, Html5QrcodeSupportedFormats.ITF,
             Html5QrcodeSupportedFormats.QR_CODE, Html5QrcodeSupportedFormats.DATA_MATRIX,
           ],
+          // Native hardware decoder (Chrome/Android) — MUCH better at 1D
+          // EAN/UPC grocery barcodes than the default JS decoder, and the
+          // reason "boxed but never confirms" happened: the JS decoder was
+          // silently failing to decode what the eye clearly sees.
+          experimentalFeatures: { useBarCodeDetectorIfSupported: true },
           verbose: false,
         })
         scannerRef.current = scanner
         await scanner.start(
           { facingMode: 'environment' },
-          { fps: 20, aspectRatio: 1.333, videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } },
+          { fps: 10, videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } },
           (decoded) => { if (!cancelled) handleDetect(decoded) },
           () => {}
         )
         if (cancelled) return
         setScanning(true)
+        // ---- Guaranteed completion path: our OWN native BarcodeDetector loop
+        // runs alongside html5-qrcode. The instant EITHER decodes a value,
+        // handleDetect fires and the flow advances automatically. ----
+        try {
+          if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+            const supported = (await window.BarcodeDetector.getSupportedFormats?.()) || []
+            const want = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'itf', 'qr_code', 'data_matrix'].filter(f => supported.includes(f))
+            if (want.length) {
+              const det = new window.BarcodeDetector({ formats: want })
+              nativeTimer = setInterval(async () => {
+                if (cancelled || detectBusyRef.current || pausedRef.current || phaseRef.current !== 'scan') return
+                const vid = document.getElementById('bf-reader-region')?.querySelector('video')
+                if (!vid || vid.readyState < 2) return
+                try {
+                  const found = await det.detect(vid)
+                  const hit = (found || []).find(b => String(b.rawValue || '').trim())
+                  if (hit && !cancelled) handleDetect(hit.rawValue)
+                } catch { /* frame not ready — try again next tick */ }
+              }, 300)
+            }
+          }
+        } catch { /* native detector unavailable — html5-qrcode still runs */ }
         // Close-up focus + exposure for fridges / dim dry stores (best-effort)
         const tuneCamera = () => {
           try {
@@ -1236,6 +1271,7 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
     })()
     return () => {
       cancelled = true
+      if (nativeTimer) { clearInterval(nativeTimer); nativeTimer = null }
       const s = scannerRef.current
       if (s) { try { s.stop().then(() => s.clear()).catch(() => {}) } catch {} ; scannerRef.current = null }
     }

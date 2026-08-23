@@ -121,3 +121,4 @@ nav; header identity badge works for both. Production needs REDEPLOY.
 - Monthly Spend Totals on Receipts screen
 - Xero integration (parked — needs user credentials)
 - Google Play TWA prep; Stripe subscriptions (parked)
+- **Barcode "boxed but never confirms" fix**: Root cause — html5-qrcode's default JS (ZXing) decoder silently fails on 1D EAN/UPC grocery barcodes. Fixes in scanners.jsx BarcodeFlowDialog: (1) enabled experimentalFeatures.useBarCodeDetectorIfSupported (native hardware decoder), (2) added independent native window.BarcodeDetector polling loop (300ms) on the video element — the instant EITHER decoder reads a value, handleDetect fires and flow auto-advances, (3) fps 20→10 (stops decoder starvation), removed aspectRatio/videoConstraints conflict, (4) added phaseRef guard so late decoder callbacks can't re-trigger after advancing; addInstead uses force flag. Verified via headless UI test (manual decode path, skip/rescan cycle).
