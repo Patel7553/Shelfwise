@@ -1102,8 +1102,22 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
     }
 
     // ---- ADD mode ----
+    // Supplier link is PERMANENT: inherit it from the barcode memory, or from
+    // any existing inventory row with this barcode/name, so every future scan
+    // keeps the same supplier without reassigning.
+    const inheritSupplier = (bc, nm) => {
+      const n = String(nm || '').toLowerCase().trim()
+      const list = productsRef.current || []
+      const byCode = list.find(p => p?.customFields?.barcode === bc && String(p.supplier || '').trim())
+      if (byCode) return byCode.supplier
+      const byName = n && list.find(p => String(p.supplier || '').trim() && String(p.name || '').toLowerCase().trim() === n)
+      return byName ? byName.supplier : ''
+    }
     if (remembered || prodByBarcode) {
-      const src = remembered || { name: prodByBarcode.name, unit: prodByBarcode.unit || 'ea', category: prodByBarcode.category || '', storageType: prodByBarcode.storageType || 'Fridge' }
+      const src = remembered
+        ? { ...remembered }
+        : { name: prodByBarcode.name, unit: prodByBarcode.unit || 'ea', category: prodByBarcode.category || '', storageType: prodByBarcode.storageType || 'Fridge', supplier: prodByBarcode.supplier || '' }
+      if (!String(src.supplier || '').trim()) src.supplier = inheritSupplier(c, src.name)
       setPrefill({ ...src, known: true })
       setQty('1'); setExpiry(''); setNote('')
       setPhase('confirm')
@@ -1126,11 +1140,12 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
       }
     } catch { /* offline / slow — fall through to the quick form, silently */ }
     setQty('1'); setExpiry(''); setNote('')
+    const inherited = inheritSupplier(c, name)
     if (name) {
-      setPrefill({ name: name.slice(0, 120), unit: 'ea', category: '', storageType: 'Fridge', known: false })
+      setPrefill({ name: name.slice(0, 120), unit: 'ea', category: '', storageType: 'Fridge', supplier: inherited, known: false })
       setPhase('confirm')
     } else {
-      setPrefill({ name: '', unit: 'ea', category: '', storageType: 'Fridge', known: false })
+      setPrefill({ name: '', unit: 'ea', category: '', storageType: 'Fridge', supplier: inherited, known: false })
       setPhase('create')           // neutral one-time form — NOT an error
     }
     detectBusyRef.current = false
@@ -1153,17 +1168,19 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
           dateReceived: new Date().toLocaleDateString('en-CA'),
           ...(expiry ? { expiryDate: expiry } : {}),
           ...(note.trim() ? { note: note.trim() } : {}),
+          ...(String(prefill.supplier || '').trim() ? { supplier: String(prefill.supplier).trim() } : {}),
           customFields: { barcode: code },
         }),
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d.error || 'Could not add the item')
       // Remember permanently (kitchen-wide) — background, non-blocking
+      const memo = { code, name, unit: prefill.unit || 'ea', category: prefill.category || '', storageType: prefill.storageType || 'Fridge', supplier: String(prefill.supplier || '').trim() }
       fetch('/api/barcodes', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, name, unit: prefill.unit || 'ea', category: prefill.category || '', storageType: prefill.storageType || 'Fridge' }),
+        body: JSON.stringify(memo),
       }).catch(() => {})
-      mapRef.current[code] = { name, unit: prefill.unit || 'ea', category: prefill.category || '', storageType: prefill.storageType || 'Fridge' }
+      mapRef.current[code] = { name: memo.name, unit: memo.unit, category: memo.category, storageType: memo.storageType, supplier: memo.supplier }
       if (d?.id) productsRef.current = [...productsRef.current, d]
       toast.success(`${name} added to inventory ✓`)
       onDoneRef.current?.()

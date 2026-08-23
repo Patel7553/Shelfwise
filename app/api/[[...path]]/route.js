@@ -5302,6 +5302,7 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
           unit: String(body.unit || 'ea').slice(0, 20),
           category: String(body.category || '').slice(0, 40),
           storageType: String(body.storageType || 'Fridge').slice(0, 30),
+          supplier: String(body.supplier || '').trim().slice(0, 120),
           savedAt: new Date().toISOString(),
         }
         // Keep the newest 5000 entries
