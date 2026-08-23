@@ -1013,6 +1013,7 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
   const [useTarget, setUseTarget] = useState(null)           // product being deducted
   const [qty, setQty] = useState('1')
   const [expiry, setExpiry] = useState('')
+  const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [scannerError, setScannerError] = useState('')
@@ -1104,7 +1105,7 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
     if (remembered || prodByBarcode) {
       const src = remembered || { name: prodByBarcode.name, unit: prodByBarcode.unit || 'ea', category: prodByBarcode.category || '', storageType: prodByBarcode.storageType || 'Fridge' }
       setPrefill({ ...src, known: true })
-      setQty('1'); setExpiry('')
+      setQty('1'); setExpiry(''); setNote('')
       setPhase('confirm')
       detectBusyRef.current = false
       return
@@ -1124,7 +1125,7 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
         if (name && p?.quantity && !name.toLowerCase().includes(String(p.quantity).toLowerCase())) name = `${name} ${p.quantity}`
       }
     } catch { /* offline / slow — fall through to the quick form, silently */ }
-    setQty('1'); setExpiry('')
+    setQty('1'); setExpiry(''); setNote('')
     if (name) {
       setPrefill({ name: name.slice(0, 120), unit: 'ea', category: '', storageType: 'Fridge', known: false })
       setPhase('confirm')
@@ -1151,6 +1152,7 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
           storageType: prefill.storageType || 'Fridge',
           dateReceived: new Date().toLocaleDateString('en-CA'),
           ...(expiry ? { expiryDate: expiry } : {}),
+          ...(note.trim() ? { note: note.trim() } : {}),
           customFields: { barcode: code },
         }),
       })
@@ -1427,9 +1429,28 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
         {phase === 'confirm' && prefill && (
           <div className="space-y-3">
             <div className={`rounded-lg px-3 py-2 text-xs font-semibold ${prefill.known ? 'bg-emerald-50 border border-emerald-200 text-emerald-800' : 'bg-sky-50 border border-sky-200 text-sky-800'}`}>
-              {prefill.known ? '✅ Known item — just confirm the quantity' : '🌍 Found on Open Food Facts — confirm and it\'s remembered forever'}
+              {prefill.known ? '✅ Known item — pre-filled from last time, adjust anything if needed' : '🌍 Found on Open Food Facts — confirm and it\'s remembered forever'}
             </div>
             <Input value={prefill.name} onChange={e => setPrefill(p => ({ ...p, name: e.target.value }))} className="font-semibold" />
+            {/* Unit & Stored in — ALWAYS visible & editable (pre-filled with
+                last-used values) so staff can adjust per delivery. */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-xs">Unit</Label>
+                <select value={prefill.unit || 'ea'} onChange={e => setPrefill(p => ({ ...p, unit: e.target.value }))}
+                  className="mt-1 h-10 w-full rounded-md border border-input bg-white px-2 text-sm">
+                  {BF_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                  {prefill.unit && !BF_UNITS.includes(prefill.unit) && <option value={prefill.unit}>{prefill.unit}</option>}
+                </select>
+              </div>
+              <div>
+                <Label className="text-xs">Stored in</Label>
+                <select value={prefill.storageType || 'Fridge'} onChange={e => setPrefill(p => ({ ...p, storageType: e.target.value }))}
+                  className="mt-1 h-10 w-full rounded-md border border-input bg-white px-2 text-sm">
+                  {['Fridge', 'Freezer', 'Dry Storage', 'Prep Area'].map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            </div>
             <div>
               <Label className="text-xs">Quantity ({prefill.unit || 'ea'})</Label>
               <div className="mt-1">{qtyStepper}</div>
@@ -1437,6 +1458,10 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
             <div>
               <Label className="text-xs">Expiry date (optional)</Label>
               <Input type="date" value={expiry} onChange={e => setExpiry(e.target.value)} className="mt-1" />
+            </div>
+            <div>
+              <Label className="text-xs">Note (optional)</Label>
+              <Input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. large tub this time, not standard size" className="mt-1" maxLength={500} />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <Button variant="outline" onClick={scanNext} disabled={busy}>Skip — scan next</Button>
@@ -1476,6 +1501,10 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
             <div>
               <Label className="text-xs">Expiry date (optional)</Label>
               <Input type="date" value={expiry} onChange={e => setExpiry(e.target.value)} className="mt-1" />
+            </div>
+            <div>
+              <Label className="text-xs">Note (optional)</Label>
+              <Input value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. large tub this time, not standard size" className="mt-1" maxLength={500} />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <Button variant="outline" onClick={scanNext} disabled={busy}>Skip — scan next</Button>
