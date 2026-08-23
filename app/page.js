@@ -25,7 +25,7 @@ const fetch = apiFetch
 
 // ---- Refactored (June 2025): views/dialogs now live in /components/shelfwise/ ----
 import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText, safeJson } from '@/components/shelfwise/shared'
-import { ReceiptScanDialog, ExpiryScanDialog, BarcodeScanDialog, LensCameraView } from '@/components/shelfwise/scanners'
+import { ReceiptScanDialog, ExpiryScanDialog, BarcodeFlowDialog, LensCameraView } from '@/components/shelfwise/scanners'
 import { PrintLogbookDialog } from '@/components/shelfwise/logbook-print'
 import { DashboardView, UseTodayPanel, RecentItemsToday, ExpiryAlertBanner, UrgentList } from '@/components/shelfwise/dashboard'
 import { RecipeResult, RecipesView, WebRecipeCard, ViewRecipeDialog, RecipeGenDialog } from '@/components/shelfwise/recipes'
@@ -1169,8 +1169,10 @@ function App() {
   }
 
 
-  const openBarcode = () => {
+  const [barcodeMode, setBarcodeMode] = useState('add')
+  const openBarcode = (mode = 'add') => {
     setBarcodeValue('')
+    setBarcodeMode(mode === 'use' ? 'use' : 'add')
     setBarcodeOpen(true)
   }
 
@@ -2903,12 +2905,13 @@ function App() {
 
 
       {/* Barcode Scanner Dialog */}
-      <BarcodeScanDialog
+      {/* Barcode flow (Aug 2026 rebuild): continuous auto-scan, permanent
+          per-kitchen barcode memory, Open Food Facts only, add/use modes */}
+      <BarcodeFlowDialog
         open={barcodeOpen}
+        initialMode={barcodeMode}
         onClose={() => setBarcodeOpen(false)}
-        onFound={onBarcodeFound}
-        loading={barcodeLoading}
-        onManual={(code) => onBarcodeFound(code)}
+        onDone={() => { fetchProducts(); fetchStats() }}
       />
 
       {/* AI-Vision fallback for barcode scanner — user snaps front of pack */}

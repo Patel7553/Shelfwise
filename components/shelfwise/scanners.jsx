@@ -993,3 +993,441 @@ export function LensCameraView({ active, busy, frozenImage, onCapture, onGallery
     </div>
   )
 }
+
+// ===========================================================================
+// BARCODE FLOW (Aug 2026 rebuild) — continuous auto-scan for Add / Use stock.
+//  • Camera constantly watches; fires the instant a barcode is in frame
+//  • Known barcode  -> confirm quantity only (memory is permanent per kitchen)
+//  • First-time     -> Open Food Facts ONLY (no other databases, no key), else
+//                      a quick one-time name form. NEVER a "not found" error.
+//  • Use mode       -> matches inventory, confirm quantity, tap Use;
+//                      no match -> friendly "Not currently in stock" + Add
+//  • Skip is always available — missed items reconcile via normal recounts
+// ===========================================================================
+const BF_UNITS = ['ea', 'kg', 'g', 'L', 'mL', 'pack', 'box', 'bunch']
+export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }) {
+  const [mode, setMode] = useState(initialMode)              // 'add' | 'use'
+  const [phase, setPhase] = useState('scan')                 // scan|lookup|confirm|create|use|notstock
+  const [code, setCode] = useState('')
+  const [prefill, setPrefill] = useState(null)               // {name, unit, category, storageType, known}
+  const [useTarget, setUseTarget] = useState(null)           // product being deducted
+  const [qty, setQty] = useState('1')
+  const [expiry, setExpiry] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [scanning, setScanning] = useState(false)
+  const [scannerError, setScannerError] = useState('')
+  const [torchOn, setTorchOn] = useState(false)
+  const [hasTorch, setHasTorch] = useState(false)
+  const [showManual, setShowManual] = useState(false)
+  const [manualCode, setManualCode] = useState('')
+
+  const scannerRef = useRef(null)
+  const modeRef = useRef(initialMode)
+  const mapRef = useRef({})
+  const productsRef = useRef([])
+  const detectBusyRef = useRef(false)
+  const pausedRef = useRef(false)
+  const onDoneRef = useRef(onDone)
+  useEffect(() => { onDoneRef.current = onDone }, [onDone])
+  useEffect(() => { modeRef.current = mode }, [mode])
+
+  const pauseScanner = () => {
+    try { if (scannerRef.current && !pausedRef.current) { scannerRef.current.pause(true); pausedRef.current = true } } catch {}
+  }
+  const resumeScanner = () => {
+    try { if (scannerRef.current && pausedRef.current) { scannerRef.current.resume(); pausedRef.current = false } } catch {}
+  }
+  const scanNext = () => {
+    setPhase('scan'); setPrefill(null); setUseTarget(null); setCode('')
+    detectBusyRef.current = false
+    resumeScanner()
+  }
+
+  // ---- detection brain ----
+  const handleDetect = async (raw) => {
+    const c = String(raw || '').trim()
+    if (!c || detectBusyRef.current) return
+    detectBusyRef.current = true
+    try { navigator.vibrate?.(60) } catch {}
+    pauseScanner()
+    setCode(c)
+    const remembered = mapRef.current[c]
+    const prodByBarcode = productsRef.current.find(p => String(p.customFields?.barcode || '') === c)
+
+    if (modeRef.current === 'use') {
+      const target = prodByBarcode
+        || (remembered ? productsRef.current.find(p => String(p.name || '').toLowerCase() === String(remembered.name || '').toLowerCase()) : null)
+      if (target && Number(target.quantity) > 0) {
+        setUseTarget(target); setQty('1'); setPhase('use')
+      } else {
+        setPrefill(remembered ? { ...remembered, known: true } : null)
+        setPhase('notstock')       // friendly option to add — never an error
+      }
+      detectBusyRef.current = false
+      return
+    }
+
+    // ---- ADD mode ----
+    if (remembered || prodByBarcode) {
+      const src = remembered || { name: prodByBarcode.name, unit: prodByBarcode.unit || 'ea', category: prodByBarcode.category || '', storageType: prodByBarcode.storageType || 'Fridge' }
+      setPrefill({ ...src, known: true })
+      setQty('1'); setExpiry('')
+      setPhase('confirm')
+      detectBusyRef.current = false
+      return
+    }
+    // First time ever: Open Food Facts ONLY (free, no key) — then remember forever
+    setPhase('lookup')
+    let name = ''
+    try {
+      const ctrl = new AbortController()
+      const t = setTimeout(() => ctrl.abort(), 4000)
+      const res = await window.fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(c)}.json?fields=product_name,product_name_en,generic_name,quantity`, { signal: ctrl.signal })
+      clearTimeout(t)
+      if (res.ok) {
+        const d = await res.json().catch(() => null)
+        const p = d?.product
+        name = (p?.product_name || p?.product_name_en || p?.generic_name || '').trim()
+        if (name && p?.quantity && !name.toLowerCase().includes(String(p.quantity).toLowerCase())) name = `${name} ${p.quantity}`
+      }
+    } catch { /* offline / slow — fall through to the quick form, silently */ }
+    setQty('1'); setExpiry('')
+    if (name) {
+      setPrefill({ name: name.slice(0, 120), unit: 'ea', category: '', storageType: 'Fridge', known: false })
+      setPhase('confirm')
+    } else {
+      setPrefill({ name: '', unit: 'ea', category: '', storageType: 'Fridge', known: false })
+      setPhase('create')           // neutral one-time form — NOT an error
+    }
+    detectBusyRef.current = false
+  }
+
+  // ---- save: add to inventory (+ remember the barcode permanently) ----
+  const saveAdd = async () => {
+    const name = String(prefill?.name || '').trim()
+    if (!name) { toast.error('Give it a name first'); return }
+    setBusy(true)
+    try {
+      const res = await fetch('/api/products', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          quantity: Number(qty) > 0 ? Number(qty) : 1,
+          unit: prefill.unit || 'ea',
+          category: prefill.category || '',
+          storageType: prefill.storageType || 'Fridge',
+          dateReceived: new Date().toLocaleDateString('en-CA'),
+          ...(expiry ? { expiryDate: expiry } : {}),
+          customFields: { barcode: code },
+        }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Could not add the item')
+      // Remember permanently (kitchen-wide) — background, non-blocking
+      fetch('/api/barcodes', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, name, unit: prefill.unit || 'ea', category: prefill.category || '', storageType: prefill.storageType || 'Fridge' }),
+      }).catch(() => {})
+      mapRef.current[code] = { name, unit: prefill.unit || 'ea', category: prefill.category || '', storageType: prefill.storageType || 'Fridge' }
+      if (d?.id) productsRef.current = [...productsRef.current, d]
+      toast.success(`${name} added to inventory ✓`)
+      onDoneRef.current?.()
+      scanNext()
+    } catch (e) { toast.error(e.message) } finally { setBusy(false) }
+  }
+
+  // ---- save: use / deduct stock ----
+  const saveUse = async () => {
+    const used = Number(qty)
+    if (!Number.isFinite(used) || used <= 0) { toast.error('Enter how much was used'); return }
+    setBusy(true)
+    try {
+      const res = await fetch('/api/usage/apply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: [{ id: useTarget.id, used }] }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Could not update stock')
+      const r = (d.results || [])[0] || {}
+      if (r.removed) {
+        toast.success(`${useTarget.name}: all used — removed from inventory`)
+        productsRef.current = productsRef.current.filter(p => p.id !== useTarget.id)
+      } else {
+        toast.success(`${useTarget.name}: −${used} ${useTarget.unit || ''} → ${r.to ?? '?'} left`)
+        productsRef.current = productsRef.current.map(p => p.id === useTarget.id ? { ...p, quantity: r.to } : p)
+      }
+      onDoneRef.current?.()
+      scanNext()
+    } catch (e) { toast.error(e.message) } finally { setBusy(false) }
+  }
+
+  const addInstead = () => {
+    setMode('add'); modeRef.current = 'add'
+    detectBusyRef.current = false
+    handleDetect(code)
+  }
+
+  // ---- camera lifecycle: start once per open, pause/resume between scans ----
+  useEffect(() => {
+    if (!open) return
+    setMode(initialMode); modeRef.current = initialMode
+    setPhase('scan'); setPrefill(null); setUseTarget(null); setCode('')
+    setScannerError(''); setShowManual(false); setManualCode('')
+    setTorchOn(false); setHasTorch(false); setScanning(false)
+    detectBusyRef.current = false
+    pausedRef.current = false
+    // preload barcode memory + current inventory (instant local matching)
+    fetch('/api/barcodes').then(r => r.json()).then(m => { if (m && typeof m === 'object') mapRef.current = m }).catch(() => {})
+    fetch('/api/products').then(r => r.json()).then(list => { if (Array.isArray(list)) productsRef.current = list }).catch(() => {})
+
+    let cancelled = false
+    let scanner
+    ;(async () => {
+      try {
+        const mod = await import('html5-qrcode')
+        if (cancelled) return
+        const { Html5Qrcode, Html5QrcodeSupportedFormats } = mod
+        scanner = new Html5Qrcode('bf-reader-region', {
+          formatsToSupport: [
+            Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
+            Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E,
+            Html5QrcodeSupportedFormats.CODE_128, Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.CODE_93, Html5QrcodeSupportedFormats.ITF,
+            Html5QrcodeSupportedFormats.QR_CODE, Html5QrcodeSupportedFormats.DATA_MATRIX,
+          ],
+          verbose: false,
+        })
+        scannerRef.current = scanner
+        await scanner.start(
+          { facingMode: 'environment' },
+          { fps: 20, aspectRatio: 1.333, videoConstraints: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } },
+          (decoded) => { if (!cancelled) handleDetect(decoded) },
+          () => {}
+        )
+        if (cancelled) return
+        setScanning(true)
+        // Close-up focus + exposure for fridges / dim dry stores (best-effort)
+        const tuneCamera = () => {
+          try {
+            const vid = document.getElementById('bf-reader-region')?.querySelector('video')
+            const stream = vid?.srcObject
+            if (!stream) return
+            resetCameraZoom(stream)
+            const track = stream.getVideoTracks?.()[0]
+            const caps = track?.getCapabilities?.() || {}
+            const adv = []
+            if (Array.isArray(caps.focusMode) && caps.focusMode.includes('continuous')) adv.push({ focusMode: 'continuous' })
+            if (Array.isArray(caps.exposureMode) && caps.exposureMode.includes('continuous')) adv.push({ exposureMode: 'continuous' })
+            if (Array.isArray(caps.whiteBalanceMode) && caps.whiteBalanceMode.includes('continuous')) adv.push({ whiteBalanceMode: 'continuous' })
+            if (adv.length) track.applyConstraints({ advanced: adv }).catch(() => {})
+          } catch {}
+        }
+        tuneCamera(); setTimeout(tuneCamera, 700); setTimeout(tuneCamera, 2000)
+        try {
+          const caps = scanner.getRunningTrackCameraCapabilities?.()
+          if (caps && typeof caps.torchFeature === 'function') {
+            const f = caps.torchFeature()
+            if (f?.isSupported && f.isSupported()) setHasTorch(true)
+          }
+        } catch {}
+      } catch {
+        if (!cancelled) { setScannerError('Camera unavailable — allow camera access, or type the digits below.'); setShowManual(true) }
+      }
+    })()
+    return () => {
+      cancelled = true
+      const s = scannerRef.current
+      if (s) { try { s.stop().then(() => s.clear()).catch(() => {}) } catch {} ; scannerRef.current = null }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  const toggleTorch = async () => {
+    try {
+      const caps = scannerRef.current?.getRunningTrackCameraCapabilities?.()
+      if (caps?.torchFeature) { await caps.torchFeature().apply(!torchOn); setTorchOn(!torchOn) }
+    } catch {}
+  }
+
+  const switchMode = (m) => {
+    if (m === mode) return
+    setMode(m); modeRef.current = m
+    if (phase !== 'scan') scanNext()
+  }
+
+  const qtyStepper = (
+    <div className="flex items-center justify-center gap-3">
+      <button type="button" onClick={() => setQty(q => String(Math.max(0.5, (Number(q) || 1) - 1)))}
+        className="h-11 w-11 rounded-full border-2 border-slate-300 text-slate-700 text-xl font-bold">−</button>
+      <Input type="number" min="0.1" step="0.5" value={qty} onChange={e => setQty(e.target.value)}
+        className="h-11 w-24 text-center text-lg font-bold" />
+      <button type="button" onClick={() => setQty(q => String((Number(q) || 0) + 1))}
+        className="h-11 w-11 rounded-full bg-emerald-600 text-white text-xl font-bold">+</button>
+    </div>
+  )
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-[520px] max-h-[92vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ScanLine className="h-5 w-5 text-emerald-600" /> Scan barcode
+          </DialogTitle>
+        </DialogHeader>
+
+        {/* Mode toggle */}
+        <div className="grid grid-cols-2 gap-1.5 rounded-lg border p-1 bg-slate-50">
+          <button type="button" onClick={() => switchMode('add')}
+            className={`rounded-md px-2 py-2 text-sm font-bold transition ${mode === 'add' ? 'bg-emerald-600 text-white shadow' : 'text-slate-500'}`}>➕ Add stock</button>
+          <button type="button" onClick={() => switchMode('use')}
+            className={`rounded-md px-2 py-2 text-sm font-bold transition ${mode === 'use' ? 'bg-indigo-600 text-white shadow' : 'text-slate-500'}`}>➖ Use stock</button>
+        </div>
+
+        {/* Camera — always mounted so it stays warm between scans */}
+        <div className={`rounded-xl overflow-hidden bg-black relative w-full ${phase === 'scan' ? '' : 'hidden'}`} style={{ aspectRatio: '4/3', minHeight: '260px' }}>
+          <div id="bf-reader-region" />
+          {!scannerError && (
+            <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-10">
+              <div className={`w-[82%] h-[42%] border-[3px] rounded-lg shadow-lg ${mode === 'add' ? 'border-emerald-400' : 'border-indigo-400'}`}></div>
+            </div>
+          )}
+          {scanning && (
+            <p className="absolute top-2 left-1/2 -translate-x-1/2 z-10 text-[11px] font-semibold text-white bg-black/50 rounded-full px-3 py-1">
+              👀 Watching — just show it the barcode
+            </p>
+          )}
+          {hasTorch && scanning && (
+            <button type="button" onClick={toggleTorch}
+              className={`absolute bottom-3 right-3 h-10 w-10 rounded-full flex items-center justify-center text-xl shadow-lg transition z-10 ${torchOn ? 'bg-amber-400 text-white' : 'bg-white/90 text-slate-800'}`}
+              aria-label="Toggle torch">💡</button>
+          )}
+        </div>
+
+        {phase === 'scan' && (
+          <>
+            {scannerError && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">{scannerError}</p>}
+            <div className="flex items-center justify-between gap-2">
+              <button type="button" className="text-xs text-emerald-700 underline" onClick={() => setShowManual(s => !s)}>
+                {showManual ? 'Hide manual entry' : '⌨️ Type digits instead'}
+              </button>
+              <Button variant="outline" size="sm" onClick={onClose}>Done — close scanner</Button>
+            </div>
+            {showManual && (
+              <div className="flex gap-2">
+                <Input value={manualCode} onChange={e => setManualCode(e.target.value.replace(/[^0-9A-Za-z]/g, ''))} placeholder="Barcode digits…" inputMode="numeric" className="flex-1" />
+                <Button onClick={() => { if (manualCode.trim()) handleDetect(manualCode.trim()) }} disabled={!manualCode.trim()} className="bg-emerald-600 hover:bg-emerald-700">Go</Button>
+              </div>
+            )}
+          </>
+        )}
+
+        {phase === 'lookup' && (
+          <div className="text-center py-8">
+            <Loader2 className="h-7 w-7 mx-auto animate-spin text-emerald-500" />
+            <p className="text-sm text-muted-foreground mt-2">First time seeing this one — checking Open Food Facts…</p>
+            <Button variant="ghost" size="sm" className="mt-2 text-slate-400" onClick={scanNext}>Skip — scan next</Button>
+          </div>
+        )}
+
+        {phase === 'confirm' && prefill && (
+          <div className="space-y-3">
+            <div className={`rounded-lg px-3 py-2 text-xs font-semibold ${prefill.known ? 'bg-emerald-50 border border-emerald-200 text-emerald-800' : 'bg-sky-50 border border-sky-200 text-sky-800'}`}>
+              {prefill.known ? '✅ Known item — just confirm the quantity' : '🌍 Found on Open Food Facts — confirm and it\'s remembered forever'}
+            </div>
+            <Input value={prefill.name} onChange={e => setPrefill(p => ({ ...p, name: e.target.value }))} className="font-semibold" />
+            <div>
+              <Label className="text-xs">Quantity ({prefill.unit || 'ea'})</Label>
+              <div className="mt-1">{qtyStepper}</div>
+            </div>
+            <div>
+              <Label className="text-xs">Expiry date (optional)</Label>
+              <Input type="date" value={expiry} onChange={e => setExpiry(e.target.value)} className="mt-1" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="outline" onClick={scanNext} disabled={busy}>Skip — scan next</Button>
+              <Button onClick={saveAdd} disabled={busy} className="bg-emerald-600 hover:bg-emerald-700">
+                {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />} Add to inventory
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {phase === 'create' && prefill && (
+          <div className="space-y-3">
+            <div className="rounded-lg bg-indigo-50 border border-indigo-200 px-3 py-2 text-xs font-semibold text-indigo-800">
+              🆕 New barcode — name it once and it's remembered forever
+            </div>
+            <Input autoFocus value={prefill.name} onChange={e => setPrefill(p => ({ ...p, name: e.target.value }))} placeholder="What is it? e.g. Double Cream 1L" className="font-semibold" />
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-xs">Unit</Label>
+                <select value={prefill.unit} onChange={e => setPrefill(p => ({ ...p, unit: e.target.value }))}
+                  className="mt-1 h-10 w-full rounded-md border border-input bg-white px-2 text-sm">
+                  {BF_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </div>
+              <div>
+                <Label className="text-xs">Stored in</Label>
+                <select value={prefill.storageType} onChange={e => setPrefill(p => ({ ...p, storageType: e.target.value }))}
+                  className="mt-1 h-10 w-full rounded-md border border-input bg-white px-2 text-sm">
+                  {['Fridge', 'Freezer', 'Dry Storage', 'Prep Area'].map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs">Quantity ({prefill.unit || 'ea'})</Label>
+              <div className="mt-1">{qtyStepper}</div>
+            </div>
+            <div>
+              <Label className="text-xs">Expiry date (optional)</Label>
+              <Input type="date" value={expiry} onChange={e => setExpiry(e.target.value)} className="mt-1" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="outline" onClick={scanNext} disabled={busy}>Skip — scan next</Button>
+              <Button onClick={saveAdd} disabled={busy || !String(prefill.name || '').trim()} className="bg-emerald-600 hover:bg-emerald-700">
+                {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />} Add & remember
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {phase === 'use' && useTarget && (
+          <div className="space-y-3">
+            <div className="rounded-lg bg-indigo-50 border border-indigo-200 px-3 py-2">
+              <p className="font-bold text-sm">{useTarget.name}</p>
+              <p className="text-xs text-indigo-700">{useTarget.quantity} {useTarget.unit || ''} currently in stock</p>
+            </div>
+            <div>
+              <Label className="text-xs">How much was used? ({useTarget.unit || 'ea'})</Label>
+              <div className="mt-1">{qtyStepper}</div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="outline" onClick={scanNext} disabled={busy}>Skip — scan next</Button>
+              <Button onClick={saveUse} disabled={busy} className="bg-indigo-600 hover:bg-indigo-700">
+                {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Check className="h-4 w-4 mr-2" />} Use it
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {phase === 'notstock' && (
+          <div className="space-y-3 text-center py-2">
+            <p className="text-3xl">🤷</p>
+            <p className="font-bold text-sm">{prefill?.name ? `"${prefill.name}"` : 'This item'} isn't currently in stock</p>
+            <p className="text-xs text-muted-foreground">No problem — you can add it as new stock instead, or just keep scanning.</p>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="outline" onClick={scanNext}>Scan next</Button>
+              <Button onClick={addInstead} className="bg-emerald-600 hover:bg-emerald-700">
+                <Plus className="h-4 w-4 mr-2" /> Add it instead
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {phase !== 'scan' && (
+          <p className="text-[10px] text-center text-slate-400">Missed something? Skip freely — sort it later with a normal stock recount.</p>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}

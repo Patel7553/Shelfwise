@@ -6467,3 +6467,117 @@ agent_communication:
         - Cleanup: no TEST data remains ✅
         
         Feature is production-ready. Main agent: please summarize and finish.
+
+backend:
+  - task: "Barcode Flow Rebuild — barcode memory API + Open Food Facts flow"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js, components/shelfwise/scanners.jsx, app/page.js, components/shelfwise/dashboard.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Barcode Scanning Rebuild (Aug 2026) — finished frontend wiring this session:
+            - page.js now imports BarcodeFlowDialog (was still importing old BarcodeScanDialog — runtime crash fixed)
+            - dashboard.jsx Add Products menu now has a prominent "Scan Barcode" button calling openBarcode('add')
+            BACKEND TO TEST (all under /api, auth via chef JWT Bearer token):
+            1. GET /api/barcodes — returns the kitchen's permanent barcode→product memory map (JSON object,
+               possibly empty {}). Stored in Supabase storage at receipts bucket path barcode-maps/{kitchen_id}.json.
+            2. POST /api/barcodes {code, name, unit, category, storageType} — persists mapping permanently;
+               subsequent GET must return the saved entry under key=code.
+            3. POST /api/products with customFields.barcode — creates product and stores barcode (product create
+               already covered previously; verify customFields.barcode round-trips on GET /api/products).
+            4. Both endpoints must 401 without auth.
+            Use approved TEST kitchen a2573e6a-70f0-4a6d-97d0-ccf09b444643 (real prod Supabase!) — mint chef JWT
+            per /app/memory/test_credentials.md, use TEST-prefixed barcodes/products and CLEAN UP after.
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ FOCUSED TEST COMPLETE - Barcode Memory API (5/5 tests passed):
+            
+            **CONTEXT:**
+            - Real production Supabase DB used with approved test kitchen a2573e6a-70f0-4a6d-97d0-ccf09b444643
+            - Chef JWT minted using SHELFWISE_JWT_SECRET from /app/.env
+            - Base URL: https://kitchen-stock-39.preview.emergentagent.com
+            - Test barcode: TEST9999999999, Test product: TEST Barcode Product
+            - All test data cleaned up after testing
+            
+            **Test Results:**
+            
+            **Test 1: GET /api/barcodes with valid JWT → 200 ✓**
+            - Returns JSON object (empty {} initially, as expected)
+            - Barcode map stored in Supabase storage: receipts bucket, path barcode-maps/{kitchen_id}.json
+            - Response structure correct
+            
+            **Test 2: POST /api/barcodes with TEST data → success, then GET includes it ✓**
+            - Payload: {code:"TEST9999999999", name:"TEST Barcode Product", unit:"ea", category:"Dairy", storageType:"Fridge"}
+            - POST returned 200 with {ok:true, entry:{...}}
+            - Entry includes all fields: name, unit, category, storageType, savedAt (ISO timestamp)
+            - Subsequent GET /api/barcodes correctly returns the saved barcode under key "TEST9999999999"
+            - All fields match exactly: name, unit, category, storageType ✓
+            - savedAt timestamp present and valid ✓
+            
+            **Test 3: POST /api/products with customFields.barcode → 201, then GET shows it ✓**
+            - Payload: {name:"TEST Barcode Product", quantity:2, unit:"ea", storageType:"Fridge", dateReceived:"2026-08-23", expiryDate:"2026-08-24", customFields:{barcode:"TEST9999999999"}}
+            - POST returned 201 with product ID
+            - Product created successfully with all fields
+            - GET /api/products returns the product with customFields.barcode === "TEST9999999999" ✓
+            - Barcode correctly stored and retrieved in customFields ✓
+            
+            **Test 4: GET /api/barcodes WITHOUT Authorization → 401 ✓**
+            - Returns {"error":"Not authenticated"}
+            - Auth gate working correctly
+            
+            **Test 5: POST /api/barcodes WITHOUT Authorization → 401 ✓**
+            - Returns {"error":"Not authenticated"}
+            - Auth gate working correctly
+            
+            **Cleanup:**
+            - ✓ Test product deleted via DELETE /api/products/{id}
+            - ✓ Test barcode removed from barcode map (restored to original state via Supabase storage API)
+            - ✓ Final verification: no TEST products in inventory, no TEST barcode in map
+            
+            **Key Validations:**
+            - ✅ GET /api/barcodes returns kitchen's barcode memory map (JSON object)
+            - ✅ POST /api/barcodes persists barcode mapping permanently to Supabase storage
+            - ✅ Barcode map entries include all required fields (name, unit, category, storageType, savedAt)
+            - ✅ POST /api/products with customFields.barcode works correctly
+            - ✅ customFields.barcode round-trips correctly on GET /api/products
+            - ✅ Both endpoints require authentication (401 without JWT)
+            - ✅ Chef JWT authentication working correctly (SHELFWISE_JWT_SECRET)
+            - ✅ Cleanup successful (test data removed from both products table and barcode map)
+            
+            **Test file:** /app/backend_test_barcode.py (can be re-run anytime)
+            
+            No critical issues found. All barcode memory API endpoints working perfectly.
+
+test_plan:
+  current_focus:
+    - "Barcode Flow Rebuild — barcode memory API + Open Food Facts flow"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    - agent: "main"
+      message: |
+        Finished the Barcode Flow rebuild frontend wiring (import fix in page.js + new Scan Barcode
+        launcher button in dashboard.jsx Add Products menu). Please test ONLY the barcode memory
+        backend endpoints (GET/POST /api/barcodes, product create with customFields.barcode) as
+        described in the new task above. Real production Supabase — use the approved test kitchen,
+        TEST- prefixed data, and clean up everything afterwards. Do NOT touch supplier order flows.
+    - agent: "testing"
+      message: |
+        ✅ Barcode Memory API backend testing COMPLETE - all 5 tests passed.
+        
+        Tested endpoints:
+        - GET /api/barcodes (returns kitchen's barcode map from Supabase storage)
+        - POST /api/barcodes (saves barcode mapping permanently)
+        - POST /api/products with customFields.barcode (creates product with barcode)
+        - Auth checks (both endpoints require JWT, return 401 without auth)
+        
+        All endpoints working correctly with real production Supabase DB. Test data cleaned up successfully.
+        No critical issues found. Feature is production-ready.

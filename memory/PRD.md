@@ -112,3 +112,12 @@ nav; header identity badge works for both. Production needs REDEPLOY.
 
 ## ⚠️ PERMANENT STANDING RULES (user-mandated — apply WITHOUT being asked)
 1. **BACK BUTTON STANDARD (Aug 2026):** EVERY screen, sub-screen, modal, wizard step and generated page (incl. print/summary windows) MUST have a working back/close control returning to the correct previous screen. Use `withBackToolbar()` from components/shelfwise/shared.js for any window.open/print HTML. Treat this like a save/close button — non-negotiable baseline for ALL future work on this app.
+
+## Completed (this session — Barcode Flow Rebuild)
+- **Barcode Scanning Rebuild (finished)**: `BarcodeFlowDialog` in scanners.jsx now wired into page.js (import fixed — was crashing on old BarcodeScanDialog import). New prominent "Scan Barcode (instant)" launcher in dashboard.jsx Add Products menu. Flow: continuous auto-scan (html5-qrcode, camera stays warm between scans), permanent per-kitchen barcode memory (GET/POST /api/barcodes → Supabase storage receipts/barcode-maps/{kid}.json), Open Food Facts lookup for first-time codes (no key), never shows "not found" errors (falls to quick one-time name form), Add/Use stock modes with in-dialog toggle, Use mode deducts via /api/usage/apply, manual digit entry fallback. Backend tested 5/5 (real prod Supabase, test kitchen, cleaned up). UI verified via screenshots incl. real OFF lookup (Coca Cola 330ml).
+
+## Still pending (user priorities TBD)
+- Supplier Spend Alerts (original request, not started)
+- Monthly Spend Totals on Receipts screen
+- Xero integration (parked — needs user credentials)
+- Google Play TWA prep; Stripe subscriptions (parked)

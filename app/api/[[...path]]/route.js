@@ -3250,7 +3250,7 @@ export async function GET(request, { params }) {
     }
 
     // ----- OWNER / CHEF endpoints (kitchen-scoped) -----
-    const ownerOrChef = ['products','settings','facets','stats','recipes','rota','waste','haccp','suppliers','sensors','receipts'].some(p => path === p || path.startsWith(p + '/'))
+    const ownerOrChef = ['products','settings','facets','stats','recipes','rota','waste','haccp','suppliers','sensors','receipts','barcodes'].some(p => path === p || path.startsWith(p + '/'))
     if (ownerOrChef) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
@@ -3339,6 +3339,16 @@ export async function GET(request, { params }) {
           } catch { /* bucket may not exist yet */ }
         }
         return json((data || []).map(r => receiptFromDb(r, urlMap[r.image_path] || '')))
+      }
+
+      // ------- BARCODE MEMORY (Aug 2026): permanent per-kitchen barcode → product
+      //         map so a barcode only ever needs to be identified ONCE. -------
+      if (path === 'barcodes') {
+        try {
+          const { data: file } = await sb.storage.from('receipts').download(`barcode-maps/${kid}.json`)
+          if (file) return json(JSON.parse(await file.text()))
+        } catch {}
+        return json({})
       }
 
       if (path === 'products') {
@@ -5069,7 +5079,7 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
     }
 
     // -------- Kitchen-scoped mutations --------
-    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract','receipts/ocr','receipts/line-items'].some(p => path === p)
+    const kitchenScoped = ['products','products/bulk','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract','receipts/ocr','receipts/line-items','barcodes'].some(p => path === p)
       || (path.startsWith('recipes/') && (path.endsWith('/favorite') || path.endsWith('/cook')))
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
@@ -5276,6 +5286,35 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
 
       // ------- Stock deduction used by the Dashboard "Cooked it" action -------
       // Deducts confirmed quantities from stock (never below 0).
+      // ------- BARCODE MEMORY: remember what a barcode is, permanently -------
+      if (path === 'barcodes') {
+        const body = await request.json()
+        const code = String(body.code || '').trim().slice(0, 64)
+        const name = String(body.name || '').trim().slice(0, 120)
+        if (!code || !name) return json({ error: 'code and name required' }, 400)
+        let map = {}
+        try {
+          const { data: file } = await sb.storage.from('receipts').download(`barcode-maps/${kid}.json`)
+          if (file) map = JSON.parse(await file.text())
+        } catch {}
+        map[code] = {
+          name,
+          unit: String(body.unit || 'ea').slice(0, 20),
+          category: String(body.category || '').slice(0, 40),
+          storageType: String(body.storageType || 'Fridge').slice(0, 30),
+          savedAt: new Date().toISOString(),
+        }
+        // Keep the newest 5000 entries
+        const keys = Object.keys(map)
+        if (keys.length > 5000) {
+          keys.sort((a, b) => String(map[a].savedAt || '').localeCompare(String(map[b].savedAt || '')))
+          for (const k of keys.slice(0, keys.length - 5000)) delete map[k]
+        }
+        const up = await sb.storage.from('receipts').upload(`barcode-maps/${kid}.json`, Buffer.from(JSON.stringify(map)), { contentType: 'application/json', upsert: true })
+        if (up.error) return json({ error: up.error.message }, 500)
+        return json({ ok: true, entry: map[code] })
+      }
+
       if (path === 'usage/apply') {
         const body = await request.json()
         // DECIMALS SUPPORTED (Aug 2026 bug fix): quantities like 0.4 kg used to

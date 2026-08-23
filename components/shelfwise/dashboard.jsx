@@ -363,6 +363,12 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
           </button>
         </div>
         {addOpen && (
+          <div className="space-y-2">
+          <button onClick={() => openBarcode('add')} className="w-full flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-emerald-300 bg-emerald-50 hover:bg-emerald-100 hover:border-emerald-400 transition text-emerald-900 shadow-sm">
+            <ScanLine className="h-5 w-5 text-emerald-600" />
+            <span className="text-sm font-bold">Scan Barcode</span>
+            <span className="text-[10px] font-semibold bg-emerald-600 text-white rounded-full px-2 py-0.5">instant</span>
+          </button>
           <div className="grid grid-cols-4 gap-2">
             <button onClick={openSnap} className="flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 border-blue-200 bg-white hover:bg-blue-50 hover:border-blue-300 transition text-blue-900">
               <span className="text-xl">📸</span>
@@ -380,6 +386,7 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
               <span className="text-xl">🧾</span>
               <span className="text-[11px] font-semibold">Invoice</span>
             </button>
+          </div>
           </div>
         )}
       </div>
