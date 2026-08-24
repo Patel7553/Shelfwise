@@ -34,6 +34,9 @@ import { SetupWizardV2, SetupWizard, ChefCodeCard, SettingsDialog, LoginGate, No
 import { RotaView, RotaShiftDialog } from '@/components/shelfwise/rota'
 import { AnalyticsView } from '@/components/shelfwise/analytics'
 import { OrdersView } from '@/components/shelfwise/orders'
+import { CartView } from '@/components/shelfwise/cart'
+import { cartLineCount } from '@/lib/cart'
+import { ShoppingCart } from 'lucide-react'
 import { ReceiptsView } from '@/components/shelfwise/receipts'
 import SupplierDashboard from '@/components/shelfwise/supplier'
 import { QuickCheckDialog, TempLogbookView, HaccpView } from '@/components/shelfwise/haccp'
@@ -378,6 +381,16 @@ function App() {
 
   // Barcode Scanner state
   const [barcodeOpen, setBarcodeOpen] = useState(false)
+
+  // ---- persistent shopping cart badge (shopping-app checkout pattern) ----
+  const [cartN, setCartN] = useState(0)
+  useEffect(() => {
+    const sync = () => { try { setCartN(cartLineCount()) } catch {} }
+    sync()
+    window.addEventListener('sw-cart-changed', sync)
+    window.addEventListener('storage', sync)
+    return () => { window.removeEventListener('sw-cart-changed', sync); window.removeEventListener('storage', sync) }
+  }, [])
   const [barcodeLoading, setBarcodeLoading] = useState(false)
   const [barcodeValue, setBarcodeValue] = useState('')
 
@@ -2243,6 +2256,14 @@ function App() {
                 <Users className="h-4 w-4 xl:mr-1.5" /> <span className="hidden xl:inline">Switch user</span>
               </Button>
             )}
+            {!isSupplier && can('orders') && (
+              <Button variant="ghost" size="icon" onClick={() => setView('cart')} title="Cart" className="shrink-0 relative">
+                <ShoppingCart className="h-4 w-4" />
+                {cartN > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 h-4 min-w-4 px-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center leading-none">{cartN > 99 ? '99+' : cartN}</span>
+                )}
+              </Button>
+            )}
             <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title={T('nav_settings')} className="shrink-0">
               <Settings className="h-4 w-4" />
             </Button>
@@ -2254,6 +2275,14 @@ function App() {
           {/* Mobile: Switch User is always visible next to the menu button —
               staff on the shared tablet tap it to hand over to the next person */}
           <div className="flex items-center gap-1 md:hidden">
+            {!isSupplier && can('orders') && (
+              <Button variant="ghost" size="icon" onClick={() => setView('cart')} title="Cart" className="relative">
+                <ShoppingCart className="h-5 w-5" />
+                {cartN > 0 && (
+                  <span className="absolute top-0 right-0 h-4 min-w-4 px-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center leading-none">{cartN > 99 ? '99+' : cartN}</span>
+                )}
+              </Button>
+            )}
             {showSwitchUser && (
               <Button
                 size="sm"
@@ -2419,7 +2448,10 @@ function App() {
           <RotaView />
         )}
         {view === 'orders' && can('orders') && (
-          <OrdersView />
+          <OrdersView goCart={() => setView('cart')} />
+        )}
+        {view === 'cart' && can('orders') && (
+          <CartView onBack={() => setView('orders')} goStockLevels={() => setView('orders')} />
         )}
         {view === 'receipts' && can('receipts') && (
           <ReceiptsView currency={settings.currency} />

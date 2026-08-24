@@ -16,6 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { toast } from 'sonner'
 import { ArrowLeft, BarChart3, Loader2, Minus, Plus, Search, Truck, CheckCircle2, AlertTriangle, PackageX, ShoppingCart, X } from 'lucide-react'
 import { apiFetch } from '@/lib/apiClient'
+import { addToCart } from '@/lib/cart'
 
 const fetch = apiFetch
 
@@ -63,7 +64,7 @@ function qtyTone(q) {
   return 'bg-emerald-100 text-emerald-700 border-emerald-200'
 }
 
-export function StockLevelsView({ onBack, currency = '£' }) {
+export function StockLevelsView({ onBack, goCart, currency = '£' }) {
   const [products, setProducts] = useState([])
   const [suppliers, setSuppliers] = useState([])
   const [catalogs, setCatalogs] = useState({})   // supplierId -> { products, sym }
@@ -71,10 +72,6 @@ export function StockLevelsView({ onBack, currency = '£' }) {
   const [search, setSearch] = useState('')
   const [supFilter, setSupFilter] = useState('all')   // 'all' | group key
   const [sel, setSel] = useState({})            // aggKey -> order qty
-  const [reviewOpen, setReviewOpen] = useState(false)
-  const [reviewGroups, setReviewGroups] = useState([])   // built when review opens
-  const [reviewLoading, setReviewLoading] = useState(false)
-  const [placingAll, setPlacingAll] = useState(false)
 
   useEffect(() => {
     let dead = false
@@ -173,96 +170,32 @@ export function StockLevelsView({ onBack, currency = '£' }) {
     return next
   })
 
-  // ---- build the review sheet: match selected items to each supplier's catalog ----
-  const openReview = async () => {
-    setReviewOpen(true)
-    setReviewLoading(true)
-    try {
-      const involved = groups.filter(g => g.items.some(it => (sel[it.key] || 0) > 0))
-      const built = []
-      for (const g of involved) {
-        const chosen = g.items.filter(it => (sel[it.key] || 0) > 0).map(it => ({ ...it, orderQty: sel[it.key] }))
-        if (!g.connected) {
-          built.push({ ...g, status: 'not_connected', matched: [], unmatched: chosen, currencySymbol: currency, minOrderValue: 0 })
-          continue
-        }
-        let catalog = []
-        let supInfo = {}
-        try {
-          const res = await fetch(`/api/kitchen/suppliers/${g.supplierId}/catalog`)
-          const data = await res.json().catch(() => ({}))
-          if (!res.ok) throw new Error(data.error || 'catalog failed')
-          catalog = Array.isArray(data.products) ? data.products : []
-          supInfo = data.supplier || {}
-        } catch {
-          built.push({ ...g, status: 'error', error: 'Could not load catalog', matched: [], unmatched: chosen, currencySymbol: currency, minOrderValue: 0 })
-          continue
-        }
-        const matched = []
-        const unmatched = []
-        for (const it of chosen) {
-          const m = matchCatalog(it.name, catalog)
-          if (m && m.available !== false) matched.push({ ...it, match: m })
-          else unmatched.push(it)
-        }
-        built.push({
-          ...g,
-          status: 'ready',
-          matched,
-          unmatched,
-          currencySymbol: supInfo.currencySymbol || currency,
-          minOrderValue: Number(supInfo.minOrderValue) || 0,
-        })
+  // ---- ADD TO CART (shopping-app pattern): selected items go into the
+  //      persistent cart; checkout happens ONLY on the Cart screen ----
+  const addSelectedToCart = () => {
+    let added = 0
+    const issues = []
+    for (const g of groups) {
+      for (const it of g.items) {
+        const q = sel[it.key] || 0
+        if (q <= 0) continue
+        if (!g.connected) { issues.push(`${it.name} (${g.gk === 'z:none' ? 'no supplier linked' : g.label + ' not connected'})`); continue }
+        const cat = catalogs[g.supplierId]
+        const m = cat ? matchCatalog(it.name, cat.products) : null
+        if (!m) { issues.push(`${it.name} (not in ${g.label}'s catalog)`); continue }
+        if (m.available === false) { issues.push(`${it.name} (out of stock at ${g.label})`); continue }
+        addToCart({ supplierId: g.supplierId, supplierName: g.label, productId: m.id, name: m.name, unit: m.unit || '', qty: q })
+        added++
       }
-      setReviewGroups(built)
-    } finally { setReviewLoading(false) }
-  }
-
-  const groupSubtotal = (g) => g.matched.reduce((s, it) => s + (sel[it.key] || 0) * (Number(it.match.price) || 0), 0)
-
-  const placeOne = async (g) => {
-    const itemsBody = g.matched
-      .map(it => ({ productId: it.match.id, quantity: sel[it.key] || 0 }))
-      .filter(i => i.quantity > 0)
-    if (itemsBody.length === 0) { toast.error('Nothing to order for this supplier'); return false }
-    setReviewGroups(list => list.map(x => x.gk === g.gk ? { ...x, status: 'placing', error: '' } : x))
-    try {
-      const res = await fetch('/api/kitchen/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ supplierId: g.supplierId, items: itemsBody, notes: 'Created from Stock Levels screen' }),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.error || 'Order failed')
-      setReviewGroups(list => list.map(x => x.gk === g.gk ? { ...x, status: 'done', ref: data.ref || data.id || '' } : x))
-      // clear the ordered items from the selection
-      setSel(s => {
-        const next = { ...s }
-        for (const it of g.matched) delete next[it.key]
-        return next
-      })
-      toast.success(`Order sent to ${g.label}`)
-      return true
-    } catch (e) {
-      setReviewGroups(list => list.map(x => x.gk === g.gk ? { ...x, status: 'ready', error: e.message || 'Order failed' } : x))
-      toast.error(`${g.label}: ${e.message || 'Order failed'}`)
-      return false
+    }
+    setSel({})
+    if (added > 0) {
+      toast.success(`Added ${added} item${added === 1 ? '' : 's'} to cart 🛒`, goCart ? { action: { label: 'View cart', onClick: goCart } } : undefined)
+    }
+    if (issues.length > 0) {
+      toast.warning(`Couldn't add: ${issues.join(' · ')}`.slice(0, 280), { duration: 6000 })
     }
   }
-
-  const placeAll = async () => {
-    setPlacingAll(true)
-    try {
-      for (const g of reviewGroups) {
-        if (g.status === 'ready' && g.matched.length > 0 && !(g.minOrderValue > 0 && groupSubtotal(g) < g.minOrderValue)) {
-          // eslint-disable-next-line no-await-in-loop
-          await placeOne(g)
-        }
-      }
-    } finally { setPlacingAll(false) }
-  }
-
-  const readyGroups = reviewGroups.filter(g => g.status === 'ready' && g.matched.length > 0 && !(g.minOrderValue > 0 && groupSubtotal(g) < g.minOrderValue))
 
   return (
     <div className="space-y-4 pb-24">
@@ -381,95 +314,15 @@ export function StockLevelsView({ onBack, currency = '£' }) {
             <ShoppingCart className="h-5 w-5 text-emerald-400 shrink-0" />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold">{selCount} item{selCount === 1 ? '' : 's'} selected</p>
-              <p className="text-[11px] text-slate-300">will split into {selSupplierCount} supplier order{selSupplierCount === 1 ? '' : 's'} automatically</p>
+              <p className="text-[11px] text-slate-300">from {selSupplierCount} supplier{selSupplierCount === 1 ? '' : 's'} — checkout later from the Cart</p>
             </div>
             <Button variant="ghost" size="sm" className="text-slate-300 hover:text-white hover:bg-slate-800" onClick={() => setSel({})}>Clear</Button>
-            <Button size="sm" className="bg-emerald-500 hover:bg-emerald-600 text-white font-semibold" onClick={openReview}>Review orders</Button>
+            <Button size="sm" className="bg-emerald-500 hover:bg-emerald-600 text-white font-semibold" onClick={addSelectedToCart}>
+              <ShoppingCart className="h-4 w-4 mr-1.5" /> Add to Cart
+            </Button>
           </div>
         </div>
       )}
-
-      {/* Review & place — auto-split by supplier */}
-      <Dialog open={reviewOpen} onOpenChange={v => { if (!v) setReviewOpen(false) }}>
-        <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><ShoppingCart className="h-5 w-5 text-emerald-600" /> Review orders</DialogTitle>
-          </DialogHeader>
-          {reviewLoading ? (
-            <div className="flex items-center justify-center py-10 text-muted-foreground"><Loader2 className="h-6 w-6 animate-spin mr-2" /> Matching items to supplier catalogs…</div>
-          ) : (
-            <div className="space-y-4">
-              {reviewGroups.map(g => {
-                const sub = groupSubtotal(g)
-                const belowMin = g.minOrderValue > 0 && sub < g.minOrderValue
-                return (
-                  <div key={g.gk} className="border-2 border-slate-100 rounded-xl overflow-hidden">
-                    <div className="flex items-center gap-2 px-3 py-2 bg-slate-50 border-b border-slate-100">
-                      <Truck className="h-4 w-4 text-indigo-600" />
-                      <span className="font-semibold text-sm truncate">{g.label}</span>
-                      {g.status === 'done' && <Badge className="ml-auto bg-emerald-100 text-emerald-700 hover:bg-emerald-100 border-0 text-[10px]">✓ order sent</Badge>}
-                    </div>
-                    <div className="p-3 space-y-2">
-                      {g.status === 'not_connected' && (
-                        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 flex gap-2">
-                          <AlertTriangle className="h-4 w-4 shrink-0" />
-                          {g.gk === 'z:none' ? 'These items have no supplier set — edit the products to link one.' : `"${g.label}" isn't a connected supplier yet — connect them from the Orders screen to order in-app.`}
-                        </p>
-                      )}
-                      {g.status === 'error' && <p className="text-xs text-red-600">{g.error}</p>}
-                      {g.matched.map(it => (
-                        <div key={it.key} className="flex items-center gap-2 text-sm">
-                          <div className="flex-1 min-w-0">
-                            <p className="font-medium truncate">{it.match.name}</p>
-                            {norm(it.match.name) !== norm(it.name) && <p className="text-[10px] text-muted-foreground truncate">matched from “{it.name}”</p>}
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <button onClick={() => setQty(it.key, (sel[it.key] || 0) - 1)} className="h-6 w-6 rounded-full border border-indigo-200 text-indigo-700 hover:bg-indigo-50 flex items-center justify-center"><Minus className="h-3 w-3" /></button>
-                            <span className="w-6 text-center font-bold text-indigo-700">{sel[it.key] || 0}</span>
-                            <button onClick={() => setQty(it.key, (sel[it.key] || 0) + 1)} className="h-6 w-6 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 flex items-center justify-center"><Plus className="h-3 w-3" /></button>
-                          </div>
-                          <span className="w-16 text-right font-semibold whitespace-nowrap">{g.currencySymbol}{((sel[it.key] || 0) * (Number(it.match.price) || 0)).toFixed(2)}</span>
-                        </div>
-                      ))}
-                      {g.unmatched.length > 0 && g.status !== 'not_connected' && (
-                        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
-                          <p className="font-semibold flex items-center gap-1"><AlertTriangle className="h-3.5 w-3.5" /> Not found in this supplier's catalog:</p>
-                          <p className="mt-0.5">{g.unmatched.map(u => u.name).join(', ')}</p>
-                          <p className="mt-0.5 text-[10px] opacity-80">Order these from the supplier's catalog page, or ask them to add the product.</p>
-                        </div>
-                      )}
-                      {g.status === 'not_connected' && g.unmatched.length > 0 && (
-                        <p className="text-xs text-muted-foreground">{g.unmatched.map(u => `${u.name} × ${sel[u.key] || 0}`).join(' · ')}</p>
-                      )}
-                      {g.matched.length > 0 && g.status !== 'done' && (
-                        <div className="flex items-center justify-between pt-1 border-t border-slate-100">
-                          <div className="text-xs">
-                            <span className="text-muted-foreground">Subtotal </span>
-                            <span className="font-bold">{g.currencySymbol}{sub.toFixed(2)}</span>
-                            {belowMin && <span className="text-red-600 font-medium ml-2">min order {g.currencySymbol}{g.minOrderValue.toFixed(2)}</span>}
-                          </div>
-                          <Button size="sm" disabled={g.status === 'placing' || belowMin || sub <= 0} onClick={() => placeOne(g)} className="bg-indigo-600 hover:bg-indigo-700">
-                            {g.status === 'placing' ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : <Truck className="h-3.5 w-3.5 mr-1" />} Place order
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-              {readyGroups.length > 1 && (
-                <Button className="w-full bg-emerald-600 hover:bg-emerald-700 font-semibold" disabled={placingAll} onClick={placeAll}>
-                  {placingAll ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}
-                  Place all {readyGroups.length} orders
-                </Button>
-              )}
-              <Button variant="outline" className="w-full" onClick={() => setReviewOpen(false)}>
-                <X className="h-4 w-4 mr-1.5" /> Close
-              </Button>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }
