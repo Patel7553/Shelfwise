@@ -184,7 +184,7 @@ export function StockLevelsView({ onBack, goCart, currency = '£' }) {
         const m = cat ? matchCatalog(it.name, cat.products) : null
         if (!m) { issues.push(`${it.name} (not in ${g.label}'s catalog)`); continue }
         if (m.available === false) { issues.push(`${it.name} (out of stock at ${g.label})`); continue }
-        addToCart({ supplierId: g.supplierId, supplierName: g.label, productId: m.id, name: m.name, unit: m.unit || '', qty: q })
+        addToCart({ supplierId: g.supplierId, supplierName: g.label, productId: m.id, name: m.name, unit: m.unit || '', qty: q, price: Number(m.price) || 0 })
         added++
       }
     }

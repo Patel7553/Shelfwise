@@ -35,7 +35,7 @@ import { RotaView, RotaShiftDialog } from '@/components/shelfwise/rota'
 import { AnalyticsView } from '@/components/shelfwise/analytics'
 import { OrdersView } from '@/components/shelfwise/orders'
 import { CartView } from '@/components/shelfwise/cart'
-import { cartLineCount } from '@/lib/cart'
+import { cartLineCount, cartSubtotal } from '@/lib/cart'
 import { ShoppingCart } from 'lucide-react'
 import { ReceiptsView } from '@/components/shelfwise/receipts'
 import SupplierDashboard from '@/components/shelfwise/supplier'
@@ -384,8 +384,9 @@ function App() {
 
   // ---- persistent shopping cart badge (shopping-app checkout pattern) ----
   const [cartN, setCartN] = useState(0)
+  const [cartSub, setCartSub] = useState(0)
   useEffect(() => {
-    const sync = () => { try { setCartN(cartLineCount()) } catch {} }
+    const sync = () => { try { setCartN(cartLineCount()); setCartSub(cartSubtotal()) } catch {} }
     sync()
     window.addEventListener('sw-cart-changed', sync)
     window.addEventListener('storage', sync)
@@ -2257,8 +2258,9 @@ function App() {
               </Button>
             )}
             {!isSupplier && can('orders') && (
-              <Button variant="ghost" size="icon" onClick={() => setView('cart')} title="Cart" className="shrink-0 relative">
+              <Button variant="ghost" onClick={() => setView('cart')} title="Cart" className="shrink-0 relative px-2 gap-1">
                 <ShoppingCart className="h-4 w-4" />
+                {cartSub > 0 && <span className="text-xs font-bold">£{cartSub.toFixed(2)}</span>}
                 {cartN > 0 && (
                   <span className="absolute -top-0.5 -right-0.5 h-4 min-w-4 px-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center leading-none">{cartN > 99 ? '99+' : cartN}</span>
                 )}
@@ -2451,7 +2453,13 @@ function App() {
           <OrdersView goCart={() => setView('cart')} />
         )}
         {view === 'cart' && can('orders') && (
-          <CartView onBack={() => setView('orders')} goStockLevels={() => setView('orders')} />
+          <CartView
+            onBack={() => setView('orders')}
+            goStockLevels={() => setView('orders')}
+            goHome={() => setView('dashboard')}
+            kitchenName={settings.kitchenName || 'Kitchen'}
+            accountEmail={me?.userEmail || settings.alertEmail || ''}
+          />
         )}
         {view === 'receipts' && can('receipts') && (
           <ReceiptsView currency={settings.currency} />
