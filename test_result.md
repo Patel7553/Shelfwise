@@ -7259,3 +7259,91 @@ agent_communication:
       message: "Rota v2.1 backend changes need regression: (1) POST rota/config with people array persists+sanitizes (bad offDays filtered, breakMins clamped 0-480), GET returns people; restore original config after. (2) POST rota/bulk with role leave:annual + notes creates leave rows with that role/notes; invalid role falls back to 'shift'. (3) POST rota with packed-JSON notes stores and returns them intact. Cleanup mandatory (2027 dates)."
     - agent: "testing"
       message: "✅ Rota v2.1 regression test COMPLETE (7/7 passed). All backend changes working perfectly: (1) Config people persistence + sanitization verified (offDays filtered, breakMins clamped), (2) Bulk leave with role+notes working, invalid role falls back to 'shift', (3) Packed JSON notes preserved exactly. Original config restored, all test data cleaned up. Production DB safe."
+
+  - task: "Shift reminder pushes — evening-before reminder via push/heartbeat (runShiftReminderForKitchen)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js (runShiftReminderForKitchen, heartbeat wiring, config preserve of lastShiftReminderDate)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "New: POST /api/push/heartbeat now also runs shift reminders. Window 17:00-21:59 Europe/London (bypass window ONLY with body {force:'shift-reminder'}). Once/day dedupe via lastShiftReminderDate key inside the hidden rota config row JSON. Targets people with entries tomorrow (London date), skipping leave rows; push per person via user_label match (0 devices expected in tests). Confirmed tomorrow (2026-08-31) has NO real entries, so forced runs cannot push real staff. POST rota/config preserves lastShiftReminderDate across UI saves."
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ FOCUSED TEST COMPLETE - Shift Reminder Push Feature (7/7 tests passed):
+            
+            **CONTEXT:**
+            - Production Supabase configured and working
+            - Kitchen: a2573e6a-70f0-4a6d-97d0-ccf09b444643
+            - Tomorrow (2026-08-31) has NO real rota entries (verified)
+            - Used fake staff name 'ReminderTest' for test shift (no real device can be pushed)
+            - Chef JWT: kitchen_id=a2573e6a-70f0-4a6d-97d0-ccf09b444643, person=Xyz
+            
+            **TEST RESULTS:**
+            
+            **Test 1: Reset dedupe by removing lastShiftReminderDate from config ✓**
+            - Read config row via Supabase REST API (id: 8e366cb7-9aa4-4c09-a9d1-1f9dc2d56faa)
+            - Saved original config notes JSON for restoration
+            - Removed lastShiftReminderDate key from notes (reset once/day dedupe)
+            - Updated config row successfully
+            
+            **Test 2: Create test shift for 2026-08-31 with 'ReminderTest' ✓**
+            - POST /api/rota {"shiftDate":"2026-08-31","chefName":"ReminderTest","shiftSlot":"EarlyPrep","role":"shift","startTime":"07:00","endTime":"15:00"} → 201
+            - Created shift id: 973d995d-8984-48ea-8fd0-026ae01ef8d5
+            - Shift details: ReminderTest, EarlyPrep, 07:00-15:00 on 2026-08-31
+            
+            **Test 3: POST /api/push/heartbeat without force (should skip - outside window) ✓**
+            - POST /api/push/heartbeat {} (no force) → 200
+            - Response: {"shifts":{"skipped":"outside-evening-window"}}
+            - Correctly skipped due to outside evening window (17:00-21:59 London time)
+            - Current time is late night London (outside 17:00-21:59 window)
+            
+            **Test 4: POST /api/push/heartbeat with force='shift-reminder' (should send) ✓**
+            - POST /api/push/heartbeat {"force":"shift-reminder"} → 200
+            - Response: {"shifts":{"sent":true,"people":1,"devices":0}}
+            - Correctly sent to 1 person (ReminderTest)
+            - 0 devices (ReminderTest has no push device registered)
+            - Force bypass working correctly (bypassed time window gate)
+            
+            **Test 5: POST /api/push/heartbeat with force AGAIN (should skip - already-today) ✓**
+            - POST /api/push/heartbeat {"force":"shift-reminder"} → 200
+            - Response: {"shifts":{"skipped":"already-today"}}
+            - Correctly skipped due to once/day dedupe
+            - Proves lastShiftReminderDate persisted in config row
+            
+            **Test 6: Verify config row has lastShiftReminderDate='2026-08-30' ✓**
+            - Read config row via Supabase REST API
+            - Config notes JSON contains lastShiftReminderDate='2026-08-30' ✓
+            - Config mode/templates/people unchanged (only lastShiftReminderDate added) ✓
+            - Proves dedupe state persisted correctly
+            
+            **Test 7: CLEANUP - Delete test shift, purge from trash, restore config ✓**
+            - DELETE /api/rota/973d995d-8984-48ea-8fd0-026ae01ef8d5 → 200 (shift deleted)
+            - DELETE /api/trash/cf2d1c34-1f4e-4442-a8f9-a54b1184b64e → 200 (purged from trash)
+            - GET /api/rota?from=2026-08-31&to=2026-08-31 → [] (verified no ReminderTest shifts remain)
+            - Restored config notes = original JSON + lastShiftReminderDate='2026-08-30'
+            - This prevents duplicate reminders tonight (dedupe state preserved)
+            
+            **Key Validations:**
+            - ✅ Time window gate working (17:00-21:59 Europe/London)
+            - ✅ Force bypass working (force='shift-reminder' bypasses time window)
+            - ✅ Once/day dedupe working (lastShiftReminderDate in config row notes)
+            - ✅ Targets correct people (found ReminderTest shift for tomorrow)
+            - ✅ Push device count correct (0 devices for fake staff)
+            - ✅ Config preservation working (lastShiftReminderDate persisted across runs)
+            - ✅ POST /api/rota/config preserves lastShiftReminderDate (verified in code)
+            - ✅ Cleanup successful (no test data remains, config restored)
+            
+            **Production Safety:**
+            - ✅ Tomorrow (2026-08-31) has NO real rota entries (verified via GET /api/rota)
+            - ✅ Used fake staff name 'ReminderTest' (no real device can be pushed)
+            - ✅ Config restored with lastShiftReminderDate='2026-08-30' (prevents duplicate reminders tonight)
+            - ✅ All test data cleaned up (shift deleted and purged from trash)
+            
+            **Test file:** /app/backend_test_shift_reminder.py (can be re-run anytime)
+            
+            No critical issues found. Shift reminder push feature working perfectly in production.

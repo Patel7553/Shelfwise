@@ -797,6 +797,67 @@ async function runDailyExpiryEmailForKitchen(sb, kid) {
   return { sent: true, expired: expired.length, soon: soon.length }
 }
 
+// ============================================================================
+// SHIFT REMINDERS (June 2025) — the evening before, each staff member with a
+// shift tomorrow gets a personal push ("Shift tomorrow: Prep 🗓️ · 06:30–14:00").
+// Runs off the same heartbeat as the other alerts. Window: 17:00–21:59 UK
+// time. Once per day per kitchen — deduped via lastShiftReminderDate stored
+// inside the hidden rota config row (no migration needed). Leave days are
+// ignored; overtime gets its own wording. Pushes are targeted per person
+// (user_label match) so nobody hears about other people's shifts.
+// body.force==='shift-reminder' on the heartbeat bypasses the time window
+// (NOT the dedupe) for testing.
+// ============================================================================
+async function runShiftReminderForKitchen(sb, kid, force = false) {
+  const TZ = 'Europe/London'
+  const fmtISO = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d)
+  const hour = Number(new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', hour12: false }).format(new Date()))
+  if (!force && (hour < 17 || hour >= 22)) return { skipped: 'outside-evening-window' }
+  const today = fmtISO(new Date())
+  const tomorrow = fmtISO(new Date(Date.now() + 86400000))
+
+  // --- once/day dedupe via the rota config row ---
+  const { data: cfgRow } = await sb.from('rota_shifts').select('id, notes').eq('kitchen_id', kid).eq('chef_name', '__rota_config__').maybeSingle()
+  let cfg = {}
+  if (cfgRow?.notes) { try { cfg = JSON.parse(cfgRow.notes) } catch {} }
+  if (cfg.lastShiftReminderDate === today) return { skipped: 'already-today' }
+
+  const persistDone = async () => {
+    try {
+      const next = JSON.stringify({ ...cfg, lastShiftReminderDate: today })
+      if (cfgRow?.id) await sb.from('rota_shifts').update({ notes: next, updated_at: new Date().toISOString() }).eq('id', cfgRow.id)
+      else await sb.from('rota_shifts').insert({ id: uuidv4(), kitchen_id: kid, shift_date: '1970-01-05', shift_slot: '__config__', chef_name: '__rota_config__', role: 'config', start_time: '', end_time: '', notes: next })
+    } catch {}
+  }
+
+  const { data: rows } = await sb.from('rota_shifts')
+    .select('chef_name, shift_slot, role, start_time, end_time')
+    .eq('kitchen_id', kid).eq('shift_date', tomorrow).limit(200)
+  const work = (rows || []).filter(r => r.chef_name && r.chef_name !== '__rota_config__' && r.role !== 'config' && !String(r.role || '').startsWith('leave:'))
+  if (!work.length) { await persistDone(); return { skipped: 'no-shifts-tomorrow' } }
+
+  const dayLbl = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(Date.now() + 86400000))
+  const byPerson = {}
+  for (const r of work) { (byPerson[r.chef_name] = byPerson[r.chef_name] || []).push(r) }
+  let devices = 0
+  await Promise.allSettled(Object.entries(byPerson).map(async ([name, list]) => {
+    list.sort((a, b) => String(a.start_time || '99').localeCompare(String(b.start_time || '99')))
+    const first = list[0]
+    const time = first.start_time && first.end_time ? ` · ${first.start_time}–${first.end_time}` : ''
+    const extra = list.length > 1 ? ` (+${list.length - 1} more)` : ''
+    const isOt = first.role === 'overtime'
+    const r = await sendPushToPerson(sb, kid, name, {
+      title: isOt ? 'Overtime tomorrow ⚡' : `Shift tomorrow: ${first.shift_slot || 'Shift'} 🗓️`,
+      body: `${dayLbl}${time}${extra}`,
+      tag: 'shelfwise-shift-reminder',
+      url: '/?view=rota',
+    })
+    devices += r.sent
+  }))
+  await persistDone()
+  return { sent: true, people: Object.keys(byPerson).length, devices }
+}
+
 async function runHaccpReminderForKitchen(sb, kid) {
   const today = new Date().toISOString().slice(0, 10)
   // --- throttle: max one HACCP nag per day per kitchen ---
@@ -5242,10 +5303,13 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
       //         alerts every 2.5h until items are dealt with (user request) -------
       if (path === 'push/heartbeat') {
         try {
+          let force = false
+          try { const b = await request.json(); force = b?.force === 'shift-reminder' } catch {}
           const exp = await runExpiryPushForKitchen(sb, kid)
           const haccp = await runHaccpReminderForKitchen(sb, kid)
           const email = await runDailyExpiryEmailForKitchen(sb, kid)
-          return json({ ok: true, expiry: exp, haccp, email })
+          const shifts = await runShiftReminderForKitchen(sb, kid, force)
+          return json({ ok: true, expiry: exp, haccp, email, shifts })
         } catch (e) {
           return json({ ok: false, error: e.message })
         }
@@ -5704,7 +5768,11 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
             : [],
         }
         const row = { kitchen_id: kid, shift_date: '1970-01-05', shift_slot: '__config__', chef_name: '__rota_config__', role: 'config', start_time: '', end_time: '', notes: JSON.stringify(cfg), updated_at: new Date().toISOString() }
-        const { data: existing } = await sb.from('rota_shifts').select('id').eq('kitchen_id', kid).eq('chef_name', '__rota_config__').maybeSingle()
+        const { data: existing } = await sb.from('rota_shifts').select('id, notes').eq('kitchen_id', kid).eq('chef_name', '__rota_config__').maybeSingle()
+        // Preserve internal keys (e.g. lastShiftReminderDate dedupe) across UI saves
+        if (existing?.notes) {
+          try { const prev = JSON.parse(existing.notes); if (prev.lastShiftReminderDate) row.notes = JSON.stringify({ ...cfg, lastShiftReminderDate: prev.lastShiftReminderDate }) } catch {}
+        }
         if (existing?.id) {
           const { error: e2 } = await sb.from('rota_shifts').update(row).eq('id', existing.id).eq('kitchen_id', kid)
           if (e2) throw e2
