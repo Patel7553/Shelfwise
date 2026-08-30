@@ -31,8 +31,8 @@ function relTime(iso) {
   return `${d} day${d === 1 ? '' : 's'} ago`
 }
 
-export function TrashCard() {
-  const [open, setOpen] = useState(false)
+export function TrashCard({ defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen)
   const [items, setItems] = useState([])
   const [retention, setRetention] = useState(30)
   const [loading, setLoading] = useState(false)

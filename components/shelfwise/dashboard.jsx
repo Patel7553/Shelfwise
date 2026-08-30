@@ -369,22 +369,16 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
             <span className="text-sm font-bold">Scan Barcode</span>
             <span className="text-[10px] font-semibold bg-emerald-600 text-white rounded-full px-2 py-0.5">instant</span>
           </button>
-          <div className="grid grid-cols-4 gap-2">
+          {/* Voice + Invoice tiles removed at user's request (Aug 2026) —
+              barcode scan is the hero flow; Snap Label & Manual remain. */}
+          <div className="grid grid-cols-2 gap-2">
             <button onClick={openSnap} className="flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 border-blue-200 bg-white hover:bg-blue-50 hover:border-blue-300 transition text-blue-900">
               <span className="text-xl">📸</span>
               <span className="text-[11px] font-semibold">Snap Label</span>
             </button>
-            <button onClick={openVoice} className="flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 border-blue-200 bg-white hover:bg-blue-50 hover:border-blue-300 transition text-blue-900">
-              <span className="text-xl">🎤</span>
-              <span className="text-[11px] font-semibold">Voice</span>
-            </button>
             <button onClick={openAdd} className="flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 border-blue-200 bg-white hover:bg-blue-50 hover:border-blue-300 transition text-blue-900">
               <span className="text-xl">✏️</span>
               <span className="text-[11px] font-semibold">Manual</span>
-            </button>
-            <button onClick={openReceipt} className="flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 border-blue-200 bg-white hover:bg-blue-50 hover:border-blue-300 transition text-blue-900">
-              <span className="text-xl">🧾</span>
-              <span className="text-[11px] font-semibold">Invoice</span>
             </button>
           </div>
           </div>

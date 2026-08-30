@@ -733,6 +733,7 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
     { key: 'dashboard', label: 'Dashboard', longLabel: 'Dashboard', icon: LayoutDashboard },
     { key: 'haccp', label: 'Fridges', longLabel: 'Fridges & Freezers', icon: Thermometer },
     { key: 'fields', label: 'Fields', longLabel: 'Custom Fields', icon: Package },
+    { key: 'trash', label: 'Trash', longLabel: 'Trash', icon: Trash2 },
   ]
 
   // ---- HACCP location handlers ----
@@ -917,8 +918,6 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
               </div>
 
               <NotificationSettingsCard />
-
-              <TrashCard />
             </div>
           )}
 
@@ -1087,6 +1086,15 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
             </div>
           )}
 
+          {tab === 'trash' && (
+            <div className="space-y-3">
+              <div>
+                <Label>Recently Deleted</Label>
+                <p className="text-xs text-muted-foreground">Anything deleted anywhere in the app lands here — restore it within 30 days</p>
+              </div>
+              <TrashCard defaultOpen />
+            </div>
+          )}
           {tab === 'fields' && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
