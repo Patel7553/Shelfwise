@@ -382,6 +382,8 @@ function App() {
   const { theme, setTheme } = useTheme()
   const [initial] = useState(getInitialFromURL)
   const [view, setView] = useState(initial.view) // dashboard | inventory | recipes
+  // When true, the Orders view opens straight into Stock Levels (dashboard tile)
+  const [ordersInitialStock, setOrdersInitialStock] = useState(false)
   const [products, setProducts] = useState([])
   const [stats, setStats] = useState({ total: 0, expiring: 0, expired: 0, critical: 0 })
   const [loading, setLoading] = useState(false)
@@ -2247,7 +2249,7 @@ function App() {
               </Button>
             )}
             {hasStock && can('orders') && (
-              <Button variant={view === 'orders' ? 'default' : 'ghost'} size="sm" onClick={() => setView('orders')} title="Orders" className="shrink-0">
+              <Button variant={view === 'orders' ? 'default' : 'ghost'} size="sm" onClick={() => { setOrdersInitialStock(false); setView('orders') }} title="Orders" className="shrink-0">
                 <Truck className="h-4 w-4 xl:mr-2" /> <span className="hidden xl:inline">Orders</span>
               </Button>
             )}
@@ -2352,7 +2354,7 @@ function App() {
               </Button>
             )}
             {hasStock && can('orders') && (
-              <Button variant={view === 'orders' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setView('orders'); setMobileNav(false) }}>
+              <Button variant={view === 'orders' ? 'default' : 'ghost'} className="w-full justify-start" onClick={() => { setOrdersInitialStock(false); setView('orders'); setMobileNav(false) }}>
                 <Truck className="h-4 w-4 mr-2" /> Orders
               </Button>
             )}
@@ -2438,7 +2440,7 @@ function App() {
           </Button>
         )}
         {view === 'dashboard' && (
-          <DashboardView stats={stats} statsLoading={statsLoading} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} isStaff={!can('logbook')} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} openEdit={openEdit} refreshAll={() => { fetchProducts(); fetchStats() }} />
+          <DashboardView stats={stats} statsLoading={statsLoading} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} isStaff={!can('logbook')} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} gotoStockLevels={() => { if (!can('orders')) { toast.error("You don't have permission to view stock levels"); return } setOrdersInitialStock(true); setView('orders') }} personName={me?.personName || ''} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} openEdit={openEdit} refreshAll={() => { fetchProducts(); fetchStats() }} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -2482,7 +2484,7 @@ function App() {
           <RotaView />
         )}
         {view === 'orders' && can('orders') && (
-          <OrdersView goCart={() => setView('cart')} />
+          <OrdersView goCart={() => setView('cart')} initialStock={ordersInitialStock} />
         )}
         {view === 'cart' && can('orders') && (
           <CartView

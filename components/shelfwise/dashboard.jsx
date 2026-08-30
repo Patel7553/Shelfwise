@@ -256,7 +256,7 @@ export function UseItOrLoseItPanel({ products, currency, openRecipeGenFromExpiri
   )
 }
 
-export function DashboardView({ stats, statsLoading, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, openReceipt, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes, currency, openRecipeGen, openRecipeGenFromExpiring, openEdit, refreshAll, isStaff }) {
+export function DashboardView({ stats, statsLoading, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, openReceipt, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes, gotoStockLevels, personName, currency, openRecipeGen, openRecipeGenFromExpiring, openEdit, refreshAll, isStaff }) {
   const [quickSearch, setQuickSearch] = useState('')
   const [globalResults, setGlobalResults] = useState(null)
   const [globalLoading, setGlobalLoading] = useState(false)
@@ -325,25 +325,15 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
           ideas + money-saved tracking — per user request this sits at the top. */}
       <UseItOrLoseItPanel products={products} currency={currency} openRecipeGenFromExpiring={openRecipeGenFromExpiring} refreshAll={refreshAll} />
 
-      {/* Hero header — gradient card with greeting + quick stats + primary actions */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-emerald-500 via-emerald-600 to-teal-700 text-white p-6 md:p-8 shadow-lg">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_100%_0%,rgba(255,255,255,0.15)_0%,transparent_50%)]" />
-        <div className="relative flex items-start justify-between flex-wrap gap-4">
-          <div className="min-w-0">
-            <p className="text-xs font-medium text-emerald-100 uppercase tracking-wider">{greetingEmoji} {greeting}</p>
-            <h2 className="text-2xl md:text-3xl font-bold tracking-tight mt-1">Here's what needs your attention</h2>
-            {/* Textual stats summary removed (UX overhaul) — replaced by the
-                tappable 2x2 stat-card grid right below the action tiles. */}
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            {isEmpty && (
-              <Button variant="secondary" size="sm" onClick={seedData} className="bg-white/95 text-emerald-700 hover:bg-white">
-                <Sparkles className="h-4 w-4 mr-2" /> Sample data
-              </Button>
-            )}
-            {/* "Add Product" button removed — use the Add Products tile below (user request) */}
-          </div>
-        </div>
+      {/* Plain centered greeting (green hero banner removed — user request).
+          No card, no background — just text below the header. */}
+      <div className="text-center pt-1">
+        <p className="text-xl md:text-2xl font-semibold tracking-tight">{greetingEmoji} {greeting}{personName ? `, ${personName}` : ''}</p>
+        {isEmpty && (
+          <Button variant="outline" size="sm" onClick={seedData} className="mt-2">
+            <Sparkles className="h-4 w-4 mr-2" /> Load sample data
+          </Button>
+        )}
       </div>
 
       {/* ====================================================================
@@ -364,21 +354,17 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
             <span className="text-2xl">➕</span>
             <span className="text-xs font-semibold">Add Items</span>
           </button>
-          <button onClick={gotoRecipes} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-300 transition text-purple-800">
-            <span className="text-2xl">📖</span>
-            <span className="text-xs font-semibold">Recipes</span>
+          <button onClick={gotoStockLevels} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-300 transition text-purple-800">
+            <span className="text-2xl">📊</span>
+            <span className="text-xs font-semibold">Stock Levels</span>
           </button>
         </div>
         {addOpen && (
-          <div className="space-y-2">
-          <button onClick={() => openBarcode('add')} className="w-full flex items-center justify-center gap-2 p-3 rounded-xl border-2 border-emerald-300 bg-emerald-50 hover:bg-emerald-100 hover:border-emerald-400 transition text-emerald-900 shadow-sm">
-            <ScanLine className="h-5 w-5 text-emerald-600" />
-            <span className="text-sm font-bold">Scan Barcode</span>
-            <span className="text-[10px] font-semibold bg-emerald-600 text-white rounded-full px-2 py-0.5">instant</span>
-          </button>
-          {/* Voice + Invoice tiles removed at user's request (Aug 2026) —
-              barcode scan is the hero flow; Snap Label & Manual remain. */}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
+            <button onClick={() => openBarcode('add')} className="flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 border-emerald-300 bg-emerald-50 hover:bg-emerald-100 hover:border-emerald-400 transition text-emerald-900">
+              <ScanLine className="h-5 w-5 text-emerald-600" />
+              <span className="text-[11px] font-semibold">Scan Barcode</span>
+            </button>
             <button onClick={openSnap} className="flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 border-blue-200 bg-white hover:bg-blue-50 hover:border-blue-300 transition text-blue-900">
               <span className="text-xl">📸</span>
               <span className="text-[11px] font-semibold">Snap Label</span>
@@ -387,7 +373,6 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
               <span className="text-xl">✏️</span>
               <span className="text-[11px] font-semibold">Manual</span>
             </button>
-          </div>
           </div>
         )}
       </div>

@@ -22,11 +22,13 @@ const fetch = apiFetch
 
 const EMPTY_SUPPLIER = { name: '', email: '', phone: '', notes: '' }
 
-export function OrdersView({ goCart }) {
+export function OrdersView({ goCart, initialStock }) {
   // Aug 2026: the legacy "Low Stock & Email Orders" section was removed at the
   // user's request — in-app supplier ordering (MarketplaceView) is the only
   // ordering flow now. Legacy dialogs below are kept for reference but unused.
-  const [showStock, setShowStock] = useState(false)
+  // `initialStock` (June 2025): the dashboard "Stock Levels" tile opens this
+  // view straight into StockLevelsView.
+  const [showStock, setShowStock] = useState(!!initialStock)
   if (showStock) {
     return <StockLevelsView onBack={() => setShowStock(false)} goCart={goCart} />
   }
