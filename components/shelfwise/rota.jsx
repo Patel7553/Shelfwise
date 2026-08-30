@@ -83,6 +83,17 @@ export const parseNotes = (notes) => {
 export const packNotes = ({ note = '', breakMins = 0, breakPaid = false }) =>
   breakMins > 0 ? JSON.stringify({ n: note, bm: breakMins, bp: breakPaid }) : note
 
+// Effective break for a shift: an EXPLICIT packed value always wins (even an
+// explicit 0 = "no break"); otherwise the person's profile default applies.
+// This is the fix for shifts created via templates/bulk assign/copy-week that
+// never stored break data — they now inherit the staff member's default.
+export const effMeta = (s, pm) => {
+  const raw = String(s?.notes || '')
+  if (raw.startsWith('{')) return parseNotes(raw)
+  return { note: raw, breakMins: pm?.defaultBreakMins || 0, breakPaid: !!pm?.breakPaid }
+}
+const fmtBreak = (mins) => mins % 60 === 0 ? `${mins / 60}h` : mins > 60 ? `${Math.floor(mins / 60)}h${mins % 60}m` : `${mins}m`
+
 // Entry kind from the (repurposed) role column
 export const kindOf = (s) => {
   const r = String(s?.role || '')
@@ -93,10 +104,11 @@ export const kindOf = (s) => {
 const isLeave = (s) => ['sick', 'annual', 'unpaid'].includes(kindOf(s))
 
 // Counted hours: raw shift length minus UNPAID break (shifts only).
-export const countedHours = (s) => {
+// pm = the person's profile (for default-break fallback on legacy rows).
+export const countedHours = (s, pm) => {
   const base = hoursOf(s.startTime, s.endTime)
   if (kindOf(s) !== 'shift') return base
-  const m = parseNotes(s.notes)
+  const m = effMeta(s, pm)
   return Math.max(0, Math.round((base - (m.breakPaid ? 0 : m.breakMins / 60)) * 100) / 100)
 }
 
@@ -110,9 +122,9 @@ const SLOT_PRESETS = ['Morning', 'Afternoon', 'Evening']
 // ---------------------------------------------------------------------------
 // Shift card
 // ---------------------------------------------------------------------------
-function ShiftCard({ s, owner, onEdit, draggable }) {
+function ShiftCard({ s, pm, owner, onEdit, draggable }) {
   const kind = kindOf(s)
-  const meta = parseNotes(s.notes)
+  const meta = kind === 'shift' ? effMeta(s, pm) : parseNotes(s.notes)
   if (kind === 'overtime') {
     return (
       <div
@@ -147,8 +159,8 @@ function ShiftCard({ s, owner, onEdit, draggable }) {
       className={`rounded-lg border-2 border-emerald-200 bg-emerald-50 px-2 py-1.5 text-left w-full ${owner ? 'cursor-pointer hover:bg-emerald-100 hover:border-emerald-300' : ''}`}
     >
       <div className="text-[11px] font-bold text-emerald-900 truncate">{s.shiftSlot || 'Shift'}</div>
-      <div className="text-[11px] font-semibold text-emerald-700">{timeRange(s) || 'no time set'}{s.startTime && s.endTime ? ` · ${fmtH(countedHours(s))}` : ''}</div>
-      {meta.breakMins > 0 && <div className="text-[10px] text-emerald-600"><Coffee className="h-2.5 w-2.5 inline mr-0.5" />{meta.breakMins}m {meta.breakPaid ? 'paid' : 'unpaid'} break</div>}
+      <div className="text-[11px] font-semibold text-emerald-700">{timeRange(s) || 'no time set'}{s.startTime && s.endTime ? ` · ${fmtH(countedHours(s, pm))}` : ''}</div>
+      {meta.breakMins > 0 && <div className="text-[10px] text-emerald-600"><Coffee className="h-2.5 w-2.5 inline mr-0.5" />{fmtBreak(meta.breakMins)} {meta.breakPaid ? 'paid' : 'unpaid'} break</div>}
       {meta.note && <div className="text-[10px] text-emerald-700/80 italic truncate" title={meta.note}>{meta.note}</div>}
     </div>
   )
@@ -179,8 +191,9 @@ function EntryDialog({ editing, onClose, staffNames, config, personMeta, onSaved
   const [leaveType, setLeaveType] = useState(isLeave(s || {}) ? kindOf(s) : 'sick')
   const [leaveEnd, setLeaveEnd] = useState(s?.shiftDate || editing?.date || todayISO())
   const pm = personMeta(person)
-  const [breakMins, setBreakMins] = useState(s ? (editMeta?.breakMins || 0) : (pm.defaultBreakMins || 0))
-  const [breakPaid, setBreakPaid] = useState(s ? !!editMeta?.breakPaid : !!pm.breakPaid)
+  const sEff = s && kindOf(s) === 'shift' ? effMeta(s, personMeta(s.chefName)) : null
+  const [breakMins, setBreakMins] = useState(s ? (sEff?.breakMins || 0) : (pm.defaultBreakMins || 0))
+  const [breakPaid, setBreakPaid] = useState(s ? !!sEff?.breakPaid : !!pm.breakPaid)
   const [busy, setBusy] = useState(false)
   const slotsMode = config?.mode === 'slots'
 
@@ -227,7 +240,7 @@ function EntryDialog({ editing, onClose, staffNames, config, personMeta, onSaved
       let payload = { shiftDate: date, chefName: person }
       if (kind === 'shift') {
         if (!name.trim()) { toast.error(slotsMode ? 'Pick a slot' : 'Give the shift a name (e.g. Prep, Lunch service)'); setBusy(false); return }
-        payload = { ...payload, shiftSlot: name.trim(), role: 'shift', startTime, endTime, notes: packNotes({ note: note.trim(), breakMins: breakMins || 0, breakPaid }) }
+        payload = { ...payload, shiftSlot: name.trim(), role: 'shift', startTime, endTime, notes: JSON.stringify({ n: note.trim(), bm: breakMins || 0, bp: breakPaid }) }
       } else if (kind === 'overtime') {
         if (!startTime || !endTime) { toast.error('Overtime needs a start and end time'); setBusy(false); return }
         payload = { ...payload, shiftSlot: 'Overtime', role: 'overtime', startTime, endTime, notes: note.trim() }
@@ -601,7 +614,7 @@ function TemplatesDialog({ open, onClose, config, saveConfig, staffNames, weekDa
 // Hours sheet — shared by owner (all staff + CSV) and staff (own only).
 // All figures use COUNTED hours (unpaid breaks subtracted).
 // ---------------------------------------------------------------------------
-function HoursDialog({ open, onClose, isStaff, personName, staffNames }) {
+function HoursDialog({ open, onClose, isStaff, personName, staffNames, personMeta }) {
   const [period, setPeriod] = useState('week')
   const [from, setFrom] = useState(mondayOf(todayISO()))
   const [to, setTo] = useState(isoAddDays(mondayOf(todayISO()), 6))
@@ -630,7 +643,7 @@ function HoursDialog({ open, onClose, isStaff, personName, staffNames }) {
 
   const summary = people.map(p => {
     const list = mine.filter(s => s.chefName === p)
-    const sched = list.filter(s => kindOf(s) === 'shift').reduce((a, s) => a + countedHours(s), 0)
+    const sched = list.filter(s => kindOf(s) === 'shift').reduce((a, s) => a + countedHours(s, personMeta(p)), 0)
     const ot = list.filter(s => kindOf(s) === 'overtime').reduce((a, s) => a + hoursOf(s.startTime, s.endTime), 0)
     const leave = list.filter(isLeave).length
     return { person: p, sched, ot, total: sched + ot, leave, count: list.length }
@@ -657,7 +670,7 @@ function HoursDialog({ open, onClose, isStaff, personName, staffNames }) {
   const byName = {}
   for (const s of detailShifts) {
     const k = s.shiftSlot || 'Shift'
-    byName[k] = (byName[k] || 0) + countedHours(s)
+    byName[k] = (byName[k] || 0) + countedHours(s, personMeta(detail))
   }
 
   return (
@@ -676,12 +689,12 @@ function HoursDialog({ open, onClose, isStaff, personName, staffNames }) {
               <div className="space-y-1.5">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Shifts</p>
                 {detailShifts.map(s => {
-                  const m = parseNotes(s.notes)
+                  const m = effMeta(s, personMeta(detail))
                   return (
                     <div key={s.id} className="rounded-lg border px-3 py-2 text-sm">
                       <div className="flex items-center justify-between">
                         <div><span className="font-semibold">{dayLabel(s.shiftDate)}</span> · {s.shiftSlot || 'Shift'}</div>
-                        <div className="text-muted-foreground">{timeRange(s) || '—'} <b className="text-foreground ml-1">{fmtH(countedHours(s))}</b></div>
+                        <div className="text-muted-foreground">{timeRange(s) || '—'} <b className="text-foreground ml-1">{fmtH(countedHours(s, personMeta(detail)))}</b></div>
                       </div>
                       {(m.breakMins > 0 || m.note) && (
                         <p className="text-[11px] text-muted-foreground mt-0.5">
@@ -772,7 +785,7 @@ function HoursDialog({ open, onClose, isStaff, personName, staffNames }) {
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Day by day</p>
                     {Array.from(new Set(mine.map(s => s.shiftDate))).sort().map(d => {
                       const dayList = mine.filter(s => s.shiftDate === d)
-                      const h = dayList.filter(s => !isLeave(s)).reduce((a, s) => a + (kindOf(s) === 'shift' ? countedHours(s) : hoursOf(s.startTime, s.endTime)), 0)
+                      const h = dayList.filter(s => !isLeave(s)).reduce((a, s) => a + (kindOf(s) === 'shift' ? countedHours(s, personMeta(s.chefName)) : hoursOf(s.startTime, s.endTime)), 0)
                       return (
                         <div key={d} className="flex items-center justify-between text-sm py-1 border-b last:border-0">
                           <span>{dayLabel(d)}</span>
@@ -857,7 +870,8 @@ export function RotaView({ isStaff = false, personName = '' }) {
 
   const weekTotals = (name) => {
     const list = shifts.filter(s => s.chefName === name)
-    const sched = list.filter(s => kindOf(s) === 'shift').reduce((a, s) => a + countedHours(s), 0)
+    const pm = personMeta(name)
+    const sched = list.filter(s => kindOf(s) === 'shift').reduce((a, s) => a + countedHours(s, pm), 0)
     const ot = list.filter(s => kindOf(s) === 'overtime').reduce((a, s) => a + hoursOf(s.startTime, s.endTime), 0)
     return { sched, ot, total: sched + ot }
   }
@@ -905,11 +919,11 @@ export function RotaView({ isStaff = false, personName = '' }) {
       }
       return list.map(s => {
         const kind = kindOf(s)
-        const m = parseNotes(s.notes)
+        const m = kind === 'shift' ? effMeta(s, personMeta(name)) : parseNotes(s.notes)
         if (kind === 'overtime') return `<div class="card ot">⚡ Overtime<br><b>${esc(timeRange(s))}</b>${m.note ? `<br><small>${esc(m.note)}</small>` : ''}</div>`
         if (isLeave(s)) { const lm = LEAVE_META[kind]; return `<div class="card leave">${lm.icon} ${esc(lm.label)}</div>` }
-        const br = m.breakMins > 0 ? `<br><small>☕ ${m.breakMins}m ${m.breakPaid ? 'paid' : 'unpaid'}</small>` : ''
-        return `<div class="card"><b>${esc(s.shiftSlot || 'Shift')}</b><br>${esc(timeRange(s))}${s.startTime && s.endTime ? ` <small>(${fmtH(countedHours(s))})</small>` : ''}${br}</div>`
+        const br = m.breakMins > 0 ? `<br><small>☕ ${fmtBreak(m.breakMins)} ${m.breakPaid ? 'paid' : 'unpaid'}</small>` : ''
+        return `<div class="card"><b>${esc(s.shiftSlot || 'Shift')}</b><br>${esc(timeRange(s))}${s.startTime && s.endTime ? ` <small>(${fmtH(countedHours(s, personMeta(name)))})</small>` : ''}${br}</div>`
       }).join('')
     }
     const rowsHtml = rowsFor.map(name => {
@@ -1028,7 +1042,7 @@ export function RotaView({ isStaff = false, personName = '' }) {
                         onDrop={!isStaff ? (e) => onDropCell(e, name, d) : undefined}
                       >
                         {isOff && <OffChip />}
-                        {list.map(s => <ShiftCard key={s.id} s={s} owner={!isStaff} draggable={!isStaff} onEdit={(sh) => setEditing({ shift: sh })} />)}
+                        {list.map(s => <ShiftCard key={s.id} s={s} pm={pm} owner={!isStaff} draggable={!isStaff} onEdit={(sh) => setEditing({ shift: sh })} />)}
                         {!isStaff && (
                           <button onClick={() => setEditing({ date: d, person: name })}
                             title={isOff ? `Override ${name}'s day off with a one-off shift` : 'Add entry'}
@@ -1053,7 +1067,7 @@ export function RotaView({ isStaff = false, personName = '' }) {
       {editing && <EntryDialog editing={editing} onClose={() => setEditing(null)} staffNames={staffNames} config={config} personMeta={personMeta} onSaved={load} />}
       {staffEditing && <StaffDialog editing={staffEditing} onClose={() => setStaffEditing(null)} config={config} saveConfig={saveConfig} loginNames={loginStaff.map(s => s.name)} />}
       <TemplatesDialog open={templatesOpen} onClose={() => setTemplatesOpen(false)} config={config} saveConfig={saveConfig} staffNames={staffNames} weekDays={days} reload={load} />
-      <HoursDialog open={hoursOpen} onClose={() => setHoursOpen(false)} isStaff={isStaff} personName={personName} staffNames={staffNames} />
+      <HoursDialog open={hoursOpen} onClose={() => setHoursOpen(false)} isStaff={isStaff} personName={personName} staffNames={staffNames} personMeta={personMeta} />
 
       <Dialog open={customiseOpen} onOpenChange={setCustomiseOpen}>
         <DialogContent className="max-w-sm">

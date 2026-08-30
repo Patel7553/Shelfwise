@@ -5824,10 +5824,24 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
         const role = ['shift', 'leave:sick', 'leave:annual', 'leave:unpaid'].includes(body.role) ? body.role : 'shift'
         const notes = String(body.notes || '').slice(0, 500)
         if (!names.length || !dates.length || !shiftName) return json({ error: 'names, dates and shiftName are required' }, 400)
+        // Break fix: shifts created via templates/bulk assign inherit each
+        // person's profile default break (packed into notes JSON) so unpaid
+        // breaks are deducted from counted hours just like dialog-added shifts.
+        let peopleCfg = []
+        try {
+          const { data: cRow } = await sb.from('rota_shifts').select('notes').eq('kitchen_id', kid).eq('chef_name', '__rota_config__').maybeSingle()
+          if (cRow?.notes) peopleCfg = JSON.parse(cRow.notes).people || []
+        } catch {}
         const now = new Date().toISOString()
         const rows = []
         for (const name of names) for (const date of dates) {
-          rows.push({ id: uuidv4(), kitchen_id: kid, shift_date: date, shift_slot: shiftName, chef_name: name, role, start_time: String(body.startTime || '').slice(0, 5), end_time: String(body.endTime || '').slice(0, 5), notes, updated_at: now })
+          let rowNotes = notes
+          if (role === 'shift') {
+            const prof = peopleCfg.find(p => String(p.name || '').toLowerCase() === name.toLowerCase())
+            const bm = Math.max(0, parseInt(prof?.defaultBreakMins, 10) || 0)
+            if (bm > 0) rowNotes = JSON.stringify({ n: notes, bm, bp: !!prof?.breakPaid })
+          }
+          rows.push({ id: uuidv4(), kitchen_id: kid, shift_date: date, shift_slot: shiftName, chef_name: name, role, start_time: String(body.startTime || '').slice(0, 5), end_time: String(body.endTime || '').slice(0, 5), notes: rowNotes, updated_at: now })
         }
         const { error: e2 } = await sb.from('rota_shifts').insert(rows)
         if (e2) throw e2

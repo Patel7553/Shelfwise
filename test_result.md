@@ -7347,3 +7347,85 @@ agent_communication:
             **Test file:** /app/backend_test_shift_reminder.py (can be re-run anytime)
             
             No critical issues found. Shift reminder push feature working perfectly in production.
+
+  - task: "Rota bulk break inheritance — POST /api/rota/bulk auto-packs person's profile default break into shift notes"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js (lines 5819-5858, rota/bulk endpoint)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "NEW (Aug 2026): Break fix for bulk-created shifts. POST /api/rota/bulk now reads the config row's people array and auto-packs each person's defaultBreakMins + breakPaid into the created shift's notes as JSON {n,bm,bp} (only for role='shift', not leave). This ensures unpaid breaks are deducted from counted hours just like dialog-added shifts. If person has no profile or defaultBreakMins=0, notes remain as passed. Leave rows (role starts with 'leave:') never get break JSON packed. Production DB: config row has 6 real people profiles incl. Parth (defaultBreakMins=60, breakPaid=false)."
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ FOCUSED TEST COMPLETE - Rota Bulk Break Inheritance (9/9 tests passed):
+            
+            **CONTEXT:**
+            - Production Supabase DB (kitchen_id: a2573e6a-70f0-4a6d-97d0-ccf09b444643)
+            - Config row contains 6 real people profiles incl. Parth (defaultBreakMins=60, breakPaid=false)
+            - CRITICAL: Did NOT modify config row (READ ONLY as required)
+            - Test dates: May 2027 (2027-05-03 to 2027-05-05)
+            - All created rows cleaned up (deleted + purged from trash)
+            
+            **TEST 1: Bulk create shift for Parth (has profile with 60min unpaid break) ✓**
+            - POST /api/rota/bulk {"names":["Parth"],"dates":["2027-05-03"],"shiftName":"BreakBulkTest","startTime":"09:00","endTime":"17:30"} → 201
+            - Response: created=1 ✓
+            - GET /api/rota?from=2027-05-03&to=2027-05-03 → 200 with 1 shift ✓
+            - Shift notes: '{"n":"","bm":60,"bp":false}' (EXACT match to Parth's profile default break) ✓
+            - Packed JSON structure verified:
+              * n: "" (empty note text)
+              * bm: 60 (defaultBreakMins from Parth's profile)
+              * bp: false (breakPaid from Parth's profile)
+            
+            **TEST 2: Bulk create shift for NoProfilePerson (no profile in config) ✓**
+            - POST /api/rota/bulk {"names":["NoProfilePerson"],"dates":["2027-05-04"],"shiftName":"BreakBulkTest2","startTime":"09:00","endTime":"17:00"} → 201
+            - Response: created=1 ✓
+            - GET /api/rota?from=2027-05-04&to=2027-05-04 → 200 with 1 shift ✓
+            - Shift notes: '' (empty string, no profile → no break packed) ✓
+            - Correctly skipped break packing when person not found in config people array ✓
+            
+            **TEST 3: Bulk create leave with role:'leave:annual' and notes='range note' ✓**
+            - POST /api/rota/bulk {"names":["Parth"],"dates":["2027-05-05"],"shiftName":"Annual leave","role":"leave:annual","notes":"range note"} → 201
+            - Response: created=1 ✓
+            - GET /api/rota?from=2027-05-05&to=2027-05-05 → 200 with 1 shift ✓
+            - Shift notes: 'range note' (EXACT match, NOT packed JSON) ✓
+            - Shift role: 'leave:annual' ✓
+            - Correctly preserved original notes for leave rows (leave rows never get break JSON) ✓
+            
+            **TEST 4: CLEANUP - Delete all created rows and purge from trash ✓**
+            - Created 3 shifts with IDs: [4ae10c73..., 5af69ae9..., 9b15f7c0...] ✓
+            - DELETE /api/rota/:id for all 3 shifts → 200 (all deleted) ✓
+            - GET /api/trash → 200 with 6 trash items (3 from this run + 3 from previous run) ✓
+            - DELETE /api/trash/:id for all 6 test trash items → 200 (all purged) ✓
+            - GET /api/rota?from=2027-05-01&to=2027-05-07 → 200 with 0 shifts (cleanup verified) ✓
+            
+            **Key Validations:**
+            - ✅ POST /api/rota/bulk auto-packs person's profile default break into shift notes
+            - ✅ Packed JSON format correct: {"n":"","bm":60,"bp":false} (n=note text, bm=breakMins, bp=breakPaid)
+            - ✅ Break packing ONLY for role='shift' (not for leave roles)
+            - ✅ No break packing when person has no profile in config people array
+            - ✅ Leave rows preserve original notes exactly (never get break JSON)
+            - ✅ Config row NOT modified (READ ONLY as required)
+            - ✅ All test data cleaned up (no pollution of production DB)
+            - ✅ Used May 2027 dates (no interference with existing 2026 data)
+            
+            **Production Safety:**
+            - ✅ Config row (chef_name='__rota_config__') NOT modified (READ ONLY)
+            - ✅ Real people profiles (6 people incl. Parth) remain intact
+            - ✅ No 2026 rota rows touched (user's real Overtime entry on 2026-08-30 safe)
+            - ✅ All test shifts deleted and purged from trash
+            
+            **Test file:** /app/backend_test_rota_break_packing.py (can be re-run anytime)
+            
+            No critical issues found. Rota bulk break inheritance feature working perfectly.
+
+agent_communication:
+    - agent: "main"
+      message: "Quick regression test of one ShelfWise backend change: POST /api/rota/bulk now packs each person's profile default break into the created shifts' notes. Context in /app/test_result.md (Rota tasks). CRITICAL (production Supabase): The rota config row (rota_shifts.chef_name='__rota_config__') contains the USER'S REAL people profiles (6 people incl. 'Parth' with defaultBreakMins 60, breakPaid false) and templates. DO NOT modify or restore-overwrite it — READ ONLY. Use ONLY dates in May 2027. Clean up every created row (DELETE /api/rota/:id + purge those items from /api/trash). Do NOT touch any 2026 rota rows."
+    - agent: "testing"
+      message: "✅ Rota bulk break inheritance regression test COMPLETE (9/9 tests passed). POST /api/rota/bulk correctly auto-packs person's profile default break into shift notes as JSON {n,bm,bp}. Tested: (1) Parth with profile → notes='{"n":"","bm":60,"bp":false}' ✓, (2) NoProfilePerson → notes='' ✓, (3) leave:annual role → notes='range note' (not packed) ✓. Config row NOT modified (READ ONLY). All test data cleaned up (3 shifts deleted + 6 trash items purged). Production DB safe (May 2027 dates, no 2026 data touched). Test file: /app/backend_test_rota_break_packing.py."
+
