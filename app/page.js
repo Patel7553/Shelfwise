@@ -48,20 +48,50 @@ function getInitialFromURL() {
 }
 
 // ============================================================================
-// Theme — currently disabled by user request (light mode only).
-// Kept as no-op stubs so we can turn it back on later without touching JSX.
+// Theme — light / dark / system (re-enabled June 2025 by user request).
+// Persisted in localStorage 'sw_theme'; the <html> class is also set before
+// first paint by an inline script in layout.js (no flash of wrong theme).
 // ============================================================================
 function useTheme() {
+  const [theme, setThemeState] = useState('light')
+  // Read saved preference after mount (SSR-safe). NOTE: we only PERSIST in
+  // setTheme (user action) — never in the apply effect — so the initial
+  // 'light' render can never overwrite a saved 'dark' preference.
+  useEffect(() => {
+    try { setThemeState(localStorage.getItem('sw_theme') || 'light') } catch {}
+  }, [])
   useEffect(() => {
     if (typeof window === 'undefined') return
-    // Ensure any previous dark preference is cleared
-    document.documentElement.classList.remove('dark')
-    try { localStorage.removeItem('sw_theme') } catch {}
+    const apply = (t) => {
+      const dark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+      document.documentElement.classList.toggle('dark', dark)
+    }
+    apply(theme)
+    if (theme === 'system') {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)')
+      const h = () => apply('system')
+      mq.addEventListener('change', h)
+      return () => mq.removeEventListener('change', h)
+    }
+  }, [theme])
+  const setTheme = useCallback((t) => {
+    try { localStorage.setItem('sw_theme', t) } catch {}
+    setThemeState(t)
   }, [])
-  return { theme: 'light', setTheme: () => {} }
+  return { theme, setTheme }
 }
 
-function ThemeToggle() { return null }
+function ThemeToggle({ theme, setTheme }) {
+  // Cycles: light → dark → system → light
+  const next = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light'
+  const Icon = theme === 'dark' ? Moon : theme === 'system' ? Monitor : Sun
+  const label = theme === 'dark' ? 'Dark' : theme === 'system' ? 'Auto (system)' : 'Light'
+  return (
+    <Button variant="ghost" size="icon" onClick={() => setTheme(next)} title={`Theme: ${label} — tap to change`} className="shrink-0" aria-label="Toggle theme">
+      <Icon className="h-4 w-4" />
+    </Button>
+  )
+}
 
 // ============================================================================
 // KIOSK STAFF-CODE LOCK (June 2025) — shared-tablet flow.
@@ -2266,6 +2296,7 @@ function App() {
                 )}
               </Button>
             )}
+            <ThemeToggle theme={theme} setTheme={setTheme} />
             <Button variant="ghost" size="icon" onClick={() => setSettingsOpen(true)} title={T('nav_settings')} className="shrink-0">
               <Settings className="h-4 w-4" />
             </Button>
@@ -2296,6 +2327,7 @@ function App() {
                 <span className="text-xs">Switch</span>
               </Button>
             )}
+            <ThemeToggle theme={theme} setTheme={setTheme} />
             {/* Mobile menu button */}
             <Button variant="ghost" size="icon" onClick={() => setMobileNav(v => !v)}>
               <Settings className="h-5 w-5" />
