@@ -7181,3 +7181,81 @@ agent_communication:
             **Test file:** /app/backend_test_rota_regression.py (can be re-run anytime)
             
             No critical issues found. All rota endpoints working perfectly with push alert hooks.
+
+  - task: "Rota v2.1 — config people (off days/default break), bulk leave role+notes, packed notes in push payload"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js (rota/config people sanitizer, rota/bulk role+notes, rotaPushPayload JSON notes), components/shelfwise/rota.jsx (rewritten v2.1)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "v2.1: rota/config now also persists people:[{id,name,role,offDays[0-6],defaultBreakMins,breakPaid}]. rota/bulk accepts optional role ('shift' default | 'leave:sick'|'leave:annual'|'leave:unpaid') and notes (<=500 chars), used by the new date-range leave picker. Shift notes may be packed JSON {n,bm,bp} for break time. IMPORTANT: production DB — the kitchen's config row currently has mode 'flex', 6 user templates, people []. Tests MUST read config first, restore it EXACTLY afterwards, use 2027 dates for shifts, and purge all created rows from trash. Do NOT touch existing rota rows (user has a real Overtime entry on 2026-08-30)."
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ FOCUSED TEST COMPLETE - Rota v2.1 Regression (7/7 tests passed):
+            
+            **CONTEXT:**
+            - Production Supabase DB used (kitchen_id: a2573e6a-70f0-4a6d-97d0-ccf09b444643)
+            - CRITICAL: Original config saved and restored successfully
+            - All test data used April 2027 dates (no interference with existing Aug 2026 data)
+            - All created rows cleaned up (deleted + purged from trash)
+            
+            **Test 1: GET /api/rota/config → 200 ✓**
+            - Response has keys: mode, templates, people ✓
+            - Current state verified: mode='flex', 6 templates, people=[] ✓
+            - Original config saved for restoration ✓
+            
+            **Test 2: POST /api/rota/config with people array → 200 ✓**
+            - Posted people with invalid data: offDays=[2,5,99,-1], defaultBreakMins=9999 ✓
+            - Sanitization verified:
+              * offDays correctly filtered: [2,5,99,-1] → [2,5] (invalid values 99,-1 removed) ✓
+              * defaultBreakMins correctly clamped: 9999 → 480 (max value) ✓
+            - GET confirms persistence of sanitized values ✓
+            
+            **Test 3: POST /api/rota/bulk with leave role + notes → 201 ✓**
+            - Created 2 rows: names=['TestPerson'], dates=['2027-04-05','2027-04-06'] ✓
+            - Both rows verified:
+              * role='leave:annual' ✓
+              * shiftSlot='Annual leave' ✓
+              * notes='Approved by manager' ✓
+            
+            **Test 4: POST /api/rota/bulk with invalid role → 201 ✓**
+            - Posted with role='hacker-role' (invalid) ✓
+            - Created row has role='shift' (correct fallback) ✓
+            
+            **Test 5: POST /api/rota with packed JSON notes → 201 ✓**
+            - Posted notes='{"n":"train","bm":30,"bp":false}' (packed JSON) ✓
+            - POST response preserves packed JSON exactly ✓
+            - GET response preserves packed JSON exactly ✓
+            
+            **Test 6: RESTORE original config → 200 ✓**
+            - Original config restored: mode='flex', 6 templates, people=[] ✓
+            - GET confirms restoration: people=[], 6 templates unchanged ✓
+            
+            **Test 7: CLEANUP all created rows → 200 ✓**
+            - Deleted 4 rota rows via DELETE /api/rota/:id ✓
+            - Purged 8 items from trash (4 from this run + 4 from previous run) ✓
+            - Verified GET /api/rota?from=2027-04-01&to=2027-04-30 returns [] ✓
+            
+            **Key Validations:**
+            - ✅ Config people persistence working correctly
+            - ✅ Sanitization working: offDays filters invalid values (0-6 only), defaultBreakMins clamps to 0-480
+            - ✅ Bulk leave creation working with role + notes
+            - ✅ Invalid role fallback to 'shift' working correctly
+            - ✅ Packed JSON notes preserved exactly (not parsed/modified)
+            - ✅ Original config restored successfully (production data safe)
+            - ✅ All test data cleaned up (no pollution of production DB)
+            
+            **Test file:** /app/backend_test_rota_v2_1.py (can be re-run anytime)
+            
+            No critical issues found. All Rota v2.1 backend changes working perfectly.
+
+agent_communication:
+    - agent: "main"
+      message: "Rota v2.1 backend changes need regression: (1) POST rota/config with people array persists+sanitizes (bad offDays filtered, breakMins clamped 0-480), GET returns people; restore original config after. (2) POST rota/bulk with role leave:annual + notes creates leave rows with that role/notes; invalid role falls back to 'shift'. (3) POST rota with packed-JSON notes stores and returns them intact. Cleanup mandatory (2027 dates)."
+    - agent: "testing"
+      message: "✅ Rota v2.1 regression test COMPLETE (7/7 passed). All backend changes working perfectly: (1) Config people persistence + sanitization verified (offDays filtered, breakMins clamped), (2) Bulk leave with role+notes working, invalid role falls back to 'shift', (3) Packed JSON notes preserved exactly. Original config restored, all test data cleaned up. Production DB safe."

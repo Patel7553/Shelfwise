@@ -2,21 +2,28 @@
 
 /* eslint-disable no-unused-vars */
 // ============================================================================
-// ROTA v2 (June 2025 redesign — user request)
-//  • Flexible shifts: custom name + custom start/end times (no fixed slots).
-//  • Optional "slots" mode (Morning/Afternoon/Evening) via Customise toggle.
-//  • Owner view: fully editable grid (staff rows × 7 days), add/remove staff,
-//    shift templates, bulk assign (multi staff × multi days), copy last week,
-//    drag a shift card onto another day/person to duplicate it.
-//  • Staff view: read-only, own shifts only (auto-linked by login name).
-//  • Overtime entries (start/end/reason) highlighted amber; added to totals.
-//  • Sick / Annual / Unpaid leave day markers — excluded from hours totals.
-//  • Hours sheet: week / month / custom range, per-person scheduled + OT +
-//    total, CSV export (owner), full per-shift detail log with per-shift-name
-//    breakdown.
-// DB: reuses rota_shifts columns (NO migration): shift_slot = shift name,
-// role = 'shift' | 'overtime' | 'leave:sick' | 'leave:annual' | 'leave:unpaid',
-// notes = overtime reason / notes. Config/templates live in a hidden config row.
+// ROTA v2.1 (June 2025)
+//  • Flexible shifts (custom name + times) with optional Morning/Afternoon/
+//    Evening slot mode; owner grid + read-only staff view; overtime + leave;
+//    templates, bulk assign, copy last week, drag-to-duplicate, print sheet.
+//  v2.1 additions:
+//  • Per-staff OFF-DAY patterns (e.g. Wed/Sun) — set on the staff profile,
+//    rendered as neutral grey "Off" chips, derived (not stored per week) so
+//    "Copy last week" carries them automatically. Owner can still add a
+//    one-off shift on an off day (override) without changing the pattern.
+//  • Date-RANGE leave picker: marks every WORKING day in the range (skips
+//    that person's own off days) with a confirmation summary + optional note.
+//  • Simplified staff adding: name + optional role only — NO login/PIN here.
+//    Rota profiles live in the rota config row and are independent of login
+//    access codes; matching names link automatically (bank/agency friendly).
+//  • Optional Note on EVERY entry type (Shift / Overtime / Leave).
+//  • Break time per shift (minutes + paid/unpaid) with live breakdown; unpaid
+//    breaks are subtracted from counted hours everywhere (grid totals, hours
+//    sheet, detail log, print). Per-staff default break prefills new shifts.
+// DB: still NO migration — rota_shifts.role carries the entry kind,
+// shift_slot the name, and notes either a plain note or packed JSON
+// {"n":note,"bm":breakMins,"bp":breakPaid}. Config row (chef_name
+// '__rota_config__') stores {mode, templates, people}.
 // ============================================================================
 
 import React, { useEffect, useMemo, useCallback, useRef, useState } from 'react'
@@ -29,7 +36,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { Checkbox } from '@/components/ui/checkbox'
 import { toast } from 'sonner'
-import { Plus, Pencil, Trash2, Loader2, Check, X, ChevronLeft, ChevronRight, Copy, Download, Clock, Zap, CalendarDays, Settings2, Users, FileText, ArrowLeft, LayoutTemplate, Printer } from 'lucide-react'
+import { Plus, Pencil, Trash2, Loader2, Check, X, ChevronLeft, ChevronRight, Copy, Download, Clock, Zap, CalendarDays, Settings2, Users, FileText, ArrowLeft, LayoutTemplate, Printer, Coffee } from 'lucide-react'
 import { apiFetch } from '@/lib/apiClient'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
@@ -41,11 +48,13 @@ const fetch = apiFetch
 const todayISO = () => new Date().toISOString().slice(0, 10)
 const isoAddDays = (iso, n) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10) }
 const mondayOf = (iso) => { const d = new Date(iso + 'T12:00:00'); const day = d.getDay(); return isoAddDays(iso, day === 0 ? -6 : 1 - day) }
-// 'Mon 24 Aug' — date + day name shown together (user request)
+const weekdayOf = (iso) => new Date(iso + 'T12:00:00').getDay() // 0=Sun..6=Sat
+// 'Mon 24 Aug' — date + day name shown together
 const dayLabel = (iso) => new Date(iso + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
 const longLabel = (iso) => new Date(iso + 'T12:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
 const monthStartISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01` }
 const monthEndISO = () => { const d = new Date(); const e = new Date(d.getFullYear(), d.getMonth() + 1, 0); return `${e.getFullYear()}-${String(e.getMonth() + 1).padStart(2, '0')}-${String(e.getDate()).padStart(2, '0')}` }
+const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 // Hours between HH:MM strings (handles overnight shifts, e.g. 22:00–02:00 = 4h)
 export const hoursOf = (start, end) => {
@@ -60,6 +69,20 @@ export const hoursOf = (start, end) => {
 const fmtH = (h) => (Math.round(h * 100) / 100) % 1 === 0 ? `${Math.round(h)}h` : `${(Math.round(h * 100) / 100).toFixed(1)}h`
 const timeRange = (s) => (s.startTime && s.endTime) ? `${s.startTime}–${s.endTime}` : (s.startTime || s.endTime || '')
 
+// ---------------------------------------------------------------------------
+// notes packing — a shift's note + break info share the existing notes column.
+// Plain string = just a note (back-compat). JSON {"n","bm","bp"} = note+break.
+// ---------------------------------------------------------------------------
+export const parseNotes = (notes) => {
+  const raw = String(notes || '')
+  if (raw.startsWith('{')) {
+    try { const j = JSON.parse(raw); return { note: String(j.n || ''), breakMins: Math.max(0, +j.bm || 0), breakPaid: !!j.bp } } catch {}
+  }
+  return { note: raw, breakMins: 0, breakPaid: false }
+}
+export const packNotes = ({ note = '', breakMins = 0, breakPaid = false }) =>
+  breakMins > 0 ? JSON.stringify({ n: note, bm: breakMins, bp: breakPaid }) : note
+
 // Entry kind from the (repurposed) role column
 export const kindOf = (s) => {
   const r = String(s?.role || '')
@@ -69,6 +92,14 @@ export const kindOf = (s) => {
 }
 const isLeave = (s) => ['sick', 'annual', 'unpaid'].includes(kindOf(s))
 
+// Counted hours: raw shift length minus UNPAID break (shifts only).
+export const countedHours = (s) => {
+  const base = hoursOf(s.startTime, s.endTime)
+  if (kindOf(s) !== 'shift') return base
+  const m = parseNotes(s.notes)
+  return Math.max(0, Math.round((base - (m.breakPaid ? 0 : m.breakMins / 60)) * 100) / 100)
+}
+
 export const LEAVE_META = {
   sick: { label: 'Sick', icon: '🤒', card: 'border-rose-300 bg-rose-50 text-rose-800', badge: 'bg-rose-100 text-rose-700 border-rose-200' },
   annual: { label: 'Annual leave', icon: '🏖️', card: 'border-sky-300 bg-sky-50 text-sky-800', badge: 'bg-sky-100 text-sky-700 border-sky-200' },
@@ -77,10 +108,11 @@ export const LEAVE_META = {
 const SLOT_PRESETS = ['Morning', 'Afternoon', 'Evening']
 
 // ---------------------------------------------------------------------------
-// Shift card (used in both owner grid + staff list)
+// Shift card
 // ---------------------------------------------------------------------------
 function ShiftCard({ s, owner, onEdit, draggable }) {
   const kind = kindOf(s)
+  const meta = parseNotes(s.notes)
   if (kind === 'overtime') {
     return (
       <div
@@ -91,7 +123,7 @@ function ShiftCard({ s, owner, onEdit, draggable }) {
       >
         <div className="flex items-center gap-1 text-[11px] font-bold text-amber-800"><Zap className="h-3 w-3" /> Overtime</div>
         <div className="text-[11px] font-semibold text-amber-900">{timeRange(s) || '—'} · {fmtH(hoursOf(s.startTime, s.endTime))}</div>
-        {s.notes && <div className="text-[10px] text-amber-700 truncate" title={s.notes}>{s.notes}</div>}
+        {meta.note && <div className="text-[10px] text-amber-700 truncate" title={meta.note}>{meta.note}</div>}
       </div>
     )
   }
@@ -103,7 +135,7 @@ function ShiftCard({ s, owner, onEdit, draggable }) {
         className={`rounded-lg border-2 px-2 py-1.5 text-left w-full ${m.card} ${owner ? 'cursor-pointer' : ''}`}
       >
         <div className="text-[11px] font-bold">{m.icon} {m.label}</div>
-        <div className="text-[10px] opacity-80">Not counted in hours</div>
+        {meta.note ? <div className="text-[10px] opacity-80 truncate" title={meta.note}>{meta.note}</div> : <div className="text-[10px] opacity-80">Not counted in hours</div>}
       </div>
     )
   }
@@ -115,44 +147,95 @@ function ShiftCard({ s, owner, onEdit, draggable }) {
       className={`rounded-lg border-2 border-emerald-200 bg-emerald-50 px-2 py-1.5 text-left w-full ${owner ? 'cursor-pointer hover:bg-emerald-100 hover:border-emerald-300' : ''}`}
     >
       <div className="text-[11px] font-bold text-emerald-900 truncate">{s.shiftSlot || 'Shift'}</div>
-      <div className="text-[11px] font-semibold text-emerald-700">{timeRange(s) || 'no time set'}{s.startTime && s.endTime ? ` · ${fmtH(hoursOf(s.startTime, s.endTime))}` : ''}</div>
+      <div className="text-[11px] font-semibold text-emerald-700">{timeRange(s) || 'no time set'}{s.startTime && s.endTime ? ` · ${fmtH(countedHours(s))}` : ''}</div>
+      {meta.breakMins > 0 && <div className="text-[10px] text-emerald-600"><Coffee className="h-2.5 w-2.5 inline mr-0.5" />{meta.breakMins}m {meta.breakPaid ? 'paid' : 'unpaid'} break</div>}
+      {meta.note && <div className="text-[10px] text-emerald-700/80 italic truncate" title={meta.note}>{meta.note}</div>}
+    </div>
+  )
+}
+
+// Neutral grey routine "Off" chip (derived from the staff off-day pattern)
+function OffChip() {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-100/80 px-2 py-1.5 text-center">
+      <span className="text-[11px] font-semibold text-slate-400 tracking-wider">OFF</span>
     </div>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Add / edit entry dialog — Shift | Overtime | Leave
+// Add / edit entry dialog — Shift | Overtime | Leave (with range picker)
 // ---------------------------------------------------------------------------
-function EntryDialog({ editing, onClose, staffNames, config, onSaved }) {
+function EntryDialog({ editing, onClose, staffNames, config, personMeta, onSaved }) {
   const s = editing?.shift
-  const [kind, setKind] = useState(s ? kindOf(s) : 'shift')
+  const editMeta = s ? parseNotes(s.notes) : null
+  const [kind, setKind] = useState(s ? (isLeave(s) ? 'leave' : kindOf(s)) : 'shift')
   const [person, setPerson] = useState(s?.chefName || editing?.person || staffNames[0] || '')
   const [date, setDate] = useState(s?.shiftDate || editing?.date || todayISO())
   const [name, setName] = useState(s && kindOf(s) === 'shift' ? (s.shiftSlot || '') : '')
   const [startTime, setStartTime] = useState(s?.startTime || '')
   const [endTime, setEndTime] = useState(s?.endTime || '')
-  const [reason, setReason] = useState(s && kindOf(s) === 'overtime' ? (s.notes || '') : '')
+  const [note, setNote] = useState(editMeta?.note || '')
   const [leaveType, setLeaveType] = useState(isLeave(s || {}) ? kindOf(s) : 'sick')
+  const [leaveEnd, setLeaveEnd] = useState(s?.shiftDate || editing?.date || todayISO())
+  const pm = personMeta(person)
+  const [breakMins, setBreakMins] = useState(s ? (editMeta?.breakMins || 0) : (pm.defaultBreakMins || 0))
+  const [breakPaid, setBreakPaid] = useState(s ? !!editMeta?.breakPaid : !!pm.breakPaid)
   const [busy, setBusy] = useState(false)
   const slotsMode = config?.mode === 'slots'
+
+  // When the person changes on a NEW shift, re-prefill their default break
+  const onPersonChange = (p) => {
+    setPerson(p)
+    if (!s) { const m = personMeta(p); setBreakMins(m.defaultBreakMins || 0); setBreakPaid(!!m.breakPaid) }
+  }
+
+  // ---- break breakdown (live) ----
+  const rawH = hoursOf(startTime, endTime)
+  const counted = Math.max(0, Math.round((rawH - (breakPaid ? 0 : (breakMins || 0) / 60)) * 100) / 100)
+
+  // ---- leave range → working days (skips this person's own off days) ----
+  const leaveDays = useMemo(() => {
+    if (kind !== 'leave' || s?.id) return { working: [date], skipped: 0 }
+    const from = date, to = leaveEnd >= date ? leaveEnd : date
+    const working = []; let skipped = 0; let cur = from; let guard = 0
+    while (cur <= to && guard < 62) {
+      if ((pm.offDays || []).includes(weekdayOf(cur))) skipped++
+      else working.push(cur)
+      cur = isoAddDays(cur, 1); guard++
+    }
+    return { working, skipped }
+  }, [kind, date, leaveEnd, person]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async () => {
     if (!person) { toast.error('Pick a staff member'); return }
     if (!date) { toast.error('Pick a date'); return }
-    let payload = { shiftDate: date, chefName: person }
-    if (kind === 'shift') {
-      if (!name.trim()) { toast.error(slotsMode ? 'Pick a slot' : 'Give the shift a name (e.g. Prep, Lunch service)'); return }
-      payload = { ...payload, shiftSlot: name.trim(), role: 'shift', startTime, endTime, notes: '' }
-    } else if (kind === 'overtime') {
-      if (!startTime || !endTime) { toast.error('Overtime needs a start and end time'); return }
-      payload = { ...payload, shiftSlot: 'Overtime', role: 'overtime', startTime, endTime, notes: reason.trim() }
-    } else {
-      const m = LEAVE_META[leaveType]
-      payload = { ...payload, shiftSlot: m.label, role: `leave:${leaveType}`, startTime: '', endTime: '', notes: '' }
-    }
-    if (s?.id) payload.id = s.id
     setBusy(true)
     try {
+      if (kind === 'leave' && !s?.id && leaveDays.working.length > 1) {
+        // Date-range leave → one bulk call marking every working day
+        const m = LEAVE_META[leaveType]
+        const res = await fetch('/api/rota/bulk', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ names: [person], dates: leaveDays.working, shiftName: m.label, role: `leave:${leaveType}`, notes: note.trim() }),
+        })
+        const d = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(d.error || 'Save failed')
+        toast.success(`${m.label} marked on ${leaveDays.working.length} working day${leaveDays.working.length > 1 ? 's' : ''}${leaveDays.skipped ? ` (${leaveDays.skipped} off day${leaveDays.skipped > 1 ? 's' : ''} left as Off)` : ''}`)
+        onSaved(); onClose(); return
+      }
+      let payload = { shiftDate: date, chefName: person }
+      if (kind === 'shift') {
+        if (!name.trim()) { toast.error(slotsMode ? 'Pick a slot' : 'Give the shift a name (e.g. Prep, Lunch service)'); setBusy(false); return }
+        payload = { ...payload, shiftSlot: name.trim(), role: 'shift', startTime, endTime, notes: packNotes({ note: note.trim(), breakMins: breakMins || 0, breakPaid }) }
+      } else if (kind === 'overtime') {
+        if (!startTime || !endTime) { toast.error('Overtime needs a start and end time'); setBusy(false); return }
+        payload = { ...payload, shiftSlot: 'Overtime', role: 'overtime', startTime, endTime, notes: note.trim() }
+      } else {
+        const m = LEAVE_META[leaveType]
+        payload = { ...payload, shiftSlot: m.label, role: `leave:${leaveType}`, startTime: '', endTime: '', notes: note.trim() }
+      }
+      if (s?.id) payload.id = s.id
       const res = await fetch('/api/rota', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Save failed') }
       toast.success(s?.id ? 'Updated' : 'Added')
@@ -179,9 +262,11 @@ function EntryDialog({ editing, onClose, staffNames, config, onSaved }) {
     </button>
   )
 
+  const isOffDay = (pm.offDays || []).includes(weekdayOf(date))
+
   return (
     <Dialog open={!!editing} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[88vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{s?.id ? 'Edit entry' : 'Add entry'}</DialogTitle>
           <DialogDescription>{longLabel(date)}</DialogDescription>
@@ -191,16 +276,21 @@ function EntryDialog({ editing, onClose, staffNames, config, onSaved }) {
           <div className="grid grid-cols-2 gap-2">
             <div>
               <Label className="text-xs">Staff member</Label>
-              <Select value={person} onValueChange={setPerson}>
+              <Select value={person} onValueChange={onPersonChange}>
                 <SelectTrigger className="mt-1"><SelectValue placeholder="Pick person" /></SelectTrigger>
                 <SelectContent>{staffNames.map(n => <SelectItem key={n} value={n}>{n}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div>
-              <Label className="text-xs">Date</Label>
-              <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="mt-1" />
+              <Label className="text-xs">{kind === 'leave' && !s?.id ? 'From' : 'Date'}</Label>
+              <Input type="date" value={date} onChange={e => { setDate(e.target.value); if (leaveEnd < e.target.value) setLeaveEnd(e.target.value) }} className="mt-1" />
             </div>
           </div>
+          {kind === 'shift' && isOffDay && (
+            <p className="text-[11px] rounded-lg border border-slate-300 bg-slate-100 text-slate-600 px-2 py-1.5">
+              💤 {dayLabel(date)} is usually {person}'s day off — saving this creates a one-off shift; their regular off-day pattern is unchanged.
+            </p>
+          )}
 
           {kind === 'shift' && (
             <>
@@ -232,6 +322,25 @@ function EntryDialog({ editing, onClose, staffNames, config, onSaved }) {
                 <div><Label className="text-xs">Start</Label><Input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="mt-1" /></div>
                 <div><Label className="text-xs">End</Label><Input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} className="mt-1" /></div>
               </div>
+              {/* Break time */}
+              <div className="rounded-xl border p-2.5 space-y-2">
+                <p className="text-xs font-semibold flex items-center gap-1.5"><Coffee className="h-3.5 w-3.5 text-emerald-600" />Break</p>
+                <div className="flex items-center gap-2">
+                  <Input type="number" min="0" max="480" step="5" value={breakMins || ''} onChange={e => setBreakMins(Math.max(0, parseInt(e.target.value, 10) || 0))} placeholder="0" className="w-24 h-8" />
+                  <span className="text-xs text-muted-foreground">minutes</span>
+                  <div className="ml-auto flex rounded-lg border overflow-hidden">
+                    <button onClick={() => setBreakPaid(false)} className={`px-2.5 py-1 text-[11px] font-semibold ${!breakPaid ? 'bg-slate-700 text-white' : 'text-muted-foreground hover:bg-muted'}`}>Unpaid</button>
+                    <button onClick={() => setBreakPaid(true)} className={`px-2.5 py-1 text-[11px] font-semibold ${breakPaid ? 'bg-emerald-600 text-white' : 'text-muted-foreground hover:bg-muted'}`}>Paid</button>
+                  </div>
+                </div>
+                {rawH > 0 && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Shift length <b className="text-foreground">{fmtH(rawH)}</b>
+                    {breakMins > 0 && <> · break <b className="text-foreground">{breakMins}m ({breakPaid ? 'paid' : 'unpaid'})</b></>}
+                    {' '}→ counted hours <b className="text-emerald-700">{fmtH(counted)}</b>
+                  </p>
+                )}
+              </div>
             </>
           )}
 
@@ -241,25 +350,146 @@ function EntryDialog({ editing, onClose, staffNames, config, onSaved }) {
                 <div><Label className="text-xs">Extra start</Label><Input type="time" value={startTime} onChange={e => setStartTime(e.target.value)} className="mt-1" /></div>
                 <div><Label className="text-xs">Extra end</Label><Input type="time" value={endTime} onChange={e => setEndTime(e.target.value)} className="mt-1" /></div>
               </div>
-              <div><Label className="text-xs">Reason (optional)</Label><Input value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Covered evening rush" className="mt-1" /></div>
               <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">⚡ Overtime is flagged separately and added to weekly totals.</p>
             </>
           )}
 
           {kind === 'leave' && (
-            <div className="grid grid-cols-3 gap-2">
-              {Object.entries(LEAVE_META).map(([k, m]) => (
-                <button key={k} onClick={() => setLeaveType(k)}
-                  className={`rounded-lg border-2 px-2 py-2 text-xs font-semibold ${leaveType === k ? m.card : 'border-border text-muted-foreground hover:bg-muted'}`}>
-                  {m.icon} {m.label}
-                </button>
-              ))}
-              <p className="col-span-3 text-[11px] text-muted-foreground">Replaces the shift for that day and is excluded from worked-hours totals.</p>
-            </div>
+            <>
+              {!s?.id && (
+                <div>
+                  <Label className="text-xs">To (inclusive)</Label>
+                  <Input type="date" value={leaveEnd} min={date} onChange={e => setLeaveEnd(e.target.value)} className="mt-1" />
+                </div>
+              )}
+              <div className="grid grid-cols-3 gap-2">
+                {Object.entries(LEAVE_META).map(([k, m]) => (
+                  <button key={k} onClick={() => setLeaveType(k)}
+                    className={`rounded-lg border-2 px-2 py-2 text-xs font-semibold ${leaveType === k ? m.card : 'border-border text-muted-foreground hover:bg-muted'}`}>
+                    {m.icon} {m.label}
+                  </button>
+                ))}
+              </div>
+              {/* Confirmation summary for the range */}
+              {!s?.id && (
+                <div className="rounded-xl border border-sky-200 bg-sky-50 p-2.5 text-[11px] text-sky-900">
+                  <p className="font-semibold">This will mark {leaveDays.working.length} working day{leaveDays.working.length !== 1 ? 's' : ''} as {LEAVE_META[leaveType].label}:</p>
+                  <p className="mt-0.5">{leaveDays.working.slice(0, 10).map(dayLabel).join(', ')}{leaveDays.working.length > 10 ? ` +${leaveDays.working.length - 10} more` : ''}</p>
+                  {leaveDays.skipped > 0 && <p className="mt-0.5 text-sky-700">{leaveDays.skipped} off day{leaveDays.skipped > 1 ? 's' : ''} in this range {leaveDays.skipped > 1 ? 'are' : 'is'} left as Off (not marked).</p>}
+                  <p className="mt-0.5 opacity-80">Leave days are excluded from worked-hours totals.</p>
+                </div>
+              )}
+            </>
           )}
+
+          {/* Optional note — consistent across ALL entry types */}
+          <div>
+            <Label className="text-xs">Note <span className="text-muted-foreground font-normal">(optional)</span></Label>
+            <Input value={note} onChange={e => setNote(e.target.value)}
+              placeholder={kind === 'overtime' ? 'e.g. Covered evening rush' : kind === 'leave' ? 'e.g. Approved by manager on 24 Aug' : 'e.g. Training new starter'}
+              className="mt-1" />
+          </div>
         </div>
         <DialogFooter className="gap-2">
           {s?.id && <Button variant="outline" onClick={remove} disabled={busy} className="text-red-600 border-red-200 hover:bg-red-50 mr-auto"><Trash2 className="h-4 w-4 mr-1" /> Delete</Button>}
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={save} disabled={busy} className="bg-emerald-600 hover:bg-emerald-700 text-white">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Staff profile dialog — name + optional role + off days + default break.
+// Rota-only: creates NO login/access code (that stays in Settings; matching
+// names link automatically).
+// ---------------------------------------------------------------------------
+function StaffDialog({ editing, onClose, config, saveConfig, loginNames }) {
+  const existing = editing?.profile
+  const [name, setName] = useState(existing?.name || editing?.name || '')
+  const [role, setRole] = useState(existing?.role || '')
+  const [offDays, setOffDays] = useState(existing?.offDays || [])
+  const [defBreak, setDefBreak] = useState(existing?.defaultBreakMins || 0)
+  const [defPaid, setDefPaid] = useState(!!existing?.breakPaid)
+  const [busy, setBusy] = useState(false)
+  const hasLogin = loginNames.some(n => n.toLowerCase() === String(existing?.name || name).trim().toLowerCase())
+
+  const toggleDay = (d) => setOffDays(offDays.includes(d) ? offDays.filter(x => x !== d) : [...offDays, d].sort())
+
+  const save = async () => {
+    const nm = name.trim()
+    if (!nm) { toast.error('Name is required'); return }
+    const people = [...(config.people || [])]
+    const dupe = people.find(p => p.id !== existing?.id && p.name.toLowerCase() === nm.toLowerCase())
+    if (dupe) { toast.error(`${nm} is already on the rota`); return }
+    const profile = { id: existing?.id || crypto.randomUUID(), name: nm, role: role.trim(), offDays, defaultBreakMins: defBreak || 0, breakPaid: defPaid }
+    const next = existing?.id ? people.map(p => p.id === existing.id ? profile : p) : [...people, profile]
+    setBusy(true)
+    try {
+      await saveConfig({ ...config, people: next })
+      toast.success(existing?.id ? 'Profile updated' : `${nm} added to the rota`)
+      onClose()
+    } finally { setBusy(false) }
+  }
+
+  const remove = async () => {
+    if (!existing?.id) return
+    if (!window.confirm(`Remove ${existing.name} from the rota? Their past shifts stay on record.${hasLogin ? '\n\n(They still have login access — manage that in Settings.)' : ''}`)) return
+    setBusy(true)
+    try {
+      await saveConfig({ ...config, people: (config.people || []).filter(p => p.id !== existing.id) })
+      toast.success(`${existing.name} removed from the rota`)
+      onClose()
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <Dialog open={!!editing} onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{existing?.id ? `Edit ${existing.name}` : 'Add staff member'}</DialogTitle>
+          <DialogDescription>
+            Rota only — no login or access code is created here.{existing?.id && hasLogin ? ' This person also has login access (linked by name).' : ''}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <Label className="text-xs">Name</Label>
+              <Input value={name} onChange={e => setName(e.target.value)} placeholder="Name" disabled={!!existing?.id} className="mt-1" />
+            </div>
+            <div>
+              <Label className="text-xs">Role <span className="text-muted-foreground font-normal">(optional)</span></Label>
+              <Input value={role} onChange={e => setRole(e.target.value)} placeholder="e.g. Chef de partie" className="mt-1" />
+            </div>
+          </div>
+          <div>
+            <Label className="text-xs">Days off each week <span className="text-muted-foreground font-normal">(e.g. pick 2 — any days, per their contract)</span></Label>
+            <div className="flex gap-1.5 mt-1.5">
+              {[1, 2, 3, 4, 5, 6, 0].map(d => (
+                <button key={d} onClick={() => toggleDay(d)}
+                  className={`flex-1 rounded-lg border-2 py-1.5 text-[11px] font-bold transition ${offDays.includes(d) ? 'border-slate-500 bg-slate-600 text-white' : 'border-border text-muted-foreground hover:bg-muted'}`}>
+                  {WEEKDAY_SHORT[d]}
+                </button>
+              ))}
+            </div>
+            {offDays.length > 0 && <p className="text-[11px] text-muted-foreground mt-1">Shows as grey "Off" on the rota — excluded from coverage, skipped by range leave, and carried over by Copy last week.</p>}
+          </div>
+          <div className="rounded-xl border p-2.5 space-y-2">
+            <p className="text-xs font-semibold flex items-center gap-1.5"><Coffee className="h-3.5 w-3.5 text-emerald-600" />Default break <span className="text-muted-foreground font-normal">(prefills new shifts — editable per shift)</span></p>
+            <div className="flex items-center gap-2">
+              <Input type="number" min="0" max="480" step="5" value={defBreak || ''} onChange={e => setDefBreak(Math.max(0, parseInt(e.target.value, 10) || 0))} placeholder="0" className="w-24 h-8" />
+              <span className="text-xs text-muted-foreground">minutes</span>
+              <div className="ml-auto flex rounded-lg border overflow-hidden">
+                <button onClick={() => setDefPaid(false)} className={`px-2.5 py-1 text-[11px] font-semibold ${!defPaid ? 'bg-slate-700 text-white' : 'text-muted-foreground hover:bg-muted'}`}>Unpaid</button>
+                <button onClick={() => setDefPaid(true)} className={`px-2.5 py-1 text-[11px] font-semibold ${defPaid ? 'bg-emerald-600 text-white' : 'text-muted-foreground hover:bg-muted'}`}>Paid</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <DialogFooter className="gap-2">
+          {existing?.id && <Button variant="outline" onClick={remove} disabled={busy} className="text-red-600 border-red-200 hover:bg-red-50 mr-auto"><Trash2 className="h-4 w-4 mr-1" /> Remove</Button>}
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button onClick={save} disabled={busy} className="bg-emerald-600 hover:bg-emerald-700 text-white">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}</Button>
         </DialogFooter>
@@ -273,7 +503,7 @@ function EntryDialog({ editing, onClose, staffNames, config, onSaved }) {
 // ---------------------------------------------------------------------------
 function TemplatesDialog({ open, onClose, config, saveConfig, staffNames, weekDays, reload }) {
   const [name, setName] = useState(''); const [st, setSt] = useState(''); const [en, setEn] = useState('')
-  const [assign, setAssign] = useState(null) // template being bulk-assigned
+  const [assign, setAssign] = useState(null)
   const [selNames, setSelNames] = useState([]); const [selDates, setSelDates] = useState([])
   const [busy, setBusy] = useState(false)
 
@@ -369,15 +599,15 @@ function TemplatesDialog({ open, onClose, config, saveConfig, staffNames, weekDa
 
 // ---------------------------------------------------------------------------
 // Hours sheet — shared by owner (all staff + CSV) and staff (own only).
-// Includes the tap-through detailed log per person.
+// All figures use COUNTED hours (unpaid breaks subtracted).
 // ---------------------------------------------------------------------------
 function HoursDialog({ open, onClose, isStaff, personName, staffNames }) {
-  const [period, setPeriod] = useState('week') // week | month | custom
+  const [period, setPeriod] = useState('week')
   const [from, setFrom] = useState(mondayOf(todayISO()))
   const [to, setTo] = useState(isoAddDays(mondayOf(todayISO()), 6))
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
-  const [detail, setDetail] = useState(null) // person name for detailed log
+  const [detail, setDetail] = useState(null)
 
   useEffect(() => {
     if (period === 'week') { setFrom(mondayOf(todayISO())); setTo(isoAddDays(mondayOf(todayISO()), 6)) }
@@ -400,15 +630,15 @@ function HoursDialog({ open, onClose, isStaff, personName, staffNames }) {
 
   const summary = people.map(p => {
     const list = mine.filter(s => s.chefName === p)
-    const sched = list.filter(s => kindOf(s) === 'shift').reduce((a, s) => a + hoursOf(s.startTime, s.endTime), 0)
+    const sched = list.filter(s => kindOf(s) === 'shift').reduce((a, s) => a + countedHours(s), 0)
     const ot = list.filter(s => kindOf(s) === 'overtime').reduce((a, s) => a + hoursOf(s.startTime, s.endTime), 0)
     const leave = list.filter(isLeave).length
     return { person: p, sched, ot, total: sched + ot, leave, count: list.length }
-  }).filter(r => !isStaff ? true : true)
+  })
 
   const exportCsv = () => {
     const lines = [
-      `Hours sheet,${from} to ${to}`,
+      `Hours sheet,${from} to ${to},(unpaid breaks deducted)`,
       'Name,Scheduled hours,Overtime hours,Total hours,Leave days',
       ...summary.map(r => `"${r.person}",${r.sched.toFixed(2)},${r.ot.toFixed(2)},${r.total.toFixed(2)},${r.leave}`),
     ]
@@ -420,7 +650,6 @@ function HoursDialog({ open, onClose, isStaff, personName, staffNames }) {
     toast.success('CSV downloaded')
   }
 
-  // ---- Detailed log for one person ----
   const detailEntries = detail ? mine.filter(s => s.chefName === detail).sort((a, b) => a.shiftDate.localeCompare(b.shiftDate)) : []
   const detailShifts = detailEntries.filter(s => kindOf(s) === 'shift')
   const detailOt = detailEntries.filter(s => kindOf(s) === 'overtime')
@@ -428,7 +657,7 @@ function HoursDialog({ open, onClose, isStaff, personName, staffNames }) {
   const byName = {}
   for (const s of detailShifts) {
     const k = s.shiftSlot || 'Shift'
-    byName[k] = (byName[k] || 0) + hoursOf(s.startTime, s.endTime)
+    byName[k] = (byName[k] || 0) + countedHours(s)
   }
 
   return (
@@ -436,7 +665,7 @@ function HoursDialog({ open, onClose, isStaff, personName, staffNames }) {
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle><Clock className="h-5 w-5 inline mr-1.5 text-emerald-600" />{detail ? `${detail} — full log` : isStaff ? 'My hours' : 'Hours sheet'}</DialogTitle>
-          <DialogDescription>{dayLabel(from)} → {dayLabel(to)}</DialogDescription>
+          <DialogDescription>{dayLabel(from)} → {dayLabel(to)} · unpaid breaks deducted</DialogDescription>
         </DialogHeader>
 
         {detail ? (
@@ -446,26 +675,41 @@ function HoursDialog({ open, onClose, isStaff, personName, staffNames }) {
             {detailShifts.length > 0 && (
               <div className="space-y-1.5">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Shifts</p>
-                {detailShifts.map(s => (
-                  <div key={s.id} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
-                    <div><span className="font-semibold">{dayLabel(s.shiftDate)}</span> · {s.shiftSlot || 'Shift'}</div>
-                    <div className="text-muted-foreground">{timeRange(s) || '—'} <b className="text-foreground ml-1">{fmtH(hoursOf(s.startTime, s.endTime))}</b></div>
-                  </div>
-                ))}
+                {detailShifts.map(s => {
+                  const m = parseNotes(s.notes)
+                  return (
+                    <div key={s.id} className="rounded-lg border px-3 py-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <div><span className="font-semibold">{dayLabel(s.shiftDate)}</span> · {s.shiftSlot || 'Shift'}</div>
+                        <div className="text-muted-foreground">{timeRange(s) || '—'} <b className="text-foreground ml-1">{fmtH(countedHours(s))}</b></div>
+                      </div>
+                      {(m.breakMins > 0 || m.note) && (
+                        <p className="text-[11px] text-muted-foreground mt-0.5">
+                          {m.breakMins > 0 && <>☕ {m.breakMins}m {m.breakPaid ? 'paid' : 'unpaid'} break{m.breakPaid ? '' : ' (deducted)'}</>}
+                          {m.breakMins > 0 && m.note && ' · '}
+                          {m.note && <>📝 {m.note}</>}
+                        </p>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             )}
             {detailOt.length > 0 && (
               <div className="space-y-1.5">
                 <p className="text-xs font-semibold text-amber-700 uppercase tracking-wider">⚡ Overtime</p>
-                {detailOt.map(s => (
-                  <div key={s.id} className="rounded-lg border-2 border-amber-300 bg-amber-50 px-3 py-2 text-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-amber-900">{dayLabel(s.shiftDate)}</span>
-                      <span className="text-amber-800">{timeRange(s)} <b>{fmtH(hoursOf(s.startTime, s.endTime))}</b></span>
+                {detailOt.map(s => {
+                  const m = parseNotes(s.notes)
+                  return (
+                    <div key={s.id} className="rounded-lg border-2 border-amber-300 bg-amber-50 px-3 py-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-amber-900">{dayLabel(s.shiftDate)}</span>
+                        <span className="text-amber-800">{timeRange(s)} <b>{fmtH(hoursOf(s.startTime, s.endTime))}</b></span>
+                      </div>
+                      {m.note && <p className="text-xs text-amber-700 mt-0.5">Reason: {m.note}</p>}
                     </div>
-                    {s.notes && <p className="text-xs text-amber-700 mt-0.5">Reason: {s.notes}</p>}
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
             {detailLeave.length > 0 && (
@@ -473,7 +717,8 @@ function HoursDialog({ open, onClose, isStaff, personName, staffNames }) {
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Leave (not counted)</p>
                 {detailLeave.map(s => {
                   const m = LEAVE_META[kindOf(s)]
-                  return <div key={s.id} className={`rounded-lg border px-3 py-2 text-sm ${m.badge}`}>{m.icon} <b>{dayLabel(s.shiftDate)}</b> — {m.label}</div>
+                  const pm = parseNotes(s.notes)
+                  return <div key={s.id} className={`rounded-lg border px-3 py-2 text-sm ${m.badge}`}>{m.icon} <b>{dayLabel(s.shiftDate)}</b> — {m.label}{pm.note ? ` · 📝 ${pm.note}` : ''}</div>
                 })}
               </div>
             )}
@@ -527,7 +772,7 @@ function HoursDialog({ open, onClose, isStaff, personName, staffNames }) {
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Day by day</p>
                     {Array.from(new Set(mine.map(s => s.shiftDate))).sort().map(d => {
                       const dayList = mine.filter(s => s.shiftDate === d)
-                      const h = dayList.filter(s => !isLeave(s)).reduce((a, s) => a + hoursOf(s.startTime, s.endTime), 0)
+                      const h = dayList.filter(s => !isLeave(s)).reduce((a, s) => a + (kindOf(s) === 'shift' ? countedHours(s) : hoursOf(s.startTime, s.endTime)), 0)
                       return (
                         <div key={d} className="flex items-center justify-between text-sm py-1 border-b last:border-0">
                           <span>{dayLabel(d)}</span>
@@ -553,15 +798,14 @@ function HoursDialog({ open, onClose, isStaff, personName, staffNames }) {
 export function RotaView({ isStaff = false, personName = '' }) {
   const [weekStart, setWeekStart] = useState(() => mondayOf(todayISO()))
   const [shifts, setShifts] = useState([])
-  const [staff, setStaff] = useState([]) // [{name, role, isOwner}]
-  const [config, setConfig] = useState({ mode: 'flex', templates: [] })
+  const [loginStaff, setLoginStaff] = useState([]) // login users from Settings
+  const [config, setConfig] = useState({ mode: 'flex', templates: [], people: [] })
   const [loading, setLoading] = useState(true)
-  const [editing, setEditing] = useState(null)      // {shift?, date, person}
+  const [editing, setEditing] = useState(null)
+  const [staffEditing, setStaffEditing] = useState(null) // {profile?} | {name}
   const [templatesOpen, setTemplatesOpen] = useState(false)
   const [hoursOpen, setHoursOpen] = useState(false)
   const [customiseOpen, setCustomiseOpen] = useState(false)
-  const [addPersonOpen, setAddPersonOpen] = useState(false)
-  const [newPerson, setNewPerson] = useState('')
   const [busy, setBusy] = useState(false)
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => isoAddDays(weekStart, i)), [weekStart])
@@ -577,10 +821,10 @@ export function RotaView({ isStaff = false, personName = '' }) {
       ])
       const d1 = r1.ok ? await r1.json() : []
       const d2 = r2.ok ? await r2.json() : { staff: [] }
-      const d3 = r3.ok ? await r3.json() : { mode: 'flex', templates: [] }
+      const d3 = r3.ok ? await r3.json() : { mode: 'flex', templates: [], people: [] }
       setShifts((Array.isArray(d1) ? d1 : []).filter(s => s.chefName !== '__rota_config__'))
-      setStaff(d2.staff || [])
-      setConfig({ mode: d3.mode || 'flex', templates: d3.templates || [] })
+      setLoginStaff(d2.staff || [])
+      setConfig({ mode: d3.mode || 'flex', templates: d3.templates || [], people: d3.people || [] })
     } catch { toast.error('Could not load rota') } finally { setLoading(false) }
   }, [weekStart, weekEnd])
   useEffect(() => { load() }, [load])
@@ -594,24 +838,32 @@ export function RotaView({ isStaff = false, personName = '' }) {
     } catch (e) { toast.error(e.message) }
   }
 
-  // Staff rows: kitchen staff list ∪ anyone appearing on this week's rota
+  // Grid rows = rota profiles ∪ login users ∪ anyone on this week's rota
+  // (deduped by name, case-insensitive — matching names link automatically).
   const staffNames = useMemo(() => {
-    const base = staff.map(s => s.name)
-    const extra = Array.from(new Set(shifts.map(s => s.chefName))).filter(n => n && !base.includes(n))
-    return [...base, ...extra]
-  }, [staff, shifts])
+    const seen = new Map()
+    for (const p of (config.people || [])) seen.set(p.name.toLowerCase(), p.name)
+    for (const s of loginStaff) if (s.name && !seen.has(s.name.toLowerCase())) seen.set(s.name.toLowerCase(), s.name)
+    for (const s of shifts) if (s.chefName && !seen.has(s.chefName.toLowerCase())) seen.set(s.chefName.toLowerCase(), s.chefName)
+    return Array.from(seen.values())
+  }, [config.people, loginStaff, shifts])
 
-  const rowsFor = isStaff ? staffNames.filter(n => n === personName) : staffNames
+  const rowsFor = isStaff ? staffNames.filter(n => n.toLowerCase() === personName.toLowerCase()) : staffNames
+
+  const personMeta = useCallback((name) => {
+    const p = (config.people || []).find(x => x.name.toLowerCase() === String(name || '').toLowerCase())
+    return p || { name, role: '', offDays: [], defaultBreakMins: 0, breakPaid: false }
+  }, [config.people])
 
   const weekTotals = (name) => {
     const list = shifts.filter(s => s.chefName === name)
-    const sched = list.filter(s => kindOf(s) === 'shift').reduce((a, s) => a + hoursOf(s.startTime, s.endTime), 0)
+    const sched = list.filter(s => kindOf(s) === 'shift').reduce((a, s) => a + countedHours(s), 0)
     const ot = list.filter(s => kindOf(s) === 'overtime').reduce((a, s) => a + hoursOf(s.startTime, s.endTime), 0)
     return { sched, ot, total: sched + ot }
   }
 
   const copyLastWeek = async () => {
-    if (!window.confirm(`Copy all shifts from last week (${dayLabel(isoAddDays(weekStart, -7))} – ${dayLabel(isoAddDays(weekStart, -1))}) into this week?`)) return
+    if (!window.confirm(`Copy all shifts from last week (${dayLabel(isoAddDays(weekStart, -7))} – ${dayLabel(isoAddDays(weekStart, -1))}) into this week?\n\nOff-day patterns apply automatically.`)) return
     setBusy(true)
     try {
       const res = await fetch('/api/rota/copy-week', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fromStart: isoAddDays(weekStart, -7), toStart: weekStart }) })
@@ -622,29 +874,6 @@ export function RotaView({ isStaff = false, personName = '' }) {
     } catch (e) { toast.error(e.message) } finally { setBusy(false) }
   }
 
-  const addPerson = async () => {
-    if (!newPerson.trim()) return
-    try {
-      const res = await fetch('/api/staff/add', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newPerson.trim() }) })
-      const d = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(d.error || 'Could not add (owner login required)')
-      toast.success(`${newPerson.trim()} added — PIN: ${d.staff?.pin || 'see Settings'}`)
-      setNewPerson(''); setAddPersonOpen(false); load()
-    } catch (e) { toast.error(e.message) }
-  }
-
-  const removePerson = async (name) => {
-    if (!window.confirm(`Remove ${name} from staff? Their existing rota entries stay on record.`)) return
-    try {
-      const res = await fetch(`/api/staff/${encodeURIComponent(name)}`, { method: 'DELETE' })
-      const d = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(d.error || 'Could not remove (owner login required)')
-      toast.success(`${name} removed`)
-      load()
-    } catch (e) { toast.error(e.message) }
-  }
-
-  // Drag a card onto another cell → duplicate there (owner, desktop)
   const onDropCell = async (e, person, date) => {
     e.preventDefault()
     const id = e.dataTransfer.getData('text/plain')
@@ -665,19 +894,22 @@ export function RotaView({ isStaff = false, personName = '' }) {
   const cellShifts = (person, date) => shifts.filter(s => s.chefName === person && s.shiftDate === date)
 
   // Printable weekly rota sheet for the kitchen wall (A4 landscape).
-  // Opens a clean standalone window with just the grid + totals and prints it.
   const printRota = () => {
     const w = window.open('', '_blank', 'width=1100,height=800')
     if (!w) { toast.error('Pop-up blocked — please allow pop-ups to print'); return }
     const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     const cellHtml = (name, d) => {
       const list = cellShifts(name, d)
-      if (!list.length) return '<span class="off">—</span>'
+      if (!list.length) {
+        return (personMeta(name).offDays || []).includes(weekdayOf(d)) ? '<div class="card offday">OFF</div>' : '<span class="off">—</span>'
+      }
       return list.map(s => {
         const kind = kindOf(s)
-        if (kind === 'overtime') return `<div class="card ot">⚡ Overtime<br><b>${esc(timeRange(s))}</b>${s.notes ? `<br><small>${esc(s.notes)}</small>` : ''}</div>`
-        if (isLeave(s)) { const m = LEAVE_META[kind]; return `<div class="card leave">${m.icon} ${esc(m.label)}</div>` }
-        return `<div class="card"><b>${esc(s.shiftSlot || 'Shift')}</b><br>${esc(timeRange(s))}${s.startTime && s.endTime ? ` <small>(${fmtH(hoursOf(s.startTime, s.endTime))})</small>` : ''}</div>`
+        const m = parseNotes(s.notes)
+        if (kind === 'overtime') return `<div class="card ot">⚡ Overtime<br><b>${esc(timeRange(s))}</b>${m.note ? `<br><small>${esc(m.note)}</small>` : ''}</div>`
+        if (isLeave(s)) { const lm = LEAVE_META[kind]; return `<div class="card leave">${lm.icon} ${esc(lm.label)}</div>` }
+        const br = m.breakMins > 0 ? `<br><small>☕ ${m.breakMins}m ${m.breakPaid ? 'paid' : 'unpaid'}</small>` : ''
+        return `<div class="card"><b>${esc(s.shiftSlot || 'Shift')}</b><br>${esc(timeRange(s))}${s.startTime && s.endTime ? ` <small>(${fmtH(countedHours(s))})</small>` : ''}${br}</div>`
       }).join('')
     }
     const rowsHtml = rowsFor.map(name => {
@@ -696,15 +928,16 @@ export function RotaView({ isStaff = false, personName = '' }) {
       th, td { border: 1px solid #bbb; padding: 4px; vertical-align: top; font-size: 10.5px; }
       th { background: #eef7f2; text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.04em; }
       th.today { background: #d3f0e2; }
-      td.name { width: 110px; } td { min-height: 40px; }
+      td.name { width: 110px; }
       .card { border: 1.5px solid #10b981; background: #ecfdf5; border-radius: 5px; padding: 3px 4px; margin-bottom: 3px; }
       .card.ot { border-color: #f59e0b; background: #fffbeb; }
       .card.leave { border-color: #94a3b8; background: #f1f5f9; }
+      .card.offday { border-color: #cbd5e1; background: #f8fafc; color: #94a3b8; text-align: center; font-weight: bold; letter-spacing: 0.1em; font-size: 9px; }
       small { color: #555; } .off { color: #bbb; }
       .foot { margin-top: 8px; font-size: 9px; color: #888; }
     </style></head><body>
       <h1>Staff Rota — ${dayLabel(weekStart)} to ${dayLabel(weekEnd)}</h1>
-      <p class="sub">⚡ amber = overtime · grey = sick/leave (not counted in hours)</p>
+      <p class="sub">⚡ amber = overtime · grey = sick/leave · OFF = routine day off · hours shown after unpaid breaks</p>
       <table>
         <thead><tr><th>Staff</th>${days.map(d => `<th class="${d === todayISO() ? 'today' : ''}">${dayLabel(d)}</th>`).join('')}</tr></thead>
         <tbody>${rowsHtml}</tbody>
@@ -718,7 +951,6 @@ export function RotaView({ isStaff = false, personName = '' }) {
 
   return (
     <div className="space-y-4">
-      {/* Header: title + week nav + owner toolbar */}
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-xl font-bold tracking-tight flex items-center gap-2"><CalendarDays className="h-5 w-5 text-emerald-600" />Rota</h2>
         <div className="flex items-center gap-1 ml-auto">
@@ -737,7 +969,7 @@ export function RotaView({ isStaff = false, personName = '' }) {
           <Button size="sm" variant="outline" onClick={() => setHoursOpen(true)}><Clock className="h-3.5 w-3.5 mr-1.5" />Hours sheet</Button>
           <Button size="sm" variant="outline" onClick={() => setCustomiseOpen(true)}><Settings2 className="h-3.5 w-3.5 mr-1.5" />Customise</Button>
           <Button size="sm" variant="outline" onClick={printRota}><Printer className="h-3.5 w-3.5 mr-1.5" />Print</Button>
-          <Button size="sm" variant="outline" onClick={() => setAddPersonOpen(true)}><Plus className="h-3.5 w-3.5 mr-1.5" />Add person</Button>
+          <Button size="sm" variant="outline" onClick={() => setStaffEditing({})}><Plus className="h-3.5 w-3.5 mr-1.5" />Add person</Button>
         </div>
       )}
       {isStaff && (
@@ -752,13 +984,12 @@ export function RotaView({ isStaff = false, personName = '' }) {
       ) : rowsFor.length === 0 ? (
         <div className="text-center py-16 text-muted-foreground border-2 border-dashed rounded-2xl">
           <Users className="h-12 w-12 mx-auto mb-3 opacity-30" />
-          <p className="font-medium">{isStaff ? 'Your name is not on the staff list yet — ask the owner to add you.' : 'No staff yet'}</p>
-          {!isStaff && <Button size="sm" variant="outline" className="mt-3" onClick={() => setAddPersonOpen(true)}><Plus className="h-4 w-4 mr-1" />Add your first person</Button>}
+          <p className="font-medium">{isStaff ? 'Your name is not on the rota yet — ask the owner to add you.' : 'No staff yet'}</p>
+          {!isStaff && <Button size="sm" variant="outline" className="mt-3" onClick={() => setStaffEditing({})}><Plus className="h-4 w-4 mr-1" />Add your first person</Button>}
         </div>
       ) : (
         <div className="overflow-x-auto rounded-2xl border">
           <div className="min-w-[900px]">
-            {/* Day headers */}
             <div className="grid" style={{ gridTemplateColumns: '11rem repeat(7, minmax(7.5rem, 1fr))' }}>
               <div className="p-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider border-b bg-muted/40">Staff</div>
               {days.map(d => (
@@ -767,20 +998,22 @@ export function RotaView({ isStaff = false, personName = '' }) {
                 </div>
               ))}
             </div>
-            {/* Staff rows */}
             {rowsFor.map(name => {
               const t = weekTotals(name)
+              const pm = personMeta(name)
+              const hasProfile = (config.people || []).some(p => p.name.toLowerCase() === name.toLowerCase())
               return (
                 <div key={name} className="grid border-b last:border-b-0" style={{ gridTemplateColumns: '11rem repeat(7, minmax(7.5rem, 1fr))' }}>
-                  <div className="p-2.5 flex flex-col justify-center group">
-                    <div className="flex items-center gap-1.5">
+                  <div className="p-2.5 flex flex-col justify-center">
+                    {!isStaff ? (
+                      <button onClick={() => setStaffEditing(hasProfile ? { profile: (config.people || []).find(p => p.name.toLowerCase() === name.toLowerCase()) } : { name })}
+                        className="text-left group" title="Edit staff profile (off days, default break)">
+                        <p className="font-bold text-sm truncate group-hover:text-emerald-700">{name} <Pencil className="h-3 w-3 inline opacity-0 group-hover:opacity-60" /></p>
+                      </button>
+                    ) : (
                       <p className="font-bold text-sm truncate">{name}</p>
-                      {!isStaff && (
-                        <button onClick={() => removePerson(name)} title={`Remove ${name}`} className="opacity-0 group-hover:opacity-100 transition text-red-400 hover:text-red-600">
-                          <X className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </div>
+                    )}
+                    {pm.role && <p className="text-[10px] text-muted-foreground truncate">{pm.role}</p>}
                     <p className="text-xs text-muted-foreground">
                       {fmtH(t.sched)}{t.ot > 0 && <span className="text-amber-600 font-semibold"> +{fmtH(t.ot)} OT</span>}
                       {t.ot > 0 && <span className="block font-semibold text-foreground">= {fmtH(t.total)} total</span>}
@@ -788,15 +1021,18 @@ export function RotaView({ isStaff = false, personName = '' }) {
                   </div>
                   {days.map(d => {
                     const list = cellShifts(name, d)
+                    const isOff = list.length === 0 && (pm.offDays || []).includes(weekdayOf(d))
                     return (
-                      <div key={d} className={`p-1.5 border-l min-h-[4.5rem] space-y-1 ${d === todayISO() ? 'bg-emerald-50/40' : ''}`}
+                      <div key={d} className={`p-1.5 border-l min-h-[4.5rem] space-y-1 ${d === todayISO() ? 'bg-emerald-50/40' : ''} ${isOff ? 'bg-slate-50/60' : ''}`}
                         onDragOver={!isStaff ? (e) => e.preventDefault() : undefined}
                         onDrop={!isStaff ? (e) => onDropCell(e, name, d) : undefined}
                       >
+                        {isOff && <OffChip />}
                         {list.map(s => <ShiftCard key={s.id} s={s} owner={!isStaff} draggable={!isStaff} onEdit={(sh) => setEditing({ shift: sh })} />)}
                         {!isStaff && (
                           <button onClick={() => setEditing({ date: d, person: name })}
-                            className={`w-full rounded-lg border border-dashed text-[11px] py-1 text-muted-foreground hover:text-emerald-700 hover:border-emerald-400 hover:bg-emerald-50 transition ${list.length ? 'opacity-0 hover:opacity-100' : ''}`}>
+                            title={isOff ? `Override ${name}'s day off with a one-off shift` : 'Add entry'}
+                            className={`w-full rounded-lg border border-dashed text-[11px] py-1 text-muted-foreground hover:text-emerald-700 hover:border-emerald-400 hover:bg-emerald-50 transition ${(list.length || isOff) ? 'opacity-0 hover:opacity-100' : ''}`}>
                             + add
                           </button>
                         )}
@@ -811,15 +1047,14 @@ export function RotaView({ isStaff = false, personName = '' }) {
       )}
 
       {!isStaff && !loading && rowsFor.length > 0 && (
-        <p className="text-[11px] text-muted-foreground">Tip: click a card to edit · drag a card onto another day or person to duplicate it.</p>
+        <p className="text-[11px] text-muted-foreground">Tip: click a name to set off days & default break · click a card to edit · drag a card onto another day or person to duplicate it.</p>
       )}
 
-      {/* Dialogs */}
-      {editing && <EntryDialog editing={editing} onClose={() => setEditing(null)} staffNames={staffNames} config={config} onSaved={load} />}
+      {editing && <EntryDialog editing={editing} onClose={() => setEditing(null)} staffNames={staffNames} config={config} personMeta={personMeta} onSaved={load} />}
+      {staffEditing && <StaffDialog editing={staffEditing} onClose={() => setStaffEditing(null)} config={config} saveConfig={saveConfig} loginNames={loginStaff.map(s => s.name)} />}
       <TemplatesDialog open={templatesOpen} onClose={() => setTemplatesOpen(false)} config={config} saveConfig={saveConfig} staffNames={staffNames} weekDays={days} reload={load} />
       <HoursDialog open={hoursOpen} onClose={() => setHoursOpen(false)} isStaff={isStaff} personName={personName} staffNames={staffNames} />
 
-      {/* Customise: rota mode toggle */}
       <Dialog open={customiseOpen} onOpenChange={setCustomiseOpen}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
@@ -840,22 +1075,9 @@ export function RotaView({ isStaff = false, personName = '' }) {
           </div>
         </DialogContent>
       </Dialog>
-
-      {/* Add person */}
-      <Dialog open={addPersonOpen} onOpenChange={setAddPersonOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader><DialogTitle>Add staff member</DialogTitle><DialogDescription>They'll get a PIN automatically and can log in to see their own shifts.</DialogDescription></DialogHeader>
-          <Input value={newPerson} onChange={e => setNewPerson(e.target.value)} placeholder="Name" onKeyDown={e => { if (e.key === 'Enter') addPerson() }} />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAddPersonOpen(false)}>Cancel</Button>
-            <Button onClick={addPerson} className="bg-emerald-600 hover:bg-emerald-700 text-white">Add</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }
 
-// Legacy export kept so existing imports don't break (old fixed-slot dialog
-// was replaced by the EntryDialog inside RotaView).
+// Legacy export kept so existing imports don't break.
 export function RotaShiftDialog() { return null }

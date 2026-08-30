@@ -106,9 +106,12 @@ function rotaPushPayload(row, action) {
   let dayLbl = row.shift_date
   try { dayLbl = new Date(row.shift_date + 'T12:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }) } catch {}
   const time = row.start_time && row.end_time ? ` · ${row.start_time}–${row.end_time}` : ''
+  // notes may be a plain string OR packed JSON {"n":note,"bm":breakMins,"bp":breakPaid}
+  let note = String(row.notes || '')
+  if (note.startsWith('{')) { try { note = String(JSON.parse(note).n || '') } catch {} }
   const r = String(row.role || '')
   if (r === 'overtime') {
-    return { title: action === 'removed' ? 'Overtime removed' : `Overtime ${action} ⚡`, body: `${dayLbl}${time}${row.notes ? ` — ${row.notes}` : ''}` }
+    return { title: action === 'removed' ? 'Overtime removed' : `Overtime ${action} ⚡`, body: `${dayLbl}${time}${note ? ` — ${note}` : ''}` }
   }
   if (r.startsWith('leave:')) {
     return { title: action === 'removed' ? `${row.shift_slot || 'Leave'} removed` : `Marked as ${row.shift_slot || 'leave'}`, body: dayLbl }
@@ -3607,7 +3610,7 @@ export async function GET(request, { params }) {
       // SQL migration is needed. Normal week queries never see it (1970 date).
       if (path === 'rota/config') {
         const { data } = await sb.from('rota_shifts').select('notes').eq('kitchen_id', kid).eq('chef_name', '__rota_config__').maybeSingle()
-        let cfg = { mode: 'flex', templates: [] }
+        let cfg = { mode: 'flex', templates: [], people: [] }
         if (data?.notes) { try { cfg = { ...cfg, ...JSON.parse(data.notes) } } catch {} }
         return json(cfg)
       }
@@ -5684,6 +5687,21 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
                 .map(t => ({ id: t.id || uuidv4(), name: String(t.name || '').trim().slice(0, 60), startTime: String(t.startTime || '').slice(0, 5), endTime: String(t.endTime || '').slice(0, 5) }))
                 .filter(t => t.name)
             : [],
+          // Rota staff profiles (independent of login access codes — supports
+          // bank/agency staff who never get a PIN). offDays = weekday indices
+          // 0(Sun)..6(Sat). defaultBreakMins/breakPaid prefill new shifts.
+          people: Array.isArray(body.people)
+            ? body.people.slice(0, 100)
+                .map(p => ({
+                  id: p.id || uuidv4(),
+                  name: String(p.name || '').trim().slice(0, 60),
+                  role: String(p.role || '').trim().slice(0, 40),
+                  offDays: Array.isArray(p.offDays) ? p.offDays.map(Number).filter(n => n >= 0 && n <= 6).slice(0, 7) : [],
+                  defaultBreakMins: Math.max(0, Math.min(480, parseInt(p.defaultBreakMins, 10) || 0)),
+                  breakPaid: !!p.breakPaid,
+                }))
+                .filter(p => p.name)
+            : [],
         }
         const row = { kitchen_id: kid, shift_date: '1970-01-05', shift_slot: '__config__', chef_name: '__rota_config__', role: 'config', start_time: '', end_time: '', notes: JSON.stringify(cfg), updated_at: new Date().toISOString() }
         const { data: existing } = await sb.from('rota_shifts').select('id').eq('kitchen_id', kid).eq('chef_name', '__rota_config__').maybeSingle()
@@ -5728,25 +5746,31 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
         return json({ ok: true, copied: rows.length, skipped: regular.length - rows.length })
       }
 
-      // ------- Rota v2: bulk assign one shift to many staff × many days -------
+      // ------- Rota v2: bulk assign one shift to many staff × many days.
+      // Also used by the date-range leave picker (role='leave:*'). -------
       if (path === 'rota/bulk') {
         const body = await request.json()
         const names = Array.isArray(body.names) ? body.names.map(n => String(n).trim()).filter(Boolean).slice(0, 50) : []
-        const dates = Array.isArray(body.dates) ? body.dates.map(d => String(d).slice(0, 10)).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).slice(0, 31) : []
+        const dates = Array.isArray(body.dates) ? body.dates.map(d => String(d).slice(0, 10)).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).slice(0, 62) : []
         const shiftName = String(body.shiftName || '').trim().slice(0, 60)
+        const role = ['shift', 'leave:sick', 'leave:annual', 'leave:unpaid'].includes(body.role) ? body.role : 'shift'
+        const notes = String(body.notes || '').slice(0, 500)
         if (!names.length || !dates.length || !shiftName) return json({ error: 'names, dates and shiftName are required' }, 400)
         const now = new Date().toISOString()
         const rows = []
         for (const name of names) for (const date of dates) {
-          rows.push({ id: uuidv4(), kitchen_id: kid, shift_date: date, shift_slot: shiftName, chef_name: name, role: 'shift', start_time: String(body.startTime || '').slice(0, 5), end_time: String(body.endTime || '').slice(0, 5), notes: '', updated_at: now })
+          rows.push({ id: uuidv4(), kitchen_id: kid, shift_date: date, shift_slot: shiftName, chef_name: name, role, start_time: String(body.startTime || '').slice(0, 5), end_time: String(body.endTime || '').slice(0, 5), notes, updated_at: now })
         }
         const { error: e2 } = await sb.from('rota_shifts').insert(rows)
         if (e2) throw e2
         // Rota push alerts: one summary push per staff member (bulk assign)
         try {
+          const isLeaveRole = role.startsWith('leave:')
           const timeStr = body.startTime && body.endTime ? ` · ${String(body.startTime).slice(0, 5)}–${String(body.endTime).slice(0, 5)}` : ''
           await Promise.allSettled(names.map(n =>
-            sendPushToPerson(sb, kid, n, { title: `${dates.length} new shift${dates.length > 1 ? 's' : ''} added 🗓️`, body: `${shiftName}${timeStr} — check your rota` })))
+            sendPushToPerson(sb, kid, n, isLeaveRole
+              ? { title: `${shiftName} recorded 🗓️`, body: `${dates.length} day${dates.length > 1 ? 's' : ''} marked as ${shiftName.toLowerCase()}` }
+              : { title: `${dates.length} new shift${dates.length > 1 ? 's' : ''} added 🗓️`, body: `${shiftName}${timeStr} — check your rota` })))
         } catch {}
         return json({ ok: true, created: rows.length }, 201)
       }
