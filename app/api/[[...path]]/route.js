@@ -2758,7 +2758,12 @@ export async function GET(request, { params }) {
           version = fs.readFileSync(nodePath.join(process.cwd(), '.next', 'BUILD_ID'), 'utf8').trim()
         } catch { version = '' }
       }
-      return json({ version: version || 'dev' })
+      // no-store is CRITICAL: if a CDN/proxy caches this response, installed
+      // PWAs keep seeing the OLD version number and never self-update.
+      return new Response(JSON.stringify({ version: version || 'dev' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store, no-cache, must-revalidate', 'CDN-Cache-Control': 'no-store', 'Vercel-CDN-Cache-Control': 'no-store' },
+      })
     }
 
     // ---- Commercial barcode lookup fallback ----
