@@ -3542,6 +3542,29 @@ export async function GET(request, { params }) {
         return json((data || []).map(rotaFromDb))
       }
 
+      // ------- Rota v2: staff names for the grid (names/roles only — NO pins) -------
+      if (path === 'rota/staff-names') {
+        const { data: k } = await sb.from('kitchens').select('staff_names').eq('id', kid).maybeSingle()
+        const list = Array.isArray(k?.staff_names) ? k.staff_names : []
+        return json({
+          staff: list
+            .map(s => (typeof s === 'string'
+              ? { name: s, role: 'staff', isOwner: false }
+              : { name: String(s?.name || ''), role: s?.role === 'manager' ? 'manager' : 'staff', isOwner: !!s?.isOwner }))
+            .filter(s => s.name),
+        })
+      }
+
+      // ------- Rota v2: per-kitchen rota config (mode + shift templates) -------
+      // Stored as a special rota_shifts row (chef_name='__rota_config__') so NO
+      // SQL migration is needed. Normal week queries never see it (1970 date).
+      if (path === 'rota/config') {
+        const { data } = await sb.from('rota_shifts').select('notes').eq('kitchen_id', kid).eq('chef_name', '__rota_config__').maybeSingle()
+        let cfg = { mode: 'flex', templates: [] }
+        if (data?.notes) { try { cfg = { ...cfg, ...JSON.parse(data.notes) } } catch {} }
+        return json(cfg)
+      }
+
       if (path === 'waste') {
         // List waste entries. Filter by ?from=YYYY-MM-DD&to=YYYY-MM-DD.
         const url = new URL(request.url)
@@ -5154,7 +5177,7 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
     }
 
     // -------- Kitchen-scoped mutations --------
-    const kitchenScoped = ['products','products/bulk','products/assign-supplier','trash/restore','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract','receipts/ocr','receipts/line-items','barcodes'].some(p => path === p)
+    const kitchenScoped = ['products','products/bulk','products/assign-supplier','trash/restore','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','rota/config','rota/copy-week','rota/bulk','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract','receipts/ocr','receipts/line-items','barcodes'].some(p => path === p)
       || (path.startsWith('recipes/') && (path.endsWith('/favorite') || path.endsWith('/cook')))
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
@@ -5591,6 +5614,70 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
         const { data, error: e2 } = await sb.from('rota_shifts').insert({ id: uuidv4(), ...row }).select().single()
         if (e2) throw e2
         return json(rotaFromDb(data), 201)
+      }
+
+      // ------- Rota v2: save config (mode toggle + shift templates) -------
+      if (path === 'rota/config') {
+        const body = await request.json()
+        const cfg = {
+          mode: body.mode === 'slots' ? 'slots' : 'flex',
+          templates: Array.isArray(body.templates)
+            ? body.templates.slice(0, 50)
+                .map(t => ({ id: t.id || uuidv4(), name: String(t.name || '').trim().slice(0, 60), startTime: String(t.startTime || '').slice(0, 5), endTime: String(t.endTime || '').slice(0, 5) }))
+                .filter(t => t.name)
+            : [],
+        }
+        const row = { kitchen_id: kid, shift_date: '1970-01-05', shift_slot: '__config__', chef_name: '__rota_config__', role: 'config', start_time: '', end_time: '', notes: JSON.stringify(cfg), updated_at: new Date().toISOString() }
+        const { data: existing } = await sb.from('rota_shifts').select('id').eq('kitchen_id', kid).eq('chef_name', '__rota_config__').maybeSingle()
+        if (existing?.id) {
+          const { error: e2 } = await sb.from('rota_shifts').update(row).eq('id', existing.id).eq('kitchen_id', kid)
+          if (e2) throw e2
+        } else {
+          const { error: e2 } = await sb.from('rota_shifts').insert({ id: uuidv4(), ...row })
+          if (e2) throw e2
+        }
+        return json(cfg)
+      }
+
+      // ------- Rota v2: copy last week's rota into a new week -------
+      // Copies REGULAR shifts only (overtime, sick/leave and config are skipped).
+      // Idempotent: rows that already exist in the target week (same person +
+      // date + shift name) are not duplicated.
+      if (path === 'rota/copy-week') {
+        const body = await request.json()
+        const fromStart = String(body.fromStart || '').slice(0, 10)
+        const toStart = String(body.toStart || '').slice(0, 10)
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(fromStart) || !/^\d{4}-\d{2}-\d{2}$/.test(toStart)) return json({ error: 'fromStart and toStart (YYYY-MM-DD) required' }, 400)
+        const shiftIso = (iso, n) => { const d = new Date(iso + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10) }
+        const { data: src, error: e1 } = await sb.from('rota_shifts').select('*').eq('kitchen_id', kid).gte('shift_date', fromStart).lte('shift_date', shiftIso(fromStart, 6))
+        if (e1) throw e1
+        const regular = (src || []).filter(r => r.chef_name !== '__rota_config__' && r.role !== 'overtime' && r.role !== 'config' && !String(r.role || '').startsWith('leave:'))
+        const offset = Math.round((new Date(toStart + 'T12:00:00Z') - new Date(fromStart + 'T12:00:00Z')) / 86400000)
+        const { data: dst } = await sb.from('rota_shifts').select('shift_date, chef_name, shift_slot').eq('kitchen_id', kid).gte('shift_date', toStart).lte('shift_date', shiftIso(toStart, 6))
+        const dstKeys = new Set((dst || []).map(r => `${r.shift_date}|${r.chef_name}|${r.shift_slot}`))
+        const now = new Date().toISOString()
+        const rows = regular
+          .map(r => ({ id: uuidv4(), kitchen_id: kid, shift_date: shiftIso(r.shift_date, offset), shift_slot: r.shift_slot, chef_name: r.chef_name, role: r.role || '', start_time: r.start_time || '', end_time: r.end_time || '', notes: r.notes || '', updated_at: now }))
+          .filter(r => !dstKeys.has(`${r.shift_date}|${r.chef_name}|${r.shift_slot}`))
+        if (rows.length) { const { error: e2 } = await sb.from('rota_shifts').insert(rows); if (e2) throw e2 }
+        return json({ ok: true, copied: rows.length, skipped: regular.length - rows.length })
+      }
+
+      // ------- Rota v2: bulk assign one shift to many staff × many days -------
+      if (path === 'rota/bulk') {
+        const body = await request.json()
+        const names = Array.isArray(body.names) ? body.names.map(n => String(n).trim()).filter(Boolean).slice(0, 50) : []
+        const dates = Array.isArray(body.dates) ? body.dates.map(d => String(d).slice(0, 10)).filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)).slice(0, 31) : []
+        const shiftName = String(body.shiftName || '').trim().slice(0, 60)
+        if (!names.length || !dates.length || !shiftName) return json({ error: 'names, dates and shiftName are required' }, 400)
+        const now = new Date().toISOString()
+        const rows = []
+        for (const name of names) for (const date of dates) {
+          rows.push({ id: uuidv4(), kitchen_id: kid, shift_date: date, shift_slot: shiftName, chef_name: name, role: 'shift', start_time: String(body.startTime || '').slice(0, 5), end_time: String(body.endTime || '').slice(0, 5), notes: '', updated_at: now })
+        }
+        const { error: e2 } = await sb.from('rota_shifts').insert(rows)
+        if (e2) throw e2
+        return json({ ok: true, created: rows.length }, 201)
       }
 
       // ------- Waste log (record disposal of a product) -------

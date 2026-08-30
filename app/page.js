@@ -2481,7 +2481,7 @@ function App() {
           />
         )}
         {view === 'rota' && (
-          <RotaView />
+          <RotaView isStaff={isStaff} personName={getPersonName() || me?.personName || ''} />
         )}
         {view === 'orders' && can('orders') && (
           <OrdersView goCart={() => setView('cart')} initialStock={ordersInitialStock} />
