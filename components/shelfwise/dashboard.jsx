@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, ArrowLeft, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
@@ -260,7 +260,10 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
   const [quickSearch, setQuickSearch] = useState('')
   const [globalResults, setGlobalResults] = useState(null)
   const [globalLoading, setGlobalLoading] = useState(false)
-  const [addOpen, setAddOpen] = useState(false)  // "Add Products" tile expander
+  const [addOpen, setAddOpen] = useState(false)  // "Add Items" tile expander
+  // Stat-card filtered list view (UX overhaul): when set, the dashboard is
+  // replaced by a simple filtered list with stacked detail cards + back button.
+  const [statFilter, setStatFilter] = useState(null) // null | 'total' | 'expiring' | 'low' | 'expired'
   // If widgets is undefined → show all (backwards compat).
   // If widgets array is provided (even empty) → strict include check.
   const show = (k) => widgets === undefined || (Array.isArray(widgets) && widgets.includes(k))
@@ -288,23 +291,33 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
 
   // While the first stats fetch is in flight, show "…" instead of misleading 0s
   const L = (v) => (statsLoading ? '…' : v)
-  const cardsAll = [
-    // 'all_items' and 'recipes' stat cards removed — replaced by the big
-    // Inventory / Recipes action cards at the top (user request).
-    { key: 'expiring', label: 'Expiring Soon', value: L(stats.expiring), icon: Clock, color: 'from-amber-500 to-orange-500', accent: 'text-amber-600', bg: 'bg-amber-50', filterKey: 'Expiring' },
-    { key: 'expired', label: 'Expired', value: L(stats.expired), icon: PackageX, color: 'from-red-500 to-rose-600', accent: 'text-red-600', bg: 'bg-red-50', filterKey: 'Expired' },
-    { key: 'critical', label: 'Critical Stock', value: L(stats.critical), icon: AlertTriangle, color: 'from-orange-500 to-red-500', accent: 'text-orange-600', bg: 'bg-orange-50', filterKey: 'Critical' },
-    { key: 'in_date', label: 'In Date', value: L(stats.inDate || 0), icon: Check, color: 'from-emerald-500 to-teal-600', accent: 'text-emerald-600', bg: 'bg-emerald-50', filterKey: 'Ok' },
-    { key: 'inv_value', label: 'Inventory Value', value: statsLoading ? '…' : (stats.totalValue > 0 ? `${CURRENCY_SYMBOL[currency] || ''}${stats.totalValue.toFixed(0)}` : '—'), icon: Sparkles, color: 'from-emerald-500 to-emerald-700', accent: 'text-emerald-600', bg: 'bg-emerald-50' },
-    { key: 'reorder', label: 'Below Reorder', value: L(stats.belowReorder || 0), icon: PackageX, color: 'from-orange-500 to-orange-700', accent: 'text-orange-600', bg: 'bg-orange-50', filterKey: 'All' },
+  // 2x2 tappable stat cards (UX overhaul) — tapping opens a simple filtered
+  // list (NOT the full inventory view) rendered by FilteredStatList below.
+  const statCards = [
+    { key: 'total', label: 'Total Items', value: L(stats.total), icon: Boxes, accent: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-200', bar: 'from-emerald-500 to-teal-600' },
+    { key: 'expiring', label: 'Expiring Soon', value: L(stats.expiring), icon: Clock, accent: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-200', bar: 'from-amber-500 to-orange-500' },
+    { key: 'low', label: 'Low Stock', value: L(stats.critical), icon: AlertTriangle, accent: 'text-orange-600', bg: 'bg-orange-50', border: 'border-orange-200', bar: 'from-orange-500 to-red-500' },
+    { key: 'expired', label: 'Expired', value: L(stats.expired), icon: PackageX, accent: 'text-red-600', bg: 'bg-red-50', border: 'border-red-200', bar: 'from-red-500 to-rose-600' },
   ]
-  const cards = cardsAll.filter(c => show(c.key))
   const isEmpty = !statsLoading && stats.total === 0
 
   // Time-based greeting for the hero
   const hour = new Date().getHours()
   const greeting = hour < 5 ? 'Good night' : hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : hour < 21 ? 'Good evening' : 'Good night'
   const greetingEmoji = hour < 5 ? '🌙' : hour < 12 ? '☀️' : hour < 17 ? '🌤️' : hour < 21 ? '🌆' : '🌙'
+
+  // When a stat card was tapped, show ONLY the filtered list (with back button)
+  if (statFilter) {
+    return (
+      <FilteredStatList
+        filterKey={statFilter}
+        products={products}
+        onBack={() => setStatFilter(null)}
+        openEdit={openEdit}
+        refreshAll={refreshAll}
+      />
+    )
+  }
 
   return (
     <div className="space-y-6">
@@ -319,14 +332,8 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
           <div className="min-w-0">
             <p className="text-xs font-medium text-emerald-100 uppercase tracking-wider">{greetingEmoji} {greeting}</p>
             <h2 className="text-2xl md:text-3xl font-bold tracking-tight mt-1">Here's what needs your attention</h2>
-            {stats.total > 0 && (
-              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-sm text-emerald-50">
-                <span><b className="text-white">{stats.total}</b> total items</span>
-                {stats.expired > 0 && <span>🔴 <b className="text-white">{stats.expired}</b> expired</span>}
-                {stats.expiring > 0 && <span>🟠 <b className="text-white">{stats.expiring}</b> expiring soon</span>}
-                {stats.critical > 0 && <span>⚠️ <b className="text-white">{stats.critical}</b> low stock</span>}
-              </div>
-            )}
+            {/* Textual stats summary removed (UX overhaul) — replaced by the
+                tappable 2x2 stat-card grid right below the action tiles. */}
           </div>
           <div className="flex gap-2 flex-wrap">
             {isEmpty && (
@@ -355,7 +362,7 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
             className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition text-blue-800 ${addOpen ? 'border-blue-400 bg-blue-100 shadow-inner' : 'border-blue-200 bg-blue-50 hover:bg-blue-100 hover:border-blue-300'}`}
           >
             <span className="text-2xl">➕</span>
-            <span className="text-xs font-semibold">Add Products</span>
+            <span className="text-xs font-semibold">Add Items</span>
           </button>
           <button onClick={gotoRecipes} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-300 transition text-purple-800">
             <span className="text-2xl">📖</span>
@@ -383,6 +390,34 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
           </div>
           </div>
         )}
+      </div>
+
+      {/* ====================================================================
+          2x2 TAPPABLE STAT CARDS (UX overhaul) — Total Items / Expiring Soon /
+          Low Stock / Expired. Tapping opens a simple filtered list with
+          stacked detail cards (NOT the full inventory view).
+          ==================================================================== */}
+      <div className="grid grid-cols-2 gap-3">
+        {statCards.map(c => {
+          const Icon = c.icon
+          return (
+            <button key={c.key} onClick={() => setStatFilter(c.key)} className="text-left">
+              <Card className={`transition-all border-2 ${c.border} shadow-sm overflow-hidden group hover:shadow-lg hover:-translate-y-0.5 cursor-pointer`}>
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className={`h-9 w-9 rounded-lg ${c.bg} flex items-center justify-center`}>
+                      <Icon className={`h-5 w-5 ${c.accent}`} />
+                    </div>
+                    <ArrowRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-muted-foreground transition" />
+                  </div>
+                  <div className="text-3xl font-bold tracking-tight">{c.value}</div>
+                  <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mt-1">{c.label}</div>
+                  <div className={`h-1 w-10 rounded-full bg-gradient-to-r ${c.bar} opacity-80 group-hover:w-16 transition-all mt-2`} />
+                </CardContent>
+              </Card>
+            </button>
+          )
+        })}
       </div>
 
       <UseTodayPanel products={products} goToInventory={goToInventory} formatDate={(d) => new Date(d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} />
@@ -456,36 +491,6 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
         </Card>
       )}
       </>
-      )}
-
-      {cards.length > 0 && (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {cards.map(c => {
-          const Icon = c.icon
-          const handleClick = c.disabled ? undefined : (c.onClick || (() => goToInventory(c.filterKey)))
-          return (
-            <button key={c.key} onClick={handleClick} disabled={c.disabled} className={`text-left ${c.disabled ? 'opacity-60 cursor-not-allowed' : ''}`}>
-              <Card className={`transition-all border-0 shadow-sm overflow-hidden group ${c.disabled ? '' : 'hover:shadow-lg hover:-translate-y-0.5 cursor-pointer'}`}>
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CardDescription className="font-medium text-xs uppercase tracking-wider">{c.label}</CardDescription>
-                    <div className={`h-9 w-9 rounded-lg ${c.bg} flex items-center justify-center`}>
-                      <Icon className={`h-5 w-5 ${c.accent}`} />
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex items-end justify-between">
-                    <div className="text-4xl font-bold tracking-tight">{c.value}</div>
-                    <div className={`h-1 w-12 rounded-full bg-gradient-to-r ${c.color} opacity-80 group-hover:w-20 transition-all`} />
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-2">{c.disabled ? 'Coming soon' : 'Click to view'}</div>
-                </CardContent>
-              </Card>
-            </button>
-          )
-        })}
-      </div>
       )}
 
       {/* Urgent items panel */}
@@ -746,3 +751,135 @@ export function UrgentList() {
   )
 }
 
+
+// ============================================================================
+// FILTERED STAT LIST (UX overhaul) — shown when a 2x2 dashboard stat card is
+// tapped. A SIMPLE filtered list (not the full inventory view) rendered as
+// stacked detail cards: Name, Qty, Expiry, Storage, Prepared By, Status,
+// with Edit + Delete icons. Delete uses the universal soft-delete (Trash).
+// Includes a mandatory back button (app-wide rule).
+// ============================================================================
+const STAT_FILTER_META = {
+  total: { title: 'Total Items', icon: Boxes, accent: 'text-emerald-600', bg: 'bg-emerald-50', match: () => true },
+  expiring: { title: 'Expiring Soon', icon: Clock, accent: 'text-amber-600', bg: 'bg-amber-50', match: (p) => p._status === 'Expiring' },
+  low: { title: 'Low Stock', icon: AlertTriangle, accent: 'text-orange-600', bg: 'bg-orange-50', match: (p) => p._status === 'Critical' },
+  expired: { title: 'Expired', icon: PackageX, accent: 'text-red-600', bg: 'bg-red-50', match: (p) => p._status === 'Expired' },
+}
+
+export function FilteredStatList({ filterKey, products, onBack, openEdit, refreshAll }) {
+  const [deletingId, setDeletingId] = useState(null)
+  const meta = STAT_FILTER_META[filterKey] || STAT_FILTER_META.total
+  const Icon = meta.icon
+
+  const items = useMemo(() => {
+    const list = (products || []).filter(meta.match)
+    // Expiring/Expired: soonest expiry first. Others: alphabetical.
+    if (filterKey === 'expiring' || filterKey === 'expired') {
+      return list.sort((a, b) => {
+        const av = a.expiryDate ? new Date(a.expiryDate).getTime() : Infinity
+        const bv = b.expiryDate ? new Date(b.expiryDate).getTime() : Infinity
+        return av - bv
+      })
+    }
+    return list.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+  }, [products, filterKey]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fmtDate = (d) => {
+    if (!d) return '—'
+    try { return new Date(`${String(d).slice(0, 10)}T12:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) } catch { return String(d) }
+  }
+
+  const handleDelete = async (p) => {
+    if (!window.confirm(`Move "${p.name}" to Trash?\n\nYou can restore it from Settings → Trash within 30 days.`)) return
+    setDeletingId(p.id)
+    try {
+      const res = await fetch(`/api/products/${p.id}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Delete failed')
+      }
+      toast.success(`"${p.name}" moved to Trash 🗑️ — restore it from Settings → Trash`)
+      refreshAll && refreshAll()
+    } catch (e) {
+      toast.error(e.message || 'Could not delete item')
+    } finally { setDeletingId(null) }
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Header with mandatory back button */}
+      <div className="flex items-center gap-3">
+        <Button variant="outline" size="icon" onClick={onBack} className="rounded-xl shrink-0" aria-label="Back to dashboard">
+          <ArrowLeft className="h-5 w-5" />
+        </Button>
+        <div className={`h-10 w-10 rounded-xl ${meta.bg} flex items-center justify-center shrink-0`}>
+          <Icon className={`h-5 w-5 ${meta.accent}`} />
+        </div>
+        <div className="min-w-0">
+          <h2 className="text-xl font-bold tracking-tight leading-tight">{meta.title}</h2>
+          <p className="text-xs text-muted-foreground">{items.length} item{items.length !== 1 ? 's' : ''}</p>
+        </div>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="text-center py-16 text-muted-foreground border-2 border-dashed rounded-2xl">
+          <Package className="h-12 w-12 mx-auto mb-3 opacity-30" />
+          <p className="font-medium">No items here</p>
+          <p className="text-sm mt-1">Nothing matches "{meta.title}" right now.</p>
+          <Button variant="outline" size="sm" onClick={onBack} className="mt-4">
+            <ArrowLeft className="h-4 w-4 mr-1.5" /> Back to Dashboard
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {items.map(p => {
+            const sm = STATUS_META[p._status] || STATUS_META.Ok
+            return (
+              <div key={p.id} className="rounded-2xl border bg-card shadow-sm p-4">
+                {/* Top row: name + status badge + action icons */}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-base leading-snug break-words">{p.name}</p>
+                    <Badge variant="outline" className={`mt-1.5 ${sm.color}`}>{sm.label}</Badge>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg text-slate-600 hover:text-blue-700 hover:bg-blue-50"
+                      aria-label={`Edit ${p.name}`}
+                      onClick={() => openEdit && openEdit(p)}>
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg text-slate-600 hover:text-red-700 hover:bg-red-50"
+                      aria-label={`Delete ${p.name}`}
+                      disabled={deletingId === p.id}
+                      onClick={() => handleDelete(p)}>
+                      {deletingId === p.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+                {/* Stacked details */}
+                <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                  <div>
+                    <dt className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Qty</dt>
+                    <dd className="font-semibold">{p.quantity ?? '—'} {p.unit || ''}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Expiry</dt>
+                    <dd className={`font-semibold ${p._status === 'Expired' ? 'text-red-600' : p._status === 'Expiring' ? 'text-amber-600' : ''}`}>{fmtDate(p.expiryDate)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Storage</dt>
+                    <dd className="font-semibold">{p.storageType || '—'}{p.location ? ` · ${p.location}` : ''}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">Prepared By</dt>
+                    <dd className="font-semibold">{p.preparedBy || p.addedBy || '—'}</dd>
+                  </div>
+                </dl>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
