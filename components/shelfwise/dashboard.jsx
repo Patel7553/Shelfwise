@@ -329,6 +329,10 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
           No card, no background — just text below the header. */}
       <div className="text-center pt-1">
         <p className="text-xl md:text-2xl font-semibold tracking-tight">{greetingEmoji} {greeting}{personName ? `, ${personName}` : ''}</p>
+        {/* Live date + day under the greeting (user request) */}
+        <p className="text-sm text-muted-foreground mt-0.5">
+          {new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+        </p>
         {isEmpty && (
           <Button variant="outline" size="sm" onClick={seedData} className="mt-2">
             <Sparkles className="h-4 w-4 mr-2" /> Load sample data
