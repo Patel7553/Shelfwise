@@ -29,7 +29,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { Checkbox } from '@/components/ui/checkbox'
 import { toast } from 'sonner'
-import { Plus, Pencil, Trash2, Loader2, Check, X, ChevronLeft, ChevronRight, Copy, Download, Clock, Zap, CalendarDays, Settings2, Users, FileText, ArrowLeft, LayoutTemplate } from 'lucide-react'
+import { Plus, Pencil, Trash2, Loader2, Check, X, ChevronLeft, ChevronRight, Copy, Download, Clock, Zap, CalendarDays, Settings2, Users, FileText, ArrowLeft, LayoutTemplate, Printer } from 'lucide-react'
 import { apiFetch } from '@/lib/apiClient'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
@@ -664,6 +664,58 @@ export function RotaView({ isStaff = false, personName = '' }) {
 
   const cellShifts = (person, date) => shifts.filter(s => s.chefName === person && s.shiftDate === date)
 
+  // Printable weekly rota sheet for the kitchen wall (A4 landscape).
+  // Opens a clean standalone window with just the grid + totals and prints it.
+  const printRota = () => {
+    const w = window.open('', '_blank', 'width=1100,height=800')
+    if (!w) { toast.error('Pop-up blocked — please allow pop-ups to print'); return }
+    const esc = (t) => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    const cellHtml = (name, d) => {
+      const list = cellShifts(name, d)
+      if (!list.length) return '<span class="off">—</span>'
+      return list.map(s => {
+        const kind = kindOf(s)
+        if (kind === 'overtime') return `<div class="card ot">⚡ Overtime<br><b>${esc(timeRange(s))}</b>${s.notes ? `<br><small>${esc(s.notes)}</small>` : ''}</div>`
+        if (isLeave(s)) { const m = LEAVE_META[kind]; return `<div class="card leave">${m.icon} ${esc(m.label)}</div>` }
+        return `<div class="card"><b>${esc(s.shiftSlot || 'Shift')}</b><br>${esc(timeRange(s))}${s.startTime && s.endTime ? ` <small>(${fmtH(hoursOf(s.startTime, s.endTime))})</small>` : ''}</div>`
+      }).join('')
+    }
+    const rowsHtml = rowsFor.map(name => {
+      const t = weekTotals(name)
+      return `<tr>
+        <td class="name"><b>${esc(name)}</b><br><small>${fmtH(t.sched)}${t.ot > 0 ? ` + ${fmtH(t.ot)} OT = <b>${fmtH(t.total)}</b>` : ''}</small></td>
+        ${days.map(d => `<td>${cellHtml(name, d)}</td>`).join('')}
+      </tr>`
+    }).join('')
+    const html = `<!doctype html><html><head><title>Rota ${weekStart}</title><style>
+      @page { size: A4 landscape; margin: 10mm; }
+      * { box-sizing: border-box; font-family: -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; }
+      body { margin: 0; color: #111; }
+      h1 { font-size: 18px; margin: 0 0 2px; } .sub { color: #555; font-size: 12px; margin: 0 0 10px; }
+      table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+      th, td { border: 1px solid #bbb; padding: 4px; vertical-align: top; font-size: 10.5px; }
+      th { background: #eef7f2; text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.04em; }
+      th.today { background: #d3f0e2; }
+      td.name { width: 110px; } td { min-height: 40px; }
+      .card { border: 1.5px solid #10b981; background: #ecfdf5; border-radius: 5px; padding: 3px 4px; margin-bottom: 3px; }
+      .card.ot { border-color: #f59e0b; background: #fffbeb; }
+      .card.leave { border-color: #94a3b8; background: #f1f5f9; }
+      small { color: #555; } .off { color: #bbb; }
+      .foot { margin-top: 8px; font-size: 9px; color: #888; }
+    </style></head><body>
+      <h1>Staff Rota — ${dayLabel(weekStart)} to ${dayLabel(weekEnd)}</h1>
+      <p class="sub">⚡ amber = overtime · grey = sick/leave (not counted in hours)</p>
+      <table>
+        <thead><tr><th>Staff</th>${days.map(d => `<th class="${d === todayISO() ? 'today' : ''}">${dayLabel(d)}</th>`).join('')}</tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <p class="foot">Printed ${new Date().toLocaleString('en-GB')} · ShelfWise</p>
+    </body></html>`
+    w.document.write(html)
+    w.document.close()
+    setTimeout(() => { try { w.focus(); w.print() } catch {} }, 350)
+  }
+
   return (
     <div className="space-y-4">
       {/* Header: title + week nav + owner toolbar */}
@@ -684,6 +736,7 @@ export function RotaView({ isStaff = false, personName = '' }) {
           <Button size="sm" variant="outline" onClick={() => setTemplatesOpen(true)}><LayoutTemplate className="h-3.5 w-3.5 mr-1.5" />Templates</Button>
           <Button size="sm" variant="outline" onClick={() => setHoursOpen(true)}><Clock className="h-3.5 w-3.5 mr-1.5" />Hours sheet</Button>
           <Button size="sm" variant="outline" onClick={() => setCustomiseOpen(true)}><Settings2 className="h-3.5 w-3.5 mr-1.5" />Customise</Button>
+          <Button size="sm" variant="outline" onClick={printRota}><Printer className="h-3.5 w-3.5 mr-1.5" />Print</Button>
           <Button size="sm" variant="outline" onClick={() => setAddPersonOpen(true)}><Plus className="h-3.5 w-3.5 mr-1.5" />Add person</Button>
         </div>
       )}

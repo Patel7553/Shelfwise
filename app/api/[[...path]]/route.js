@@ -73,6 +73,53 @@ async function sendPushToKitchen(sb, kitchenId, payload) {
   return { sent, failed }
 }
 
+// Send a push ONLY to devices registered by a specific staff member —
+// push_subscriptions.user_label is set to the person's name at subscribe time
+// (see page.js push setup). Used for rota alerts so staff only hear about
+// THEIR OWN shifts. No-op when that person has no registered device.
+async function sendPushToPerson(sb, kitchenId, personName, payload) {
+  const target = String(personName || '').trim().toLowerCase()
+  if (!target) return { sent: 0, failed: 0 }
+  const { data: subs, error } = await sb.from('push_subscriptions').select('*').eq('kitchen_id', kitchenId)
+  if (error || !subs || subs.length === 0) return { sent: 0, failed: 0 }
+  const mine = subs.filter(s => String(s.user_label || '').trim().toLowerCase() === target)
+  if (mine.length === 0) return { sent: 0, failed: 0 }
+  const wp = getWebPush()
+  const body = JSON.stringify(payload)
+  let sent = 0, failed = 0
+  await Promise.allSettled(mine.map(async (s) => {
+    try {
+      await wp.sendNotification(s.subscription, body)
+      sent++
+    } catch (e) {
+      failed++
+      if (e && (e.statusCode === 404 || e.statusCode === 410)) {
+        await sb.from('push_subscriptions').delete().eq('id', s.id)
+      }
+    }
+  }))
+  return { sent, failed }
+}
+
+// Human-friendly push payload for a rota entry. action: 'added'|'updated'|'removed'
+function rotaPushPayload(row, action) {
+  let dayLbl = row.shift_date
+  try { dayLbl = new Date(row.shift_date + 'T12:00:00Z').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }) } catch {}
+  const time = row.start_time && row.end_time ? ` · ${row.start_time}–${row.end_time}` : ''
+  const r = String(row.role || '')
+  if (r === 'overtime') {
+    return { title: action === 'removed' ? 'Overtime removed' : `Overtime ${action} ⚡`, body: `${dayLbl}${time}${row.notes ? ` — ${row.notes}` : ''}` }
+  }
+  if (r.startsWith('leave:')) {
+    return { title: action === 'removed' ? `${row.shift_slot || 'Leave'} removed` : `Marked as ${row.shift_slot || 'leave'}`, body: dayLbl }
+  }
+  const name = row.shift_slot || 'Shift'
+  return {
+    title: action === 'added' ? `New shift: ${name} 🗓️` : action === 'updated' ? `Shift updated: ${name}` : `Shift removed: ${name}`,
+    body: `${dayLbl}${time}`,
+  }
+}
+
 // ============================================================================
 // SENSOR SYNC ENGINE — vendor-agnostic. Pulls readings from whichever vendor
 // module the kitchen connected, writes them into haccp_temperature_logs with
@@ -5604,15 +5651,26 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
           updated_at: new Date().toISOString(),
         }
         if (!row.shift_date || !row.shift_slot) return json({ error: 'shiftDate and shiftSlot required' }, 400)
+        // Rota push alert: tell the staff member their shift was added/changed
+        // (skipped when they edited it themselves, and for the config row).
+        const notifyPerson = async (action) => {
+          try {
+            if (row.chef_name && row.chef_name !== '__rota_config__' && String(ctx.person || '') !== row.chef_name) {
+              await sendPushToPerson(sb, kid, row.chef_name, rotaPushPayload(row, action))
+            }
+          } catch {}
+        }
         // Upsert semantics: if id supplied, update; else insert new.
         if (body.id) {
           const { data, error: e2 } = await sb.from('rota_shifts')
             .update(row).eq('id', body.id).eq('kitchen_id', kid).select().single()
           if (e2) throw e2
+          await notifyPerson('updated')
           return json(rotaFromDb(data))
         }
         const { data, error: e2 } = await sb.from('rota_shifts').insert({ id: uuidv4(), ...row }).select().single()
         if (e2) throw e2
+        await notifyPerson('added')
         return json(rotaFromDb(data), 201)
       }
 
@@ -5660,6 +5718,13 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
           .map(r => ({ id: uuidv4(), kitchen_id: kid, shift_date: shiftIso(r.shift_date, offset), shift_slot: r.shift_slot, chef_name: r.chef_name, role: r.role || '', start_time: r.start_time || '', end_time: r.end_time || '', notes: r.notes || '', updated_at: now }))
           .filter(r => !dstKeys.has(`${r.shift_date}|${r.chef_name}|${r.shift_slot}`))
         if (rows.length) { const { error: e2 } = await sb.from('rota_shifts').insert(rows); if (e2) throw e2 }
+        // Rota push alerts: one summary push per affected staff member
+        try {
+          const byName = {}
+          for (const r of rows) byName[r.chef_name] = (byName[r.chef_name] || 0) + 1
+          await Promise.allSettled(Object.entries(byName).map(([n, c]) =>
+            sendPushToPerson(sb, kid, n, { title: 'Your rota is ready 🗓️', body: `${c} shift${c > 1 ? 's' : ''} scheduled for the week starting ${toStart}` })))
+        } catch {}
         return json({ ok: true, copied: rows.length, skipped: regular.length - rows.length })
       }
 
@@ -5677,6 +5742,12 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
         }
         const { error: e2 } = await sb.from('rota_shifts').insert(rows)
         if (e2) throw e2
+        // Rota push alerts: one summary push per staff member (bulk assign)
+        try {
+          const timeStr = body.startTime && body.endTime ? ` · ${String(body.startTime).slice(0, 5)}–${String(body.endTime).slice(0, 5)}` : ''
+          await Promise.allSettled(names.map(n =>
+            sendPushToPerson(sb, kid, n, { title: `${dates.length} new shift${dates.length > 1 ? 's' : ''} added 🗓️`, body: `${shiftName}${timeStr} — check your rota` })))
+        } catch {}
         return json({ ok: true, created: rows.length }, 201)
       }
 
@@ -6885,9 +6956,16 @@ export async function DELETE(request, { params }) {
     }
     if (segs[0] === 'rota' && segs[1]) {
       const { data: shift } = await sb.from('rota_shifts').select('*').eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
-      await moveToTrash(sb, ctx.kitchenId, 'Rota shift', 'rota_shifts', shift, await validatedPersonFromRequest(sb, request, ctx), shift ? `${shift.person_name || 'Shift'} — ${shift.shift_date || ''}` : '')
+      await moveToTrash(sb, ctx.kitchenId, 'Rota shift', 'rota_shifts', shift, await validatedPersonFromRequest(sb, request, ctx), shift ? `${shift.chef_name || 'Shift'} — ${shift.shift_date || ''}` : '')
       const { error } = await sb.from('rota_shifts').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
+      // Rota push alert: tell the staff member their shift was removed
+      // (skipped when they removed it themselves, and for the config row).
+      try {
+        if (shift?.chef_name && shift.chef_name !== '__rota_config__' && String(ctx.person || '') !== shift.chef_name) {
+          await sendPushToPerson(sb, ctx.kitchenId, shift.chef_name, rotaPushPayload(shift, 'removed'))
+        }
+      } catch {}
       return json({ ok: true })
     }
     if (segs[0] === 'waste' && segs[1]) {
