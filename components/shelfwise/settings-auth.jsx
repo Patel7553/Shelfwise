@@ -20,6 +20,7 @@ import { apiFetch, signOutAll, getChefToken } from '@/lib/apiClient'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
 import { useT } from '@/lib/i18n'
+import { TrashCard } from '@/components/shelfwise/trash'
 import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText, safeJson } from '@/components/shelfwise/shared'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
@@ -916,6 +917,8 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
               </div>
 
               <NotificationSettingsCard />
+
+              <TrashCard />
             </div>
           )}
 

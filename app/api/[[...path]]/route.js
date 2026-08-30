@@ -222,6 +222,70 @@ function fromDb(row) {
   }
 }
 
+// ============ UNIFIED TRASH / RECENTLY DELETED (Aug 2026) ============
+// App-wide soft delete: every delete action first snapshots the full row into
+// a per-kitchen trash bin (Supabase storage, no migration needed). Items can
+// be restored with one tap and auto-expire after TRASH_RETENTION_DAYS.
+const TRASH_RETENTION_DAYS = 30
+const TRASH_TABLES = ['products', 'recipes', 'receipts', 'suppliers', 'rota_shifts', 'waste_log', 'haccp_temperature_logs', 'haccp_cleaning_log', 'haccp_delivery_checks', 'supplier_products']
+
+// In-memory write-through cache: this app runs as a single Next.js process, so
+// the cache is authoritative at runtime and eliminates Supabase storage's
+// eventual-consistency lag. Storage is the durable copy (survives restarts).
+const trashMemCache = globalThis.__swTrashCache || (globalThis.__swTrashCache = new Map())
+
+async function readTrashBin(sb, kid) {
+  if (trashMemCache.has(kid)) return trashMemCache.get(kid)
+  let arr = []
+  try {
+    const { data: file } = await sb.storage.from('receipts').download(`trash-bins/${kid}.json`)
+    if (file) {
+      const parsed = JSON.parse(await file.text())
+      if (Array.isArray(parsed)) arr = parsed
+    }
+  } catch { /* no bin yet */ }
+  trashMemCache.set(kid, arr)
+  return arr
+}
+
+function pruneTrash(arr) {
+  const cutoff = Date.now() - TRASH_RETENTION_DAYS * 86400000
+  return (arr || []).filter(e => {
+    const t = new Date(e?.deletedAt || 0).getTime()
+    return Number.isFinite(t) && t > cutoff
+  }).slice(0, 300)
+}
+
+async function writeTrashBin(sb, kid, arr) {
+  const pruned = pruneTrash(arr)
+  trashMemCache.set(kid, pruned)   // cache first — reads are instantly consistent
+  try {
+    await sb.storage.from('receipts').upload(`trash-bins/${kid}.json`, Buffer.from(JSON.stringify(pruned)), { contentType: 'application/json', upsert: true, cacheControl: '0' })
+  } catch { /* durable copy is best-effort; cache still serves current state */ }
+  return pruned
+}
+
+async function moveToTrash(sb, kid, entityType, table, row, person, label) {
+  try {
+    if (!row || !TRASH_TABLES.includes(table)) return
+    const bin = await readTrashBin(sb, kid)
+    bin.unshift({
+      id: uuidv4(),
+      entityType,
+      table,
+      label: String(label || row.name || row.title || row.supplier || row.item || entityType).slice(0, 160),
+      payload: row,
+      deletedBy: String(person || 'Unknown').slice(0, 80),
+      deletedAt: new Date().toISOString(),
+    })
+    await writeTrashBin(sb, kid, bin)
+  } catch (e) {
+    console.error('[moveToTrash] Error:', e.message, 'kid:', kid, 'table:', table)
+    /* trash capture is best-effort — never blocks the delete */
+  }
+}
+// =====================================================================
+
 function toDb(body) {
   const cf = body.customFields && typeof body.customFields === 'object' ? { ...body.customFields } : {}
   if (body.dateReceived) cf._dateReceived = body.dateReceived
@@ -3250,7 +3314,7 @@ export async function GET(request, { params }) {
     }
 
     // ----- OWNER / CHEF endpoints (kitchen-scoped) -----
-    const ownerOrChef = ['products','settings','facets','stats','recipes','rota','waste','haccp','suppliers','sensors','receipts','barcodes'].some(p => path === p || path.startsWith(p + '/'))
+    const ownerOrChef = ['products','settings','facets','stats','recipes','rota','waste','haccp','suppliers','sensors','receipts','barcodes','trash'].some(p => path === p || path.startsWith(p + '/'))
     if (ownerOrChef) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
@@ -3339,6 +3403,12 @@ export async function GET(request, { params }) {
           } catch { /* bucket may not exist yet */ }
         }
         return json((data || []).map(r => receiptFromDb(r, urlMap[r.image_path] || '')))
+      }
+
+      // ------- UNIFIED TRASH: list recently deleted items (auto-pruned) -------
+      if (path === 'trash') {
+        const bin = pruneTrash(await readTrashBin(sb, kid))
+        return json({ items: bin.map(e => ({ id: e.id, entityType: e.entityType, label: e.label, deletedBy: e.deletedBy, deletedAt: e.deletedAt })), retentionDays: TRASH_RETENTION_DAYS })
       }
 
       // ------- BARCODE MEMORY (Aug 2026): permanent per-kitchen barcode → product
@@ -5079,7 +5149,7 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
     }
 
     // -------- Kitchen-scoped mutations --------
-    const kitchenScoped = ['products','products/bulk','products/assign-supplier','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract','receipts/ocr','receipts/line-items','barcodes'].some(p => path === p)
+    const kitchenScoped = ['products','products/bulk','products/assign-supplier','trash/restore','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract','receipts/ocr','receipts/line-items','barcodes'].some(p => path === p)
       || (path.startsWith('recipes/') && (path.endsWith('/favorite') || path.endsWith('/cook')))
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
@@ -5660,6 +5730,31 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
         }
         await logActivity(sb, kid, await validatedPersonFromRequest(sb, request, ctx), 'item_added', data.name)
         return json(enrichWith(await fetchAlertDays(sb, kid, ctx.kitchen))(fromDb(data)), 201)
+      }
+
+      // Restore an item from the unified trash back to its original table.
+      if (path === 'trash/restore') {
+        const body = await request.json()
+        const trashId = String(body.id || '')
+        if (!trashId) return json({ error: 'id required' }, 400)
+        const bin = pruneTrash(await readTrashBin(sb, kid))
+        const entry = bin.find(e => e.id === trashId)
+        if (!entry) return json({ error: 'Not found in trash (it may have expired)' }, 404)
+        if (!TRASH_TABLES.includes(entry.table)) return json({ error: 'This item type cannot be restored' }, 400)
+        const row = entry.payload || {}
+        // safety: the row must belong to this kitchen (or this supplier account)
+        const owns = row.kitchen_id === kid || row.supplier_id === kid
+        if (!owns) return json({ error: 'Not permitted' }, 403)
+        console.log(`[trash/restore] Upserting to table=${entry.table}, id=${row.id}`)
+        const { error: rErr } = await sb.from(entry.table).upsert(row, { onConflict: 'id' })
+        if (rErr) {
+          console.error(`[trash/restore] Upsert error:`, rErr)
+          throw rErr
+        }
+        console.log(`[trash/restore] Upsert successful, removing from trash`)
+        await writeTrashBin(sb, kid, bin.filter(e => e.id !== trashId))
+        await logActivity(sb, kid, await validatedPersonFromRequest(sb, request, ctx), 'item_restored', `${entry.label} (from Trash)`)
+        return json({ restored: true, entityType: entry.entityType, label: entry.label })
       }
 
       // Bulk assign a supplier to many products at once (inventory multi-select).
@@ -6571,10 +6666,11 @@ export async function DELETE(request, { params }) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
       if (!(await chefHasPerm(sb, ctx, 'receipts'))) return json({ error: 'No access to receipts — ask the owner to enable it for you' }, 403)
-      const { data: r } = await sb.from('receipts').select('image_path, supplier').eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+      const { data: r } = await sb.from('receipts').select('*').eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+      await moveToTrash(sb, ctx.kitchenId, 'Receipt', 'receipts', r, await validatedPersonFromRequest(sb, request, ctx), r?.supplier || 'Receipt')
       const { error: e2 } = await sb.from('receipts').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
       if (e2) return json({ error: e2.message }, 500)
-      if (r?.image_path) await sb.storage.from('receipts').remove([r.image_path]).catch(() => {})
+      // NOTE: stored file intentionally KEPT while in Trash so restore is intact.
       await logActivity(sb, ctx.kitchenId, await validatedPersonFromRequest(sb, request, ctx), 'receipt_deleted', r?.supplier || segs[1])
       return json({ ok: true })
     }
@@ -6584,6 +6680,8 @@ export async function DELETE(request, { params }) {
       const { ctx, error } = await requireSupplier(request)
       if (error) return error
       if (segs[1] === 'products' && segs[2]) {
+        const { data: sp } = await sb.from('supplier_products').select('*').eq('id', segs[2]).eq('supplier_id', ctx.kitchen.id).maybeSingle()
+        await moveToTrash(sb, ctx.kitchen.id, 'Catalog product', 'supplier_products', sp, 'Supplier', sp?.name)
         const { error: e2 } = await sb.from('supplier_products').delete().eq('id', segs[2]).eq('supplier_id', ctx.kitchen.id)
         if (e2) { const miss = supplierTablesMissing(e2); if (miss) return miss; throw e2 }
         return json({ ok: true })
@@ -6656,17 +6754,21 @@ export async function DELETE(request, { params }) {
     }
 
     if (segs[0] === 'products' && segs[1]) {
-      const { data: prod } = await sb.from('products').select('name').eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+      const { data: prod } = await sb.from('products').select('*').eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+      const person = await validatedPersonFromRequest(sb, request, ctx)
+      await moveToTrash(sb, ctx.kitchenId, 'Inventory item', 'products', prod, person, prod?.name)
       const { error } = await sb.from('products').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
-      await logActivity(sb, ctx.kitchenId, await validatedPersonFromRequest(sb, request, ctx), 'item_deleted', prod?.name || segs[1])
+      await logActivity(sb, ctx.kitchenId, person, 'item_deleted', prod?.name || segs[1])
       return json({ ok: true })
     }
     if (segs[0] === 'recipes' && segs[1]) {
-      const { data: rec } = await sb.from('recipes').select('title').eq('id', segs[1]).maybeSingle()
+      const { data: rec } = await sb.from('recipes').select('*').eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+      const person = await validatedPersonFromRequest(sb, request, ctx)
+      await moveToTrash(sb, ctx.kitchenId, 'Recipe', 'recipes', rec, person, rec?.title)
       const { error } = await sb.from('recipes').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
-      await logActivity(sb, ctx.kitchenId, await validatedPersonFromRequest(sb, request, ctx), 'recipe_deleted', rec?.title || segs[1])
+      await logActivity(sb, ctx.kitchenId, person, 'recipe_deleted', rec?.title || segs[1])
       return json({ ok: true })
     }
     // ------- Staff: owner removes a person's name (frees it for reuse) -------
@@ -6683,21 +6785,29 @@ export async function DELETE(request, { params }) {
       return json({ ok: true, removed: list.length - next.length })
     }
     if (segs[0] === 'suppliers' && segs[1]) {
+      const { data: srow } = await sb.from('suppliers').select('*').eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+      await moveToTrash(sb, ctx.kitchenId, 'Supplier contact', 'suppliers', srow, await validatedPersonFromRequest(sb, request, ctx), srow?.name)
       const { error } = await sb.from('suppliers').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
       return json({ ok: true })
     }
     if (segs[0] === 'rota' && segs[1]) {
+      const { data: shift } = await sb.from('rota_shifts').select('*').eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+      await moveToTrash(sb, ctx.kitchenId, 'Rota shift', 'rota_shifts', shift, await validatedPersonFromRequest(sb, request, ctx), shift ? `${shift.person_name || 'Shift'} — ${shift.shift_date || ''}` : '')
       const { error } = await sb.from('rota_shifts').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
       return json({ ok: true })
     }
     if (segs[0] === 'waste' && segs[1]) {
+      const { data: w } = await sb.from('waste_log').select('*').eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+      await moveToTrash(sb, ctx.kitchenId, 'Waste entry', 'waste_log', w, await validatedPersonFromRequest(sb, request, ctx), w?.item || w?.product_name)
       const { error } = await sb.from('waste_log').delete().eq('id', segs[1]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
       return json({ ok: true })
     }
     if (segs[0] === 'haccp' && segs[1] === 'temperatures' && segs[2]) {
+      const { data: t } = await sb.from('haccp_temperature_logs').select('*').eq('id', segs[2]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+      await moveToTrash(sb, ctx.kitchenId, 'Temperature log', 'haccp_temperature_logs', t, await validatedPersonFromRequest(sb, request, ctx), t ? `${t.unit_name || 'Temp'} ${t.temperature ?? ''}°` : '')
       const { error } = await sb.from('haccp_temperature_logs').delete().eq('id', segs[2]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
       return json({ ok: true })
@@ -6709,13 +6819,30 @@ export async function DELETE(request, { params }) {
       return json({ ok: true })
     }
     if (segs[0] === 'haccp' && segs[1] === 'cleaning-log' && segs[2]) {
+      const { data: cl } = await sb.from('haccp_cleaning_log').select('*').eq('id', segs[2]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+      await moveToTrash(sb, ctx.kitchenId, 'Cleaning log', 'haccp_cleaning_log', cl, await validatedPersonFromRequest(sb, request, ctx), cl?.task_name)
       const { error } = await sb.from('haccp_cleaning_log').delete().eq('id', segs[2]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
       return json({ ok: true })
     }
     if (segs[0] === 'haccp' && segs[1] === 'deliveries' && segs[2]) {
+      const { data: dc } = await sb.from('haccp_delivery_checks').select('*').eq('id', segs[2]).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+      await moveToTrash(sb, ctx.kitchenId, 'Delivery check', 'haccp_delivery_checks', dc, await validatedPersonFromRequest(sb, request, ctx), dc?.supplier_name)
       const { error } = await sb.from('haccp_delivery_checks').delete().eq('id', segs[2]).eq('kitchen_id', ctx.kitchenId)
       if (error) throw error
+      return json({ ok: true })
+    }
+    // ------- UNIFIED TRASH: permanently delete one entry now -------
+    if (segs[0] === 'trash' && segs[1]) {
+      const kidT = ctx.kitchenId
+      const bin = pruneTrash(await readTrashBin(sb, kidT))
+      const entry = bin.find(e => e.id === segs[1])
+      if (!entry) return json({ error: 'Not found in trash' }, 404)
+      // receipts: now it's really gone — remove the stored file too
+      if (entry.table === 'receipts' && entry.payload?.image_path) {
+        await sb.storage.from('receipts').remove([entry.payload.image_path]).catch(() => {})
+      }
+      await writeTrashBin(sb, kidT, bin.filter(e => e.id !== segs[1]))
       return json({ ok: true })
     }
     return json({ error: 'Not found' }, 404)
