@@ -36,7 +36,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { Checkbox } from '@/components/ui/checkbox'
 import { toast } from 'sonner'
-import { Plus, Pencil, Trash2, Loader2, Check, X, ChevronLeft, ChevronRight, Copy, Download, Clock, Zap, CalendarDays, Settings2, Users, FileText, ArrowLeft, LayoutTemplate, Printer, Coffee } from 'lucide-react'
+import { Plus, Pencil, Trash2, Loader2, Check, X, ChevronLeft, ChevronRight, Copy, Download, Clock, Zap, CalendarDays, Settings2, Users, FileText, ArrowLeft, LayoutTemplate, Printer, Coffee, MoreHorizontal } from 'lucide-react'
 import { apiFetch } from '@/lib/apiClient'
 
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
@@ -181,7 +181,7 @@ function OffChip() {
 function EntryDialog({ editing, onClose, staffNames, config, personMeta, onSaved }) {
   const s = editing?.shift
   const editMeta = s ? parseNotes(s.notes) : null
-  const [kind, setKind] = useState(s ? (isLeave(s) ? 'leave' : kindOf(s)) : 'shift')
+  const [kind, setKind] = useState(s ? (isLeave(s) ? 'leave' : kindOf(s)) : (editing?.kind || 'shift'))
   const [person, setPerson] = useState(s?.chefName || editing?.person || staffNames[0] || '')
   const [date, setDate] = useState(s?.shiftDate || editing?.date || todayISO())
   const [name, setName] = useState(s && kindOf(s) === 'shift' ? (s.shiftSlot || '') : '')
@@ -819,6 +819,7 @@ export function RotaView({ isStaff = false, personName = '' }) {
   const [templatesOpen, setTemplatesOpen] = useState(false)
   const [hoursOpen, setHoursOpen] = useState(false)
   const [customiseOpen, setCustomiseOpen] = useState(false)
+  const [menu, setMenu] = useState(null) // 'staff' | 'build' | 'more' grouped toolbar menus
   const [busy, setBusy] = useState(false)
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => isoAddDays(weekStart, i)), [weekStart])
@@ -949,7 +950,10 @@ export function RotaView({ isStaff = false, personName = '' }) {
       .card.offday { border-color: #cbd5e1; background: #f8fafc; color: #94a3b8; text-align: center; font-weight: bold; letter-spacing: 0.1em; font-size: 9px; }
       small { color: #555; } .off { color: #bbb; }
       .foot { margin-top: 8px; font-size: 9px; color: #888; }
+      .backbtn { display: inline-flex; align-items: center; gap: 4px; margin: 0 0 8px; padding: 5px 12px; border: 1px solid #cbd5e1; border-radius: 7px; background: #f8fafc; font-size: 12px; font-weight: 600; color: #334155; cursor: pointer; }
+      @media print { .backbtn { display: none; } }
     </style></head><body>
+      <button class="backbtn" onclick="window.close()">← Back</button>
       <h1>Staff Rota — ${dayLabel(weekStart)} to ${dayLabel(weekEnd)}</h1>
       <p class="sub">⚡ amber = overtime · grey = sick/leave · OFF = routine day off · hours shown after unpaid breaks</p>
       <table>
@@ -977,14 +981,46 @@ export function RotaView({ isStaff = false, personName = '' }) {
       </div>
 
       {!isStaff && (
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" onClick={copyLastWeek} disabled={busy}><Copy className="h-3.5 w-3.5 mr-1.5" />Copy last week</Button>
-          <Button size="sm" variant="outline" onClick={() => setTemplatesOpen(true)}><LayoutTemplate className="h-3.5 w-3.5 mr-1.5" />Templates</Button>
-          <Button size="sm" variant="outline" onClick={() => setHoursOpen(true)}><Clock className="h-3.5 w-3.5 mr-1.5" />Hours sheet</Button>
-          <Button size="sm" variant="outline" onClick={() => setCustomiseOpen(true)}><Settings2 className="h-3.5 w-3.5 mr-1.5" />Customise</Button>
-          <Button size="sm" variant="outline" onClick={printRota}><Printer className="h-3.5 w-3.5 mr-1.5" />Print</Button>
-          <Button size="sm" variant="outline" onClick={() => setStaffEditing({})}><Plus className="h-3.5 w-3.5 mr-1.5" />Add person</Button>
-        </div>
+        <>
+          {/* Toolbar: 3 Quick Add + 3 grouped menus (Staff / Build week / More) */}
+          <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
+            <Button size="sm" onClick={() => setEditing({ kind: 'shift', date: todayISO() })} className="bg-emerald-600 hover:bg-emerald-700 text-white"><Plus className="h-3.5 w-3.5 mr-1" />Shift</Button>
+            <Button size="sm" onClick={() => setEditing({ kind: 'overtime', date: todayISO() })} className="bg-amber-500 hover:bg-amber-600 text-white"><Zap className="h-3.5 w-3.5 mr-1" />Overtime</Button>
+            <Button size="sm" onClick={() => setEditing({ kind: 'leave', date: todayISO() })} className="bg-sky-600 hover:bg-sky-700 text-white">🏖️ Leave/Sick</Button>
+            <Button size="sm" variant="outline" onClick={() => setMenu('staff')}><Users className="h-3.5 w-3.5 mr-1" />Staff</Button>
+            <Button size="sm" variant="outline" onClick={() => setMenu('build')}><CalendarDays className="h-3.5 w-3.5 mr-1" />Build week</Button>
+            <Button size="sm" variant="outline" onClick={() => setMenu('more')}><MoreHorizontal className="h-3.5 w-3.5 mr-1" />More</Button>
+          </div>
+
+          {/* Grouped menus — small dialogs (each gets the universal Back button) */}
+          <Dialog open={!!menu} onOpenChange={(o) => { if (!o) setMenu(null) }}>
+            <DialogContent className="max-w-xs">
+              <DialogHeader>
+                <DialogTitle>
+                  {menu === 'staff' ? <><Users className="h-5 w-5 inline mr-1.5 text-emerald-600" />Staff</> : menu === 'build' ? <><CalendarDays className="h-5 w-5 inline mr-1.5 text-emerald-600" />Build week</> : <><MoreHorizontal className="h-5 w-5 inline mr-1.5 text-emerald-600" />More</>}
+                </DialogTitle>
+              </DialogHeader>
+              <div className="space-y-2">
+                {menu === 'staff' && (
+                  <>
+                    <Button variant="outline" className="w-full justify-start" onClick={() => { setMenu(null); setStaffEditing({}) }}><Plus className="h-4 w-4 mr-2" />Add person</Button>
+                    <Button variant="outline" className="w-full justify-start" onClick={() => { setMenu(null); setHoursOpen(true) }}><Clock className="h-4 w-4 mr-2" />Hours sheet</Button>
+                    <Button variant="outline" className="w-full justify-start" onClick={() => { setMenu(null); setCustomiseOpen(true) }}><Settings2 className="h-4 w-4 mr-2" />Customise layout</Button>
+                  </>
+                )}
+                {menu === 'build' && (
+                  <>
+                    <Button variant="outline" className="w-full justify-start" onClick={() => { setMenu(null); copyLastWeek() }} disabled={busy}><Copy className="h-4 w-4 mr-2" />Copy last week</Button>
+                    <Button variant="outline" className="w-full justify-start" onClick={() => { setMenu(null); setTemplatesOpen(true) }}><LayoutTemplate className="h-4 w-4 mr-2" />Shift templates</Button>
+                  </>
+                )}
+                {menu === 'more' && (
+                  <Button variant="outline" className="w-full justify-start" onClick={() => { setMenu(null); printRota() }}><Printer className="h-4 w-4 mr-2" />Print rota</Button>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
+        </>
       )}
       {isStaff && (
         <div className="flex items-center gap-2">

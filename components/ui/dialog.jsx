@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
-import { X } from "lucide-react"
+import { X, ArrowLeft } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
@@ -25,7 +25,7 @@ const DialogOverlay = React.forwardRef(({ className, ...props }, ref) => (
 ))
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 
-const DialogContent = React.forwardRef(({ className, children, ...props }, ref) => (
+const DialogContent = React.forwardRef(({ className, children, hideBack = false, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
@@ -35,6 +35,17 @@ const DialogContent = React.forwardRef(({ className, children, ...props }, ref) 
         className
       )}
       {...props}>
+      {/* Universal top-left Back button (app-wide rule: every modal must have
+          a clearly placed way back). Rendered in-flow so it never overlaps
+          dialog titles; closes the dialog = returns to the previous screen. */}
+      {!hideBack && (
+        <DialogPrimitive.Close
+          aria-label="Back"
+          className="inline-flex w-fit items-center gap-1.5 -mb-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground focus:outline-none">
+          <ArrowLeft className="h-4 w-4" />
+          Back
+        </DialogPrimitive.Close>
+      )}
       {children}
       <DialogPrimitive.Close
         className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">

@@ -781,7 +781,7 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-[680px] max-h-[92vh] overflow-hidden flex flex-col p-0">
+      <DialogContent hideBack className="sm:max-w-[680px] max-h-[92vh] overflow-hidden flex flex-col p-0">
         <DialogHeader className="px-4 sm:px-6 pt-5 pb-3 border-b">
           <DialogTitle className="flex items-center gap-2">
             {/* Universal Back button (user request, July 2026) — top-left, returns to the screen you came from */}
