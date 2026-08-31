@@ -635,15 +635,19 @@ export function EnablePushBanner() {
 }
 
 export function ExpiryAlertBanner({ stats, goToInventory }) {
-  // Slim pastel banner with bell icon. NOTE (user request): the "expiring
-  // soon" banner was removed — the Use It or Lose It card shows that data.
-  // Only the EXPIRED alert remains here.
-  if (!stats.expired) return null
+  // ONE merged banner (user request) — combines expired + expiring counts,
+  // e.g. "6 expired · 2 expiring soon". Red tint when anything has expired,
+  // amber when it's only expiring. Tap opens the relevant inventory filter.
+  if (!stats.expired && !stats.expiring) return null
+  const parts = []
+  if (stats.expired > 0) parts.push(`${stats.expired} expired`)
+  if (stats.expiring > 0) parts.push(`${stats.expiring} expiring soon`)
+  const hasExpired = stats.expired > 0
   return (
-    <button onClick={() => goToInventory('Expired')}
-      className="w-full text-left flex items-center gap-2.5 rounded-2xl px-4 py-3 bg-red-100/70 text-red-800 transition hover:brightness-[0.98]">
+    <button onClick={() => goToInventory(hasExpired ? 'Expired' : 'Expiring')}
+      className={`w-full text-left flex items-center gap-2.5 rounded-2xl px-4 py-3 transition hover:brightness-[0.98] ${hasExpired ? 'bg-red-100/70 text-red-800' : 'bg-amber-100/70 text-amber-800'}`}>
       <Bell className="h-4 w-4 shrink-0" />
-      <p className="font-semibold text-[15px]">{stats.expired} item{stats.expired !== 1 ? 's' : ''} expired</p>
+      <p className="font-semibold text-[15px]">{parts.join(' · ')}</p>
     </button>
   )
 }
