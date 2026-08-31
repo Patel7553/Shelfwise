@@ -25,100 +25,6 @@ import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
 const fetch = apiFetch
 
-export function UseTodayPanel({ products, goToInventory, formatDate }) {
-  // Items expiring today or tomorrow
-  const today = new Date(); today.setHours(0,0,0,0)
-  const tomorrowEnd = new Date(today); tomorrowEnd.setDate(today.getDate() + 1); tomorrowEnd.setHours(23,59,59,999)
-  const urgent = (products || []).filter(p => {
-    if (!p.expiryDate) return false
-    const d = new Date(p.expiryDate)
-    return d <= tomorrowEnd && p._status !== 'Expired'
-  }).sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate))
-
-  const [marking, setMarking] = useState(null)
-
-  const markUsed = async (id) => {
-    if (!confirm('Mark this item as used up? It will be removed from inventory.')) return
-    setMarking(id)
-    try {
-      const res = await fetch(`/api/products/${id}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error()
-      toast.success('Marked as used ✅')
-      window.location.reload()
-    } catch {
-      toast.error('Failed to update')
-    } finally {
-      setMarking(null)
-    }
-  }
-
-  if (!urgent.length) {
-    return (
-      <div className="rounded-2xl bg-emerald-100/60 p-4">
-        <div className="flex items-center gap-3">
-          <Check className="h-5 w-5 text-emerald-700" />
-          <div>
-            <p className="font-semibold text-emerald-900 text-sm">All clear — nothing expiring today or tomorrow! 🎉</p>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  const isToday = (d) => {
-    const dt = new Date(d); dt.setHours(0,0,0,0)
-    return dt.getTime() === today.getTime()
-  }
-
-  return (
-    <div className="rounded-2xl bg-red-100/50 p-4">
-      <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-        <div className="flex items-center gap-2.5">
-          <AlertCircle className="h-5 w-5 text-red-600" />
-          <div>
-            <p className="font-bold text-red-900 leading-tight">Use today or tomorrow</p>
-            <p className="text-xs text-red-700">{urgent.length} item{urgent.length !== 1 ? 's' : ''} — use them before they expire!</p>
-          </div>
-        </div>
-        <Button size="sm" variant="ghost" onClick={() => goToInventory('Expiring')} className="text-red-700 hover:bg-red-100">
-          View all <ArrowRight className="h-3.5 w-3.5 ml-1" />
-        </Button>
-      </div>
-      <div className="space-y-2">
-        {urgent.slice(0, 5).map(p => (
-          <div key={p.id} className="flex items-center justify-between gap-3 bg-white/80 rounded-xl p-3">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <p className="font-semibold text-slate-900 truncate">{p.name}</p>
-                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${isToday(p.expiryDate) ? 'bg-red-600 text-white' : 'bg-amber-500 text-white'}`}>
-                  {isToday(p.expiryDate) ? 'TODAY' : 'TOMORROW'}
-                </span>
-              </div>
-              <p className="text-xs text-slate-600 mt-0.5">
-                {p.quantity} {p.unit}
-                {p.location ? ` • 📍 ${p.location}` : ''}
-                {p.storageType ? ` • ${p.storageType}` : ''}
-              </p>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              className="border-emerald-300 text-emerald-700 hover:bg-emerald-50 shrink-0"
-              onClick={() => markUsed(p.id)}
-              disabled={marking === p.id}
-            >
-              {marking === p.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <><Check className="h-3.5 w-3.5 mr-1" /> Used</>}
-            </Button>
-          </div>
-        ))}
-        {urgent.length > 5 && (
-          <p className="text-xs text-center text-red-700 font-medium pt-1">+ {urgent.length - 5} more — tap &quot;View all&quot;</p>
-        )}
-      </div>
-    </div>
-  )
-}
-
 // ============================================================================
 // USE IT OR LOSE IT — top-of-dashboard panel (requested feature):
 // 1) groceries expiring within 2 days, ascending by expiry date
@@ -362,7 +268,9 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
         ))}
       </div>
 
-      <UseTodayPanel products={products} goToInventory={goToInventory} formatDate={(d) => new Date(d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} />
+      {/* NOTE: the old "Use today or tomorrow" panel (UseTodayPanel) was a
+          DUPLICATE of Use It or Lose It and has been deleted entirely
+          (user request, Sept 2026). */}
 
 
       {show('search') && (

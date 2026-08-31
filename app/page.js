@@ -27,7 +27,7 @@ const fetch = apiFetch
 import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays, dateInDays, suggestExpiryDate, escapeText, safeJson } from '@/components/shelfwise/shared'
 import { ReceiptScanDialog, ExpiryScanDialog, BarcodeFlowDialog, LensCameraView } from '@/components/shelfwise/scanners'
 import { PrintLogbookDialog } from '@/components/shelfwise/logbook-print'
-import { DashboardView, UseTodayPanel, RecentItemsToday, ExpiryAlertBanner, UrgentList } from '@/components/shelfwise/dashboard'
+import { DashboardView, RecentItemsToday, ExpiryAlertBanner, UrgentList } from '@/components/shelfwise/dashboard'
 import { RecipeResult, RecipesView, WebRecipeCard, ViewRecipeDialog, RecipeGenDialog } from '@/components/shelfwise/recipes'
 import { InventoryView, DisposeProductDialog } from '@/components/shelfwise/inventory'
 import { SetupWizardV2, SetupWizard, ChefCodeCard, SettingsDialog, LoginGate, NotificationSettingsCard } from '@/components/shelfwise/settings-auth'
