@@ -5,6 +5,7 @@
 // Uniform import header — unused imports are tolerated intentionally.
 
 import React, { useEffect, useMemo, useCallback, useRef, useState } from 'react'
+import { APP_VERSION } from '@/lib/version'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -553,6 +554,15 @@ export function ChefCodeCard() {
 
 export function SettingsDialog({ open, onClose, settings, saveSettings, openWizard, isStaff, isOwner }) {
   const [tab, setTab] = useState(null) // null = Settings HOME list; else section key
+  // Version indicator (Settings home footer)
+  const [buildId, setBuildId] = useState('')
+  useEffect(() => {
+    if (!open) return
+    window.fetch('/api/version', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(d => setBuildId(String(d.version || 'dev').slice(0, 10) || 'dev'))
+      .catch(() => setBuildId('dev'))
+  }, [open])
   const [name, setName] = useState('')
   const [type, setType] = useState('Restaurant')
   const [fields, setFields] = useState([])
@@ -804,8 +814,7 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
           {/* -------- SETTINGS HOME: grouped rows with chevrons -------- */}
           {tab === null && (
             <div className="space-y-5">
-              {settingsGroups.map(g => (
-                <div key={g.title}>
+              {settingsGroups.map(g => (                <div key={g.title}>
                   <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5 px-1">{g.title}</p>
                   <div className="rounded-2xl border divide-y overflow-hidden bg-card">
                     {g.items.map(it => {
@@ -826,6 +835,10 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
                   </div>
                 </div>
               ))}
+              {/* Version indicator — instantly tells you which build you're on */}
+              <p className="text-center text-xs text-muted-foreground pt-1">
+                ShelfWise {APP_VERSION} · build {buildId || '…'}
+              </p>
             </div>
           )}
 

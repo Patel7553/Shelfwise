@@ -252,7 +252,9 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
           notification banners sit near the top instead (mockup style).
           ==================================================================== */}
       <EnablePushBanner />
-      <ExpiryAlertBanner stats={stats} goToInventory={goToInventory} />
+      {/* NOTE: the bell "expiring soon" banner was deleted entirely (user
+          request, Sept 2026) — it duplicated Use It or Lose It. The EXPIRING
+          SOON stat card below stays. */}
 
       {/* Groceries expiring soon + recipe ideas + money-saved tracking */}
       <UseItOrLoseItPanel products={products} currency={currency} openRecipeGenFromExpiring={openRecipeGenFromExpiring} refreshAll={refreshAll} goToInventory={goToInventory} />
@@ -518,24 +520,6 @@ export function EnablePushBanner() {
         <X className="h-4 w-4" />
       </button>
     </div>
-  )
-}
-
-export function ExpiryAlertBanner({ stats, goToInventory }) {
-  // ONE merged banner (user request) — combines expired + expiring counts,
-  // e.g. "6 expired · 2 expiring soon". Red tint when anything has expired,
-  // amber when it's only expiring. Tap opens the relevant inventory filter.
-  if (!stats.expired && !stats.expiring) return null
-  const parts = []
-  if (stats.expired > 0) parts.push(`${stats.expired} expired`)
-  if (stats.expiring > 0) parts.push(`${stats.expiring} expiring soon`)
-  const hasExpired = stats.expired > 0
-  return (
-    <button onClick={() => goToInventory(hasExpired ? 'Expired' : 'Expiring')}
-      className={`w-full text-left flex items-center gap-2.5 rounded-2xl px-4 py-3 transition hover:brightness-[0.98] ${hasExpired ? 'bg-red-100/70 text-red-800' : 'bg-amber-100/70 text-amber-800'}`}>
-      <Bell className="h-4 w-4 shrink-0" />
-      <p className="font-semibold text-[15px]">{parts.join(' · ')}</p>
-    </button>
   )
 }
 
