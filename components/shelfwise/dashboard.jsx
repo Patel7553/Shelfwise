@@ -126,7 +126,7 @@ export function UseTodayPanel({ products, goToInventory, formatDate }) {
 // 3) money-saved tracking: marking items "used" before expiry banks their
 //    invoice value (unitCost × qty) and celebrates the saving.
 // ============================================================================
-export function UseItOrLoseItPanel({ products, currency, openRecipeGenFromExpiring, refreshAll }) {
+export function UseItOrLoseItPanel({ products, currency, openRecipeGenFromExpiring, refreshAll, goToInventory }) {
   const [busyId, setBusyId] = useState(null)
   const [savedTotal, setSavedTotal] = useState(0)
   const sym = CURRENCY_SYMBOL[currency] || '£'
@@ -232,8 +232,13 @@ export function UseItOrLoseItPanel({ products, currency, openRecipeGenFromExpiri
               <span className={`text-[10px] font-bold rounded px-2 py-0.5 shrink-0 ${badge.cls}`}>{badge.text}</span>
               <div className="flex-1 min-w-0">
                 <p className="font-semibold text-sm truncate">{p.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  {p.quantity} {p.unit}{val > 0 && <> · worth <b className="text-orange-800">{sym}{val.toFixed(2)}</b></>} · expires {new Date(`${String(p.expiryDate).slice(0, 10)}T12:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                <p className="text-xs text-muted-foreground truncate">
+                  {/* {quantity} · {location}, {storage type} · expires {date} */}
+                  {[
+                    `${p.quantity} ${p.unit || ''}`.trim(),
+                    [p.location, p.storageType].filter(Boolean).join(', '),
+                    `expires ${new Date(`${String(p.expiryDate).slice(0, 10)}T12:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`,
+                  ].filter(Boolean).join(' · ')}
                 </p>
               </div>
               <Button variant="outline" size="sm" className="shrink-0 border-emerald-300 text-emerald-700 hover:bg-emerald-50"
@@ -244,8 +249,13 @@ export function UseItOrLoseItPanel({ products, currency, openRecipeGenFromExpiri
           )
         })}
         {expiring.length > 8 && (
-          <p className="px-5 py-2 text-xs text-orange-800 bg-white/60">+ {expiring.length - 8} more — see Inventory → Expiring</p>
+          <p className="px-5 py-2 text-xs text-orange-800 bg-white/60">+ {expiring.length - 8} more</p>
         )}
+        {/* View all — always available at the bottom of the card */}
+        <button onClick={() => goToInventory && goToInventory('Expiring')}
+          className="w-full text-left px-5 py-2.5 text-xs font-semibold text-orange-800 bg-white/60 hover:bg-white/90 transition flex items-center gap-1">
+          View all <ArrowRight className="h-3 w-3" />
+        </button>
       </div>
     </div>
   )
@@ -339,7 +349,7 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
       <ExpiryAlertBanner stats={stats} goToInventory={goToInventory} />
 
       {/* Groceries expiring soon + recipe ideas + money-saved tracking */}
-      <UseItOrLoseItPanel products={products} currency={currency} openRecipeGenFromExpiring={openRecipeGenFromExpiring} refreshAll={refreshAll} />
+      <UseItOrLoseItPanel products={products} currency={currency} openRecipeGenFromExpiring={openRecipeGenFromExpiring} refreshAll={refreshAll} goToInventory={goToInventory} />
 
       {/* 2x2 tappable stat cards — soft pastel fills, minimal borders */}
       <div className="grid grid-cols-2 gap-2.5">
@@ -625,22 +635,16 @@ export function EnablePushBanner() {
 }
 
 export function ExpiryAlertBanner({ stats, goToInventory }) {
-  // ALWAYS shown on every device when items need attention. Slim pastel
-  // banner style with bell icon (mockup redesign, June 2025).
-  if (!stats.expired && !stats.expiring) return null
-  const messages = []
-  if (stats.expired > 0) messages.push({ key: 'Expired', text: `${stats.expired} item${stats.expired !== 1 ? 's' : ''} expired`, color: 'bg-red-100/70 text-red-800' })
-  if (stats.expiring > 0) messages.push({ key: 'Expiring', text: `${stats.expiring} item${stats.expiring !== 1 ? 's' : ''} expiring soon`, color: 'bg-amber-100/70 text-amber-800' })
+  // Slim pastel banner with bell icon. NOTE (user request): the "expiring
+  // soon" banner was removed — the Use It or Lose It card shows that data.
+  // Only the EXPIRED alert remains here.
+  if (!stats.expired) return null
   return (
-    <div className="space-y-2">
-      {messages.map(m => (
-        <button key={m.key} onClick={() => goToInventory(m.key)}
-          className={`w-full text-left flex items-center gap-2.5 rounded-2xl px-4 py-3 ${m.color} transition hover:brightness-[0.98]`}>
-          <Bell className="h-4 w-4 shrink-0" />
-          <p className="font-semibold text-[15px]">{m.text}</p>
-        </button>
-      ))}
-    </div>
+    <button onClick={() => goToInventory('Expired')}
+      className="w-full text-left flex items-center gap-2.5 rounded-2xl px-4 py-3 bg-red-100/70 text-red-800 transition hover:brightness-[0.98]">
+      <Bell className="h-4 w-4 shrink-0" />
+      <p className="font-semibold text-[15px]">{stats.expired} item{stats.expired !== 1 ? 's' : ''} expired</p>
+    </button>
   )
 }
 
