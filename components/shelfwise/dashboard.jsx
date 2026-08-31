@@ -54,14 +54,11 @@ export function UseTodayPanel({ products, goToInventory, formatDate }) {
 
   if (!urgent.length) {
     return (
-      <div className="rounded-2xl border-2 border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-5">
+      <div className="rounded-2xl bg-emerald-100/60 p-4">
         <div className="flex items-center gap-3">
-          <div className="h-12 w-12 rounded-full bg-emerald-100 flex items-center justify-center">
-            <Check className="h-6 w-6 text-emerald-700" />
-          </div>
+          <Check className="h-5 w-5 text-emerald-700" />
           <div>
-            <p className="font-bold text-emerald-900">All clear — nothing expiring today or tomorrow! 🎉</p>
-            <p className="text-sm text-emerald-700">Keep up the great work.</p>
+            <p className="font-semibold text-emerald-900 text-sm">All clear — nothing expiring today or tomorrow! 🎉</p>
           </div>
         </div>
       </div>
@@ -74,14 +71,12 @@ export function UseTodayPanel({ products, goToInventory, formatDate }) {
   }
 
   return (
-    <div className="rounded-2xl border-2 border-red-300 bg-gradient-to-br from-red-50 via-orange-50 to-amber-50 p-4 sm:p-5 shadow-sm">
+    <div className="rounded-2xl bg-red-100/50 p-4">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-        <div className="flex items-center gap-3">
-          <div className="h-11 w-11 rounded-full bg-red-100 flex items-center justify-center animate-pulse">
-            <AlertCircle className="h-6 w-6 text-red-600" />
-          </div>
+        <div className="flex items-center gap-2.5">
+          <AlertCircle className="h-5 w-5 text-red-600" />
           <div>
-            <p className="font-bold text-red-900 text-lg leading-tight">🚨 Use today or tomorrow</p>
+            <p className="font-bold text-red-900 leading-tight">Use today or tomorrow</p>
             <p className="text-xs text-red-700">{urgent.length} item{urgent.length !== 1 ? 's' : ''} — use them before they expire!</p>
           </div>
         </div>
@@ -91,7 +86,7 @@ export function UseTodayPanel({ products, goToInventory, formatDate }) {
       </div>
       <div className="space-y-2">
         {urgent.slice(0, 5).map(p => (
-          <div key={p.id} className="flex items-center justify-between gap-3 bg-white rounded-xl p-3 border border-red-100 shadow-sm">
+          <div key={p.id} className="flex items-center justify-between gap-3 bg-white/80 rounded-xl p-3">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <p className="font-semibold text-slate-900 truncate">{p.name}</p>
@@ -206,7 +201,7 @@ export function UseItOrLoseItPanel({ products, currency, openRecipeGenFromExpiri
   if (expiring.length === 0) return null
 
   return (
-    <div className="rounded-2xl border-2 border-orange-200 bg-gradient-to-br from-orange-50 to-amber-50/60 overflow-hidden">
+    <div className="rounded-2xl bg-orange-100/50 overflow-hidden">
       {/* Header */}
       <div className="px-4 sm:px-5 py-3.5 flex items-center justify-between flex-wrap gap-2 border-b border-orange-200/70">
         <div className="flex items-center gap-2.5">
@@ -294,10 +289,10 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
   // 2x2 tappable stat cards (UX overhaul) — tapping opens a simple filtered
   // list (NOT the full inventory view) rendered by FilteredStatList below.
   const statCards = [
-    { key: 'total', label: 'Total Items', value: L(stats.total), icon: Boxes, accent: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-200', bar: 'from-emerald-500 to-teal-600' },
-    { key: 'expiring', label: 'Expiring Soon', value: L(stats.expiring), icon: Clock, accent: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-200', bar: 'from-amber-500 to-orange-500' },
-    { key: 'low', label: 'Low Stock', value: L(stats.critical), icon: AlertTriangle, accent: 'text-orange-600', bg: 'bg-orange-50', border: 'border-orange-200', bar: 'from-orange-500 to-red-500' },
-    { key: 'expired', label: 'Expired', value: L(stats.expired), icon: PackageX, accent: 'text-red-600', bg: 'bg-red-50', border: 'border-red-200', bar: 'from-red-500 to-rose-600' },
+    { key: 'total', label: 'Total Items', value: L(stats.total), pastel: 'bg-emerald-100/70', labelCls: 'text-emerald-700' },
+    { key: 'expiring', label: 'Expiring Soon', value: L(stats.expiring), pastel: 'bg-amber-100/70', labelCls: 'text-amber-700' },
+    { key: 'low', label: 'Low Stock', value: L(stats.critical), pastel: 'bg-orange-100/70', labelCls: 'text-orange-700' },
+    { key: 'expired', label: 'Expired', value: L(stats.expired), pastel: 'bg-red-100/60', labelCls: 'text-red-700' },
   ]
   const isEmpty = !statsLoading && stats.total === 0
 
@@ -320,13 +315,8 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
   }
 
   return (
-    <div className="space-y-6">
-      {/* 1) FIRST: groceries expiring in the next 2 days (ascending) + recipe
-          ideas + money-saved tracking — per user request this sits at the top. */}
-      <UseItOrLoseItPanel products={products} currency={currency} openRecipeGenFromExpiring={openRecipeGenFromExpiring} refreshAll={refreshAll} />
-
-      {/* Plain centered greeting (green hero banner removed — user request).
-          No card, no background — just text below the header. */}
+    <div className="space-y-3">
+      {/* Plain centered greeting at the very top (mockup order) */}
       <div className="text-center pt-1">
         <p className="text-xl md:text-2xl font-semibold tracking-tight">{greetingEmoji} {greeting}{personName ? `, ${personName}` : ''}</p>
         {/* Live date + day under the greeting (user request) */}
@@ -341,80 +331,29 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
       </div>
 
       {/* ====================================================================
-          3 MAIN ACTIONS — compact tiles, same size as the old quick buttons
-          (user request). Tapping "Add Products" expands its options
-          (Snap Label / Voice / Manual / Invoice) right below.
+          Inventory / Add Items / Stock Levels moved to the FIXED BOTTOM NAV
+          BAR (rendered app-wide in page.js — user request). Slim pastel
+          notification banners sit near the top instead (mockup style).
           ==================================================================== */}
-      <div className="space-y-2">
-        <div className="grid grid-cols-3 gap-2">
-          <button onClick={() => goToInventory('All')} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-emerald-200 bg-emerald-50 hover:bg-emerald-100 hover:border-emerald-300 transition text-emerald-800">
-            <span className="text-2xl">📦</span>
-            <span className="text-xs font-semibold">Inventory</span>
-          </button>
-          <button
-            onClick={() => setAddOpen(v => !v)}
-            className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition text-blue-800 ${addOpen ? 'border-blue-400 bg-blue-100 shadow-inner' : 'border-blue-200 bg-blue-50 hover:bg-blue-100 hover:border-blue-300'}`}
-          >
-            <span className="text-2xl">➕</span>
-            <span className="text-xs font-semibold">Add Items</span>
-          </button>
-          <button onClick={gotoStockLevels} className="flex flex-col items-center gap-1 p-3 rounded-xl border-2 border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-300 transition text-purple-800">
-            <span className="text-2xl">📊</span>
-            <span className="text-xs font-semibold">Stock Levels</span>
-          </button>
-        </div>
-        {addOpen && (
-          <div className="grid grid-cols-3 gap-2">
-            <button onClick={() => openBarcode('add')} className="flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 border-emerald-300 bg-emerald-50 hover:bg-emerald-100 hover:border-emerald-400 transition text-emerald-900">
-              <ScanLine className="h-5 w-5 text-emerald-600" />
-              <span className="text-[11px] font-semibold">Scan Barcode</span>
-            </button>
-            <button onClick={openSnap} className="flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 border-blue-200 bg-white hover:bg-blue-50 hover:border-blue-300 transition text-blue-900">
-              <span className="text-xl">📸</span>
-              <span className="text-[11px] font-semibold">Snap Label</span>
-            </button>
-            <button onClick={openAdd} className="flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 border-blue-200 bg-white hover:bg-blue-50 hover:border-blue-300 transition text-blue-900">
-              <span className="text-xl">✏️</span>
-              <span className="text-[11px] font-semibold">Manual</span>
-            </button>
-          </div>
-        )}
-      </div>
+      <EnablePushBanner />
+      <ExpiryAlertBanner stats={stats} goToInventory={goToInventory} />
 
-      {/* ====================================================================
-          2x2 TAPPABLE STAT CARDS (UX overhaul) — Total Items / Expiring Soon /
-          Low Stock / Expired. Tapping opens a simple filtered list with
-          stacked detail cards (NOT the full inventory view).
-          ==================================================================== */}
-      <div className="grid grid-cols-2 gap-3">
-        {statCards.map(c => {
-          const Icon = c.icon
-          return (
-            <button key={c.key} onClick={() => setStatFilter(c.key)} className="text-left">
-              <Card className={`transition-all border-2 ${c.border} shadow-sm overflow-hidden group hover:shadow-lg hover:-translate-y-0.5 cursor-pointer`}>
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className={`h-9 w-9 rounded-lg ${c.bg} flex items-center justify-center`}>
-                      <Icon className={`h-5 w-5 ${c.accent}`} />
-                    </div>
-                    <ArrowRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-muted-foreground transition" />
-                  </div>
-                  <div className="text-3xl font-bold tracking-tight">{c.value}</div>
-                  <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mt-1">{c.label}</div>
-                  <div className={`h-1 w-10 rounded-full bg-gradient-to-r ${c.bar} opacity-80 group-hover:w-16 transition-all mt-2`} />
-                </CardContent>
-              </Card>
-            </button>
-          )
-        })}
+      {/* Groceries expiring soon + recipe ideas + money-saved tracking */}
+      <UseItOrLoseItPanel products={products} currency={currency} openRecipeGenFromExpiring={openRecipeGenFromExpiring} refreshAll={refreshAll} />
+
+      {/* 2x2 tappable stat cards — soft pastel fills, minimal borders */}
+      <div className="grid grid-cols-2 gap-2.5">
+        {statCards.map(c => (
+          <button key={c.key} onClick={() => setStatFilter(c.key)}
+            className={`text-left rounded-2xl p-4 ${c.pastel} transition hover:brightness-[0.98] active:scale-[0.99]`}>
+            <div className="text-3xl font-bold tracking-tight">{c.value}</div>
+            <div className={`text-[11px] font-semibold uppercase tracking-wider mt-1 ${c.labelCls}`}>{c.label}</div>
+          </button>
+        ))}
       </div>
 
       <UseTodayPanel products={products} goToInventory={goToInventory} formatDate={(d) => new Date(d).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} />
 
-      {/* Expiry alerts show on EVERY device (user request, June 2025) — the
-          banner self-hides when nothing is expiring or the device is muted. */}
-      <EnablePushBanner />
-      <ExpiryAlertBanner stats={stats} goToInventory={goToInventory} />
 
       {show('search') && (
       <>
@@ -670,7 +609,7 @@ export function EnablePushBanner() {
 
   if (!visible) return null
   return (
-    <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 px-3 py-2.5 flex items-center gap-2.5">
+    <div className="rounded-2xl bg-emerald-100/60 px-3 py-2.5 flex items-center gap-2.5">
       <Bell className="h-5 w-5 text-emerald-600 shrink-0" />
       <p className="text-xs text-emerald-900 flex-1 min-w-0">
         <b>Get expiry alerts on this device</b> — items expiring in 7 days, even when the app is closed.
@@ -686,26 +625,19 @@ export function EnablePushBanner() {
 }
 
 export function ExpiryAlertBanner({ stats, goToInventory }) {
-  // ALWAYS shown on every device when items need attention (user request,
-  // July 2025) — notification mode (mute / in-app / push) only affects
-  // home-screen notifications, never these dashboard banners.
+  // ALWAYS shown on every device when items need attention. Slim pastel
+  // banner style with bell icon (mockup redesign, June 2025).
   if (!stats.expired && !stats.expiring) return null
   const messages = []
-  if (stats.expired > 0) messages.push({ key: 'Expired', text: `${stats.expired} item${stats.expired !== 1 ? 's' : ''} already expired`, color: 'bg-red-50 border-red-200 text-red-800', dot: 'bg-red-500' })
-  if (stats.expiring > 0) messages.push({ key: 'Expiring', text: `${stats.expiring} item${stats.expiring !== 1 ? 's' : ''} expiring within ${stats.expiryAlertDays || 7} days`, color: 'bg-amber-50 border-amber-200 text-amber-800', dot: 'bg-amber-500' })
+  if (stats.expired > 0) messages.push({ key: 'Expired', text: `${stats.expired} item${stats.expired !== 1 ? 's' : ''} expired`, color: 'bg-red-100/70 text-red-800' })
+  if (stats.expiring > 0) messages.push({ key: 'Expiring', text: `${stats.expiring} item${stats.expiring !== 1 ? 's' : ''} expiring soon`, color: 'bg-amber-100/70 text-amber-800' })
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+    <div className="space-y-2">
       {messages.map(m => (
         <button key={m.key} onClick={() => goToInventory(m.key)}
-          className={`text-left flex items-center justify-between rounded-xl border px-4 py-3 ${m.color} hover:shadow-sm transition`}>
-          <div className="flex items-center gap-3">
-            <span className={`h-2.5 w-2.5 rounded-full ${m.dot} animate-pulse`} />
-            <div>
-              <p className="font-semibold text-sm">{m.text}</p>
-              <p className="text-xs opacity-75">Tap to review and take action</p>
-            </div>
-          </div>
-          <AlertTriangle className="h-5 w-5 opacity-60" />
+          className={`w-full text-left flex items-center gap-2.5 rounded-2xl px-4 py-3 ${m.color} transition hover:brightness-[0.98]`}>
+          <Bell className="h-4 w-4 shrink-0" />
+          <p className="font-semibold text-[15px]">{m.text}</p>
         </button>
       ))}
     </div>

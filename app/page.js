@@ -384,6 +384,8 @@ function App() {
   const [view, setView] = useState(initial.view) // dashboard | inventory | recipes
   // When true, the Orders view opens straight into Stock Levels (dashboard tile)
   const [ordersInitialStock, setOrdersInitialStock] = useState(false)
+  // Bottom-bar "Add Items" action sheet (Scan / Snap / Manual)
+  const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [products, setProducts] = useState([])
   const [stats, setStats] = useState({ total: 0, expiring: 0, expired: 0, critical: 0 })
   const [loading, setLoading] = useState(false)
@@ -2425,7 +2427,7 @@ function App() {
       )}
 
 
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto px-4 py-8 pb-28">
         {/* Universal Back button — every screen except the dashboard (top-left,
             standard placement); returns to the exact previous screen. */}
         {view !== 'dashboard' && (
@@ -2506,6 +2508,51 @@ function App() {
         )}
       </main>
 
+      {/* ====================================================================
+          FIXED BOTTOM NAV BAR (user request, June 2025) — Inventory /
+          Add Items / Stock Levels pinned at all times. Small rounded pastel
+          icon badges above centred labels; active section highlighted.
+          ==================================================================== */}
+      <nav className="fixed bottom-0 inset-x-0 z-40 bg-card/95 backdrop-blur border-t border-border">
+        <div className="max-w-md mx-auto grid grid-cols-3 px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          <button onClick={() => goToInventory('All')} className="flex flex-col items-center gap-1 py-1">
+            <span className={`h-10 w-10 rounded-xl flex items-center justify-center transition ${view === 'inventory' ? 'bg-emerald-200/90' : 'bg-emerald-100/70'}`}>
+              <Package className={`h-5 w-5 ${view === 'inventory' ? 'text-emerald-800' : 'text-emerald-600'}`} />
+            </span>
+            <span className={`text-[11px] font-semibold ${view === 'inventory' ? 'text-emerald-800' : 'text-emerald-700/80'}`}>Inventory</span>
+          </button>
+          <button onClick={() => setAddSheetOpen(true)} className="flex flex-col items-center gap-1 py-1">
+            <span className={`h-10 w-10 rounded-xl flex items-center justify-center transition ${addSheetOpen ? 'bg-blue-200/90' : 'bg-blue-100/70'}`}>
+              <Plus className={`h-5 w-5 ${addSheetOpen ? 'text-blue-800' : 'text-blue-600'}`} />
+            </span>
+            <span className={`text-[11px] font-semibold ${addSheetOpen ? 'text-blue-800' : 'text-blue-700/80'}`}>Add Items</span>
+          </button>
+          <button onClick={() => { if (!can('orders')) { toast.error("You don't have permission to view stock levels"); return } setOrdersInitialStock(true); setView('orders') }} className="flex flex-col items-center gap-1 py-1">
+            <span className={`h-10 w-10 rounded-xl flex items-center justify-center transition ${view === 'orders' ? 'bg-purple-200/90' : 'bg-purple-100/70'}`}>
+              <BarChart3 className={`h-5 w-5 ${view === 'orders' ? 'text-purple-800' : 'text-purple-600'}`} />
+            </span>
+            <span className={`text-[11px] font-semibold ${view === 'orders' ? 'text-purple-800' : 'text-purple-700/80'}`}>Stock Levels</span>
+          </button>
+        </div>
+      </nav>
+
+      {/* Add Items action sheet (from the bottom bar) */}
+      <Dialog open={addSheetOpen} onOpenChange={setAddSheetOpen}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader><DialogTitle>➕ Add Items</DialogTitle></DialogHeader>
+          <div className="space-y-2">
+            <Button variant="outline" className="w-full justify-start border-emerald-200 bg-emerald-50/60 text-emerald-900 hover:bg-emerald-100" onClick={() => { setAddSheetOpen(false); openBarcode('add') }}>
+              <ScanLine className="h-4 w-4 mr-2 text-emerald-600" /> Scan Barcode
+            </Button>
+            <Button variant="outline" className="w-full justify-start" onClick={() => { setAddSheetOpen(false); openSnap() }}>
+              📸 <span className="ml-2">Snap Label</span>
+            </Button>
+            <Button variant="outline" className="w-full justify-start" onClick={() => { setAddSheetOpen(false); openAdd() }}>
+              ✏️ <span className="ml-2">Manual</span>
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       {/* Add/Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="sm:max-w-[560px] max-h-[92vh] flex flex-col p-0 gap-0">

@@ -552,7 +552,7 @@ export function ChefCodeCard() {
 }
 
 export function SettingsDialog({ open, onClose, settings, saveSettings, openWizard, isStaff, isOwner }) {
-  const [tab, setTab] = useState('profile') // 'profile' | 'login' | 'dashboard' | 'fields'
+  const [tab, setTab] = useState(null) // null = Settings HOME list; else section key
   const [name, setName] = useState('')
   const [type, setType] = useState('Restaurant')
   const [fields, setFields] = useState([])
@@ -619,7 +619,7 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
     } else {
       // Reset dirty flags and tab when dialog closes so next open is clean.
       setTouched({ profile: false, login: false, dashboard: false, fields: false, haccp: false })
-      setTab('profile')
+      setTab(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, settings])
@@ -726,15 +726,23 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
 
   const kitchenTypes = ['Restaurant', 'Cafe', 'Hotel', 'School', 'Hospital', 'Catering', 'Bakery', 'Other']
 
-  const tabs = [
-    { key: 'profile', label: 'Kitchen', longLabel: 'Kitchen Profile', icon: ChefHat },
-    { key: 'login', label: 'Login', longLabel: 'Login & Alerts', icon: Settings },
-    ...(isOwner ? [{ key: 'staff', label: 'Staff', longLabel: 'Staff', icon: Users }] : []),
-    { key: 'dashboard', label: 'Dashboard', longLabel: 'Dashboard', icon: LayoutDashboard },
-    { key: 'haccp', label: 'Fridges', longLabel: 'Fridges & Freezers', icon: Thermometer },
-    { key: 'fields', label: 'Fields', longLabel: 'Custom Fields', icon: Package },
-    { key: 'trash', label: 'Trash', longLabel: 'Trash', icon: Trash2 },
+  // Settings HOME — grouped rows, each opening its own full section page
+  // (user request, June 2025). "Staff" merged into "Login & staff access".
+  const settingsGroups = [
+    { title: 'General', items: [
+      { key: 'profile', label: 'Kitchen details', icon: ChefHat, hint: 'Name, type, currency & invite code' },
+      { key: 'dashboard', label: 'Dashboard layout', icon: LayoutDashboard, hint: 'Choose which widgets show on home' },
+    ] },
+    { title: 'Access', items: [
+      { key: 'login', label: 'Login & staff access', icon: Users, hint: 'Alerts, PINs & staff permissions' },
+    ] },
+    { title: 'Data', items: [
+      { key: 'haccp', label: 'Fridges', icon: Thermometer, hint: 'Fridges, freezers & temperature ranges' },
+      { key: 'fields', label: 'Custom fields', icon: Package, hint: 'Extra fields on your products' },
+      { key: 'trash', label: 'Trash', icon: Trash2, hint: 'Restore deleted items (30 days)' },
+    ] },
   ]
+  const sectionTitles = { profile: 'Kitchen details', dashboard: 'Dashboard layout', login: 'Login & staff access', haccp: 'Fridges', fields: 'Custom fields', trash: 'Trash' }
 
   // ---- HACCP location handlers ----
   const [selectedLocIds, setSelectedLocIds] = useState(new Set())
@@ -784,36 +792,43 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
       <DialogContent hideBack className="sm:max-w-[680px] max-h-[92vh] overflow-hidden flex flex-col p-0">
         <DialogHeader className="px-4 sm:px-6 pt-5 pb-3 border-b">
           <DialogTitle className="flex items-center gap-2">
-            {/* Universal Back button (user request, July 2026) — top-left, returns to the screen you came from */}
-            <button type="button" onClick={onClose} aria-label="Go back" className="flex items-center gap-1 text-sm font-semibold text-slate-500 hover:text-slate-900 -ml-1 mr-1">
+            {/* Back: from a section -> Settings home; from home -> close */}
+            <button type="button" onClick={() => (tab ? setTab(null) : onClose())} aria-label="Go back" className="flex items-center gap-1 text-sm font-semibold text-slate-500 hover:text-slate-900 -ml-1 mr-1">
               <ArrowLeft className="h-4 w-4" /> Back
             </button>
-            <Settings className="h-5 w-5" /> Kitchen Settings
+            <Settings className="h-5 w-5" /> {tab ? sectionTitles[tab] : 'Settings'}
           </DialogTitle>
         </DialogHeader>
 
-        {/* Tabs — horizontally scrollable on mobile, equal-width on desktop */}
-        <div className="border-b bg-slate-50/60">
-          <div className="flex overflow-x-auto no-scrollbar px-2 sm:px-4 gap-0.5">
-            {tabs.map(t => {
-              const Icon = t.icon
-              const active = tab === t.key
-              return (
-                <button
-                  key={t.key}
-                  onClick={() => setTab(t.key)}
-                  className={`flex items-center gap-1.5 px-3 sm:px-4 py-3 text-xs sm:text-sm font-medium border-b-2 transition whitespace-nowrap flex-shrink-0 ${active ? 'border-emerald-600 text-emerald-700 bg-white/60' : 'border-transparent text-slate-600 hover:text-slate-900'}`}
-                >
-                  <Icon className="h-4 w-4 flex-shrink-0" />
-                  <span className="sm:hidden">{t.label}</span>
-                  <span className="hidden sm:inline">{t.longLabel}</span>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
         <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5">
+          {/* -------- SETTINGS HOME: grouped rows with chevrons -------- */}
+          {tab === null && (
+            <div className="space-y-5">
+              {settingsGroups.map(g => (
+                <div key={g.title}>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5 px-1">{g.title}</p>
+                  <div className="rounded-2xl border divide-y overflow-hidden bg-card">
+                    {g.items.map(it => {
+                      const Icon = it.icon
+                      return (
+                        <button key={it.key} onClick={() => setTab(it.key)} className="w-full flex items-center gap-3 px-4 py-3.5 text-left hover:bg-muted/50 transition">
+                          <span className="h-9 w-9 rounded-xl bg-emerald-100/70 flex items-center justify-center shrink-0">
+                            <Icon className="h-4.5 w-4.5 h-[18px] w-[18px] text-emerald-700" />
+                          </span>
+                          <span className="flex-1 min-w-0">
+                            <span className="block font-semibold text-sm">{it.label}</span>
+                            <span className="block text-xs text-muted-foreground truncate">{it.hint}</span>
+                          </span>
+                          <ArrowRight className="h-4 w-4 text-muted-foreground/50 shrink-0" />
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           {tab === 'profile' && (
             <div className="space-y-4">
               <div>
@@ -921,8 +936,9 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
             </div>
           )}
 
-          {tab === 'staff' && (
-            <div className="space-y-4">
+          {/* Staff access merged into the Login & staff access section */}
+          {tab === 'login' && isOwner && (
+            <div className="space-y-4 mt-6">
               <StaffActivityCard />
             </div>
           )}
@@ -1135,10 +1151,14 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
           )}
         </div>
 
-        <DialogFooter className="px-6 py-4 border-t bg-slate-50/60">
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={save} className="bg-emerald-600 hover:bg-emerald-700"><Check className="h-4 w-4 mr-2" /> Save All</Button>
-        </DialogFooter>
+        {/* Per-section Save (user request) — no global "Save All"; hidden on
+            the Settings home and on Trash (whose actions apply instantly). */}
+        {tab !== null && tab !== 'trash' && (
+          <DialogFooter className="px-6 py-4 border-t bg-slate-50/60">
+            <Button variant="outline" onClick={() => setTab(null)}>Cancel</Button>
+            <Button onClick={save} className="bg-emerald-600 hover:bg-emerald-700"><Check className="h-4 w-4 mr-2" /> Save</Button>
+          </DialogFooter>
+        )}
       </DialogContent>
     </Dialog>
   )
