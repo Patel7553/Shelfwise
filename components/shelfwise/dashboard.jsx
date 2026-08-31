@@ -339,32 +339,11 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
       </>
       )}
 
-      {/* Urgent items panel */}
-      {show('urgent_list') && (
-      <Card className="border-0 shadow-sm">
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="text-xl">Urgent Items</CardTitle>
-              <CardDescription>Products that are expired or expiring within {stats?.expiryAlertDays || 7} days</CardDescription>
-            </div>
-            <Button variant="ghost" size="sm" onClick={() => goToInventory('Expiring')}>View all</Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {isEmpty ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <Boxes className="h-12 w-12 mx-auto mb-3 opacity-30" />
-              <p>No inventory yet. Add your first product or load sample data to get started.</p>
-            </div>
-          ) : (
-            <UrgentList />
-          )}
-        </CardContent>
-      </Card>
-      )}
+      {/* NOTE: the "Urgent Items" panel (UrgentList) was the SECOND card
+          duplicating expiring-items data — deleted entirely (user request,
+          Sept 2026). "Use It or Lose It" is the single source of truth. */}
 
-      {/* NEW — Items added today. Resets every midnight. Shows most recent first. Click any item to view / edit. */}
+      {/* Items added today. Resets every midnight. Click any item to view / edit. */}
       <RecentItemsToday products={products} goToInventory={goToInventory} openEdit={openEdit} />
     </div>
   )
@@ -557,34 +536,6 @@ export function ExpiryAlertBanner({ stats, goToInventory }) {
       <Bell className="h-4 w-4 shrink-0" />
       <p className="font-semibold text-[15px]">{parts.join(' · ')}</p>
     </button>
-  )
-}
-
-export function UrgentList() {
-  const [items, setItems] = useState([])
-  useEffect(() => {
-    (async () => {
-      const a = await fetch('/api/products?status=Expired').then(r => r.json()).catch(() => [])
-      const b = await fetch('/api/products?status=Expiring&sort=asc').then(r => r.json()).catch(() => [])
-      setItems([...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])].slice(0, 8))
-    })()
-  }, [])
-  if (!items.length) return <p className="text-sm text-muted-foreground py-4">Nothing urgent right now. Great job! 🎉</p>
-  return (
-    <div className="divide-y">
-      {items.map(p => (
-        <div key={p.id} className="flex items-center justify-between py-3">
-          <div>
-            <div className="font-medium">{p.name}</div>
-            <div className="text-xs text-muted-foreground">{p.category || 'Uncategorized'} · {p.location || 'No location'} · {p.quantity} {p.unit}</div>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-muted-foreground">{p.expiryDate ? new Date(p.expiryDate).toLocaleDateString() : '—'}</span>
-            <Badge variant="outline" className={STATUS_META[p._status]?.color}>{STATUS_META[p._status]?.label}</Badge>
-          </div>
-        </div>
-      ))}
-    </div>
   )
 }
 
