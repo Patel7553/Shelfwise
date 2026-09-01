@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, ArrowLeft, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe, Users, Lock, Delete, Eye, EyeOff, ReceiptText } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Home as HomeIcon, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, ArrowLeft, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe, Users, Lock, Delete, Eye, EyeOff, ReceiptText } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken, setChefToken, clearChefToken } from '@/lib/apiClient'
 import { getBrowserSupabase } from '@/lib/supabaseBrowser'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
@@ -2514,7 +2514,13 @@ function App() {
           icon badges above centred labels; active section highlighted.
           ==================================================================== */}
       <nav className="fixed bottom-0 inset-x-0 z-40 bg-card/95 backdrop-blur border-t border-border">
-        <div className="max-w-md mx-auto grid grid-cols-3 px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        <div className="max-w-md mx-auto grid grid-cols-4 px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          <button onClick={() => setView('dashboard')} className="flex flex-col items-center gap-1 py-1">
+            <span className={`h-10 w-10 rounded-xl flex items-center justify-center transition ${view === 'dashboard' ? 'bg-slate-300/80' : 'bg-slate-200/60'}`}>
+              <HomeIcon className={`h-5 w-5 ${view === 'dashboard' ? 'text-slate-800' : 'text-slate-500'}`} />
+            </span>
+            <span className={`text-[11px] font-semibold ${view === 'dashboard' ? 'text-slate-800' : 'text-slate-500'}`}>Home</span>
+          </button>
           <button onClick={() => goToInventory('All')} className="flex flex-col items-center gap-1 py-1">
             <span className={`h-10 w-10 rounded-xl flex items-center justify-center transition ${view === 'inventory' ? 'bg-emerald-200/90' : 'bg-emerald-100/70'}`}>
               <Package className={`h-5 w-5 ${view === 'inventory' ? 'text-emerald-800' : 'text-emerald-600'}`} />
