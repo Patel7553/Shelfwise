@@ -29,3 +29,4 @@
 - Mint a Coffee chef JWT for UI/API testing: sign({kitchen_id:'78789af5-7416-4399-9a59-97762c6a76da',role:'chef',person:'Marco'}, SHELFWISE_JWT_SECRET).
 - Seed scripts (idempotent, guarded): /app/scripts/seed-coffee-demo.mjs, /app/scripts/topup-catalogue.mjs.
 - PATEL FOOD supplier (995016c0-249b-48e7-aa24-51de2ecde382) catalogue: 158 items; Coffee↔PATEL FOOD connection was created BY THE USER (not by agents).
+- Part 2 seeds (Sept 2026): /app/scripts/seed-coffee-part2.mjs + seed-coffee-part2-fixup.mjs → 7 recipes, 39 HACCP temp logs (Main Fridge/Main Freezer kept from user, Milk Fridge added), 9 receipts (user's £528.80 auto-receipt untouched), 'haccp' module enabled on Coffee.
