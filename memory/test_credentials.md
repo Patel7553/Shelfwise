@@ -22,3 +22,10 @@
 - To auth API calls, mint a chef JWT (owner person "Xyz" passes all perm checks):
   cd /app && node -e "require('dotenv').config(); console.log(require('jsonwebtoken').sign({kitchen_id:'a2573e6a-70f0-4a6d-97d0-ccf09b444643',role:'chef',person:'Xyz'},process.env.SHELFWISE_JWT_SECRET,{expiresIn:'12h'}))"
   Then send header: Authorization: Bearer <token>
+
+## Sept 2026 — Coffee kitchen demo data (seeded)
+- Coffee kitchen id: 78789af5-7416-4399-9a59-97762c6a76da (existing account, owned by user).
+- Seeded staff PINs (kitchens.staff_names): Marco (manager) 4821, Priya 7358, Jack 2946, Tomasz 6173, Ella 9482, Liam 3517.
+- Mint a Coffee chef JWT for UI/API testing: sign({kitchen_id:'78789af5-7416-4399-9a59-97762c6a76da',role:'chef',person:'Marco'}, SHELFWISE_JWT_SECRET).
+- Seed scripts (idempotent, guarded): /app/scripts/seed-coffee-demo.mjs, /app/scripts/topup-catalogue.mjs.
+- PATEL FOOD supplier (995016c0-249b-48e7-aa24-51de2ecde382) catalogue: 158 items; Coffee↔PATEL FOOD connection was created BY THE USER (not by agents).
