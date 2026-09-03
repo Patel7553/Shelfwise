@@ -7644,3 +7644,310 @@ agent_communication:
         **Test file:** /app/backend_test_sept2026.py (can be re-run anytime)
         
         **Note:** Owner-only endpoints (/api/activity, PUT /api/settings) cannot be tested locally with JWT alone. They require actual Supabase email/password login. This is expected behavior, not a bug.
+
+# ============================================================
+# SEPT 2026 SESSION PART 2 — Notifications, price alerts, money cards, widget fix
+# ============================================================
+backend:
+  - task: "GET /api/notifications — combined feed (price alerts + expiring + low stock), ?type=price&supplier= filters"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Implemented GET /api/notifications endpoint combining price alerts (activity_logs), expiring items, and low stock. Supports ?type=price&supplier= filters."
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ BACKEND TEST COMPLETE - GET /api/notifications (4/4 tests passed):
+            
+            **BUG FIXED:** Missing `const url = new URL(request.url)` at line 3660 - added to fix 500 error.
+            
+            **Test 3: GET /api/notifications → verify structure and content** ✓
+            - Status: 200 ✓
+            - Response includes: items array, serverTime, currencySymbol ✓
+            - Total items: 31 (price alerts + expiry + low stock) ✓
+            - Items sorted newest-first by 'at' field ✓
+            - Type breakdown: price=4, expired=2, expiry=14, low=11 ✓
+            - Contains 3+ seeded price alerts (PATEL FOOD catalogue) ✓
+            - Sample price item: "Sourdough Loaf: £2.40 → £2.65 (PATEL FOOD catalogue)" ✓
+            - Price items have 'by' field and '→' arrow ✓
+            - Contains expiry/expired items (Coffee has expiring+expired products) ✓
+            - Contains low stock items (products at/below reorder point) ✓
+            
+            **Test 4: GET /api/notifications?type=price&supplier=PATEL%20FOOD → filter test** ✓
+            - Status: 200 ✓
+            - Filtered items: 2 (only PATEL FOOD price alerts) ✓
+            - All items are type='price' ✓
+            - All items have by='PATEL FOOD' ✓
+            - No expiry/expired/low items (correctly filtered) ✓
+            
+            **Key Validations:**
+            - ✅ Combined feed working (price + expiry + expired + low stock)
+            - ✅ Sorting newest-first by 'at' field
+            - ✅ Price alerts from activity_logs (action='price_alert')
+            - ✅ Expiry/expired items computed live (within alert window + last 3 days)
+            - ✅ Low stock items computed live (quantity <= reorder_point)
+            - ✅ Filters working: ?type=price and ?supplier=<name>
+            - ✅ Response structure correct: {items[], serverTime, currencySymbol}
+            
+            **Test file:** /app/backend_test_sept2026_part2.py (can be re-run anytime)
+            
+            No critical issues found. Notifications endpoint working perfectly.
+  - task: "Price alert Trigger 1 (item cost edit in products PUT logs activity_logs action=price_alert)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Implemented price alert trigger on PUT /api/products/:id when unitCost changes. Logs activity_logs row with action='price_alert'."
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ BACKEND TEST COMPLETE - Price Alert Trigger 1 (3/3 tests passed):
+            
+            **Test 5: TRIGGER 1 - Create product, PUT unitCost, verify price alert** ✓
+            
+            **5a: Create product 'ZZZ Test PriceAlert' with unitCost=5.00** ✓
+            - Status: 201 ✓
+            - Product created with ID: 80410ec2-ae2d-4bd8-a99d-1f15c1f2aed9 ✓
+            - Initial unitCost: 5.00 ✓
+            - Baseline notification count: 31 ✓
+            
+            **5b: PUT unitCost=6.50 (change from 5.00)** ✓
+            - Status: 200 ✓
+            - Updated unitCost: 6.50 ✓
+            
+            **5c: Verify NEW price alert in notifications** ✓
+            - New notification count: 32 (increased by 1) ✓
+            - Found price alert: "ZZZ Test PriceAlert: £5.00 → £6.50 (edited by Marco)" ✓
+            - Alert shows old price £5.00 ✓
+            - Alert shows new price £6.50 ✓
+            - Alert shows price change arrow '→' ✓
+            
+            **Key Validations:**
+            - ✅ First cost on CREATE does NOT produce alert (only changes)
+            - ✅ Cost CHANGE triggers activity_logs insert (action='price_alert')
+            - ✅ Alert message includes: product name, old price, new price, editor name
+            - ✅ Alert appears in GET /api/notifications feed
+            - ✅ Alert persisted in activity_logs (not just transient)
+            
+            **Cleanup:** Test product deleted and purged from trash ✓
+            
+            **Test file:** /app/backend_test_sept2026_part2.py (can be re-run anytime)
+            
+            No critical issues found. Price alert trigger 1 working perfectly.
+  - task: "Price alert Trigger 2 (supplier catalogue price change logs price_alert for all connected kitchens)"
+    implemented: true
+    working: "NA"
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Implemented price alert trigger on PUT /api/supplier/products/:id when price changes. Logs activity_logs for all connected kitchens."
+        - working: "NA"
+          agent: "testing"
+          comment: |
+            ⚠️  UNTESTABLE LOCALLY - Price Alert Trigger 2 (supplier catalogue price change):
+            
+            **Test 6: TRIGGER 2 - Supplier catalogue price change** ⚠️  SKIPPED
+            
+            **6a: GET /api/supplier/products (PATEL FOOD)** ⚠️  403 Forbidden
+            - Status: 403 ✓
+            - Response: {'error': 'Supplier login required (email & password)'} ✓
+            - Supplier JWT rejected (role:'owner' in JWT payload ignored) ✓
+            
+            **Context:**
+            - Supplier endpoints require actual Supabase session (email/password login)
+            - JWT with role:'owner' is verified as chef token by getAuthContext() (same secret)
+            - requireSupplier() gate checks for ctx.kitchen.account_type === 'supplier'
+            - This requires Supabase session on a kitchens row with account_type='supplier'
+            
+            **Expected behavior (NOT a bug):**
+            - Supplier endpoints cannot be tested locally with JWT alone
+            - In production with Supabase auth, supplier can log in with email/password
+            - PUT /api/supplier/products/:id will trigger price alerts for connected kitchens
+            - Logic implemented correctly (lines 6525-6558 in route.js):
+              * Detects price change (oldRow.price !== data.price)
+              * Fetches connected kitchens (supplier_connections.status='active')
+              * Logs activity_logs for each kitchen (action='price_alert')
+              * Message format: "{name}: {sym}{oldPrice} → {sym}{newPrice} ({supplierName} catalogue)"
+              * Sends web push to relevant kitchens (inventory/order history match)
+            
+            **Recommendation:** Test in production with real supplier login, or accept as untestable locally.
+            
+            **Test file:** /app/backend_test_sept2026_part2.py (can be re-run anytime)
+            
+            **Note:** This is expected behavior, not a bug. Supplier auth requires Supabase session.
+  - task: "PUT /api/financials {month, revenue?, budget?} + stats monthSpend/monthRevenue/monthBudget"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Implemented PUT /api/financials to store monthly revenue/budget in kitchens.supplier_profile.financials. GET /api/stats returns monthSpend (receipts), monthRevenue, monthBudget, month."
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ BACKEND TEST COMPLETE - PUT /api/financials + stats fields (7/7 tests passed):
+            
+            **Test 1: GET /api/stats → verify monthSpend, month, monthRevenue, monthBudget** ✓
+            - Status: 200 ✓
+            - Response includes all required fields: monthSpend, month, monthRevenue, monthBudget ✓
+            - monthSpend: 1174.85 (>0, Coffee has ~£1174 of Sept receipts) ✓
+            - month: '2026-09' (current YYYY-MM) ✓
+            - monthRevenue: null (initially) ✓
+            - monthBudget: null (initially) ✓
+            - Baseline expiredCost: 23.40 ✓
+            - Baseline totalValue: 1783.25 ✓
+            - Baseline expired count: 2 ✓
+            
+            **Test 2: PUT /api/financials → set revenue, then budget, verify merge** ✓
+            
+            **2a: PUT revenue=9500** ✓
+            - Status: 200 ✓
+            - Response: {ok:true, month:'2026-09', revenue:9500, budget:null} ✓
+            - GET /api/stats confirms monthRevenue=9500 ✓
+            
+            **2b: PUT budget=2000 (should merge, not overwrite revenue)** ✓
+            - Status: 200 ✓
+            - Response: {ok:true, month:'2026-09', revenue:9500, budget:2000} ✓
+            - GET /api/stats confirms monthRevenue=9500 AND monthBudget=2000 ✓
+            - Revenue STILL 9500 (merge, not overwrite) ✓
+            
+            **2c: Cleanup - PUT both to null** ✓
+            - Status: 200 ✓
+            - Response: {ok:true, month:'2026-09', revenue:null, budget:null} ✓
+            - GET /api/stats confirms both null again ✓
+            
+            **Test 7: REGRESSION - stats expiredCost/totalValue, products priceHistory** ✓
+            
+            **7a: GET /api/stats regression** ✓
+            - Status: 200 ✓
+            - expiredCost: 23.40 (still present) ✓
+            - totalValue: 1783.25 (still present) ✓
+            - expired count: 2 (still present) ✓
+            
+            **7b: GET /api/products regression (priceHistory)** ✓
+            - Status: 200 ✓
+            - Got 79 products ✓
+            - Test product has priceHistory with 2 entries ✓
+            - Price history entries have correct structure: cost, prevCost, at, by ✓
+            
+            **Key Validations:**
+            - ✅ monthSpend computed from receipts (current month)
+            - ✅ month field returns current 'YYYY-MM'
+            - ✅ monthRevenue/monthBudget stored in kitchens.supplier_profile.financials[month]
+            - ✅ PUT /api/financials merges revenue/budget (not overwrite)
+            - ✅ Setting revenue doesn't clear budget, and vice versa
+            - ✅ Can set both to null for cleanup
+            - ✅ Regression: expiredCost, totalValue, expired counts still working
+            - ✅ Regression: products priceHistory arrays intact
+            
+            **Cleanup:** All test products deleted and purged from trash. Financials nulled. ✓
+            
+            **Test file:** /app/backend_test_sept2026_part2.py (can be re-run anytime)
+            
+            No critical issues found. Financials endpoint and stats fields working perfectly.
+
+frontend:
+  - task: "Bell icon + unread badge + combined notifications feed dialog"
+    implemented: true
+    working: "NA"
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+  - task: "Dashboard layout toggles now apply to EVERY card (all_items/expiring/critical/expired/use_today/added_today/search/revenue_cost/budget_spend, '-key' off-marker convention)"
+    implemented: true
+    working: "NA"
+    file: "components/shelfwise/dashboard.jsx, components/shelfwise/settings-auth.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+  - task: "Revenue vs cost + Budget vs spend cards with tap-to-enter monthly figures"
+    implemented: true
+    working: "NA"
+    file: "components/shelfwise/dashboard.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+  - task: "Recent price changes section on supplier order page"
+    implemented: true
+    working: "NA"
+    file: "components/shelfwise/kitchen-ordering.jsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: true
+
+agent_communication:
+    - agent: "main"
+      message: "Part 2: notifications system + money cards + widget gating fix. Seeded Coffee: 9 cleaning tasks, 42 sign-offs, 3 delivery checks, 3 demo price alerts. SAFETY: preview uses REAL production Supabase. Test kitchen for chef flows: Coffee 78789af5-7416-4399-9a59-97762c6a76da (person Marco). Clean up any test products AND restore any changed prices/settings to original values."
+    - agent: "testing"
+      message: |
+        ✅ SEPT 2026 SESSION PART 2 BACKEND TESTING COMPLETE (3/4 features fully tested, 1 untestable locally):
+        
+        **SUMMARY:**
+        ✅ GET /api/notifications - WORKING (4/4 tests passed)
+        ✅ Price alert Trigger 1 (item cost edit) - WORKING (3/3 tests passed)
+        ⚠️  Price alert Trigger 2 (supplier catalogue) - UNTESTABLE LOCALLY (supplier auth requires Supabase session)
+        ✅ PUT /api/financials + stats fields - WORKING (7/7 tests passed)
+        
+        **BUG FIXED:**
+        - GET /api/notifications was returning 500 "url is not defined"
+        - Fixed: Added `const url = new URL(request.url)` at line 3660
+        - Now working perfectly ✓
+        
+        **Test Results:**
+        
+        **1. GET /api/notifications (4/4 tests passed):**
+        - Combined feed working: price alerts + expiry + expired + low stock ✓
+        - Sorted newest-first by 'at' field ✓
+        - Contains 3+ seeded price alerts (PATEL FOOD catalogue) ✓
+        - Contains expiry/expired items (Coffee has expiring+expired products) ✓
+        - Contains low stock items (products at/below reorder point) ✓
+        - Filters working: ?type=price and ?supplier=PATEL%20FOOD ✓
+        - Response structure: {items[], serverTime, currencySymbol} ✓
+        
+        **2. Price alert Trigger 1 (3/3 tests passed):**
+        - First cost on CREATE does NOT produce alert ✓
+        - Cost CHANGE triggers activity_logs insert (action='price_alert') ✓
+        - Alert message: "ZZZ Test PriceAlert: £5.00 → £6.50 (edited by Marco)" ✓
+        - Alert appears in GET /api/notifications feed ✓
+        
+        **3. Price alert Trigger 2 (UNTESTABLE LOCALLY):**
+        - Supplier JWT rejected with 403 "Supplier login required (email & password)" ✓
+        - Supplier endpoints require Supabase session (email/password login)
+        - Logic implemented correctly (lines 6525-6558 in route.js)
+        - This is expected behavior, NOT a bug
+        
+        **4. PUT /api/financials + stats fields (7/7 tests passed):**
+        - monthSpend: 1174.85 (>0, Coffee has ~£1174 of Sept receipts) ✓
+        - month: '2026-09' (current YYYY-MM) ✓
+        - monthRevenue/monthBudget: null initially ✓
+        - PUT revenue=9500 → stats confirms 9500 ✓
+        - PUT budget=2000 → stats confirms revenue=9500 AND budget=2000 (merge, not overwrite) ✓
+        - PUT both to null → stats confirms both null ✓
+        - Regression: expiredCost, totalValue, expired counts still working ✓
+        - Regression: products priceHistory arrays intact ✓
+        
+        **Cleanup:** All test products deleted and purged from trash. Financials nulled. ✓
+        
+        **Test file:** /app/backend_test_sept2026_part2.py (can be re-run anytime)
+        
+        **Note:** Supplier endpoints cannot be tested locally with JWT alone. They require actual Supabase email/password login. This is expected behavior, not a bug.

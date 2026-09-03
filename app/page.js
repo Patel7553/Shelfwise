@@ -475,6 +475,32 @@ function App() {
   const [settings, setSettings] = useState({ kitchenName: '', kitchenType: '', customFields: [], onboarded: true, inviteCode: '', alertEmail: '', tagline: 'From shelf to plate — never lose track.' })
   const [wizardOpen, setWizardOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // ==========================================================================
+  // SHARED NOTIFICATION FEED (Sept 2026): ONE bell in the top nav, ONE feed —
+  // price alerts (item cost edits + supplier catalogue changes), expiring
+  // items and low stock. Automatic, nothing to configure. Unread state lives
+  // in localStorage ('sw_notif_seen') so the badge survives reloads.
+  // ==========================================================================
+  const [notifOpen, setNotifOpen] = useState(false)
+  const [notifItems, setNotifItems] = useState([])
+  const [notifSeen, setNotifSeen] = useState(null)
+  const fetchNotifications = async () => {
+    try {
+      const res = await fetch('/api/notifications')
+      if (!res.ok) return
+      const d = await res.json()
+      setNotifItems(Array.isArray(d.items) ? d.items : [])
+    } catch { /* feed is best-effort */ }
+  }
+  useEffect(() => { try { setNotifSeen(localStorage.getItem('sw_notif_seen') || '1970-01-01T00:00:00Z') } catch {} }, [])
+  const notifUnread = notifSeen ? notifItems.filter(i => String(i.at) > notifSeen).length : 0
+  const openNotifications = () => {
+    setNotifOpen(true)
+    fetchNotifications()
+    const now = new Date().toISOString()
+    try { localStorage.setItem('sw_notif_seen', now) } catch {}
+    setNotifSeen(now)
+  }
   // UNIVERSAL HOME (Sept 2026 P0 fix): the bottom nav is now rendered ABOVE
   // full-screen overlays (Settings etc., z-[60] > z-50). Tapping any bottom
   // tab must therefore also CLOSE every overlay so the target screen is
@@ -483,6 +509,9 @@ function App() {
   const [homeKey, setHomeKey] = useState(0)
   const [authed, setAuthed] = useState(null) // null = checking, true/false
   const [me, setMe] = useState(null)         // { role, isAdmin, userEmail, kitchen }
+  // initial notifications fetch once the session is known
+  useEffect(() => { if (me) fetchNotifications() // eslint-disable-line react-hooks/exhaustive-deps
+  }, [me])
   const [mobileNav, setMobileNav] = useState(false)
   const [namePromptOpen, setNamePromptOpen] = useState(false)   // "add your name" popup for existing users
   const [namePromptValue, setNamePromptValue] = useState('')
@@ -2187,6 +2216,7 @@ function App() {
     setDialogOpen(false)
     setAddSheetOpen(false)
     setViewRecipe(null)
+    setNotifOpen(false)
   }
   const goHomeUniversal = () => {
     closeAllOverlays()
@@ -2316,6 +2346,14 @@ function App() {
                 <Users className="h-4 w-4 xl:mr-1.5" /> <span className="hidden xl:inline">Switch user</span>
               </Button>
             )}
+            {!isSupplier && (
+              <Button variant="ghost" size="icon" onClick={openNotifications} title="Notifications" className="shrink-0 relative">
+                <Bell className="h-4 w-4" />
+                {notifUnread > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 h-4 min-w-4 px-0.5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center leading-none">{notifUnread > 99 ? '99+' : notifUnread}</span>
+                )}
+              </Button>
+            )}
             {!isSupplier && can('orders') && (
               <Button variant="ghost" onClick={() => setView('cart')} title="Cart" className="shrink-0 relative px-2 gap-1">
                 <ShoppingCart className="h-4 w-4" />
@@ -2337,6 +2375,14 @@ function App() {
           {/* Mobile: Switch User is always visible next to the menu button —
               staff on the shared tablet tap it to hand over to the next person */}
           <div className="flex items-center gap-1 md:hidden">
+            {!isSupplier && (
+              <Button variant="ghost" size="icon" onClick={openNotifications} title="Notifications" className="relative">
+                <Bell className="h-5 w-5" />
+                {notifUnread > 0 && (
+                  <span className="absolute top-0 right-0 h-4 min-w-4 px-0.5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center leading-none">{notifUnread > 99 ? '99+' : notifUnread}</span>
+                )}
+              </Button>
+            )}
             {!isSupplier && can('orders') && (
               <Button variant="ghost" size="icon" onClick={() => setView('cart')} title="Cart" className="relative">
                 <ShoppingCart className="h-5 w-5" />
@@ -2467,7 +2513,7 @@ function App() {
           </Button>
         )}
         {view === 'dashboard' && (
-          <DashboardView key={homeKey} stats={stats} statsLoading={statsLoading} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} isStaff={!can('logbook')} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} gotoStockLevels={() => { if (!can('orders')) { toast.error("You don't have permission to view stock levels"); return } setOrdersInitialStock(true); setView('orders') }} personName={me?.personName || ''} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} openEdit={openEdit} refreshAll={() => { fetchProducts(); fetchStats() }} />
+          <DashboardView key={homeKey} stats={stats} statsLoading={statsLoading} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} isStaff={!can('logbook')} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} modules={modulesEnabled} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} gotoStockLevels={() => { if (!can('orders')) { toast.error("You don't have permission to view stock levels"); return } setOrdersInitialStock(true); setView('orders') }} personName={me?.personName || ''} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} openEdit={openEdit} refreshAll={() => { fetchProducts(); fetchStats() }} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -3591,6 +3637,50 @@ function App() {
       <SetupWizard open={wizardOpen} onClose={() => setWizardOpen(false)} settings={settings} saveSettings={saveSettings} />
 
       {/* Settings Dialog */}
+      {/* =====================================================================
+          NOTIFICATIONS FEED (Sept 2026): one combined feed, newest first —
+          price alerts, expiring items, low stock. Opened from the bell icon.
+          ===================================================================== */}
+      <Dialog open={notifOpen} onOpenChange={setNotifOpen}>
+        <DialogContent className="sm:max-w-[480px] max-h-[calc(100dvh-10rem)] flex flex-col p-0 gap-0">
+          <DialogHeader className="px-4 pt-4 pb-2 border-b">
+            <DialogTitle className="flex items-center gap-2"><Bell className="h-5 w-5 text-emerald-600" /> Notifications</DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto p-3">
+            {notifItems.length === 0 ? (
+              <div className="text-center py-12 text-muted-foreground">
+                <Bell className="h-10 w-10 mx-auto mb-2 opacity-30" />
+                <p className="text-sm font-medium">All caught up</p>
+                <p className="text-xs">Price changes, expiring items and low stock will show here automatically.</p>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {notifItems.map(n => {
+                  const meta = n.type === 'price' ? { emoji: '💷', cls: 'bg-teal-50 border-teal-200', tag: 'Price change', tagCls: 'bg-teal-100 text-teal-800' }
+                    : n.type === 'expired' ? { emoji: '🗑️', cls: 'bg-red-50 border-red-200', tag: 'Expired', tagCls: 'bg-red-100 text-red-800' }
+                    : n.type === 'expiry' ? { emoji: '⏰', cls: 'bg-amber-50 border-amber-200', tag: 'Expiring', tagCls: 'bg-amber-100 text-amber-800' }
+                    : { emoji: '📉', cls: 'bg-orange-50 border-orange-200', tag: 'Low stock', tagCls: 'bg-orange-100 text-orange-800' }
+                  const d = new Date(n.at)
+                  const when = isNaN(d) ? '' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+                  return (
+                    <div key={n.id} className={`flex items-start gap-2.5 rounded-lg border px-3 py-2 ${meta.cls}`}>
+                      <span className="text-base leading-none mt-0.5">{meta.emoji}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm leading-snug">{n.message}</p>
+                        <p className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-1.5">
+                          <span className={`px-1.5 py-0.5 rounded-full font-bold ${meta.tagCls}`}>{meta.tag}</span>
+                          {when}
+                        </p>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <SettingsDialog
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

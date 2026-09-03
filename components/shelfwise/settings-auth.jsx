@@ -770,18 +770,19 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
   const [touched, setTouched] = useState({ profile: false, login: false, dashboard: false, fields: false, haccp: false })
   const markTouched = (section) => setTouched(prev => prev[section] ? prev : { ...prev, [section]: true })
   const ALL_WIDGETS = [
-    // 'all_items' and 'recipes' removed — the dashboard now has fixed
-    // Inventory / Add Products / Recipes tiles instead (user request).
-    { key: 'expiring',  label: 'Expiring Soon' },
-    { key: 'expired',   label: 'Expired items' },
-    { key: 'critical',  label: 'Critical Stock level' },
-    { key: 'in_date',   label: 'In Date items' },
-    { key: 'use_today', label: 'Use Today (urgent)' },
-    { key: 'rota_today', label: 'Today\'s Rota' },
-    { key: 'waste_week', label: 'Waste (this week)' },
-    { key: 'expiry_alerts', label: 'Expiry alert banner' },
-    { key: 'urgent_list',   label: 'Urgent items list' },
-    { key: 'search',        label: 'Global search box' },
+    // Sept 2026: list now matches the REAL dashboard 1:1 — every tick/untick
+    // shows/hides the actual card. Dead legacy entries (in_date, rota_today,
+    // waste_week, expiry_alerts, urgent_list) removed — their panels no longer
+    // exist on the dashboard.
+    { key: 'all_items', label: 'Total Items card' },
+    { key: 'expiring',  label: 'Expiring Soon card' },
+    { key: 'critical',  label: 'Low Stock card' },
+    { key: 'expired',   label: 'Expired card' },
+    { key: 'revenue_cost', label: 'Revenue vs cost card' },
+    { key: 'budget_spend', label: 'Budget vs spend card' },
+    { key: 'use_today', label: 'Use It or Lose It panel' },
+    { key: 'added_today', label: 'Added Today panel' },
+    { key: 'search',    label: 'Global search box' },
   ]
   const ALL_MODULES = [
     // 'stock' and 'recipes' removed — always on (dashboard tiles cover them).
@@ -826,7 +827,22 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, settings])
 
-  const toggleWidget = (k) => { markTouched('dashboard'); setWidgets(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]) }
+  // Widget visibility resolution (Sept 2026). Some keys were introduced AFTER
+  // kitchens already saved their widget arrays, so absence can't mean "off"
+  // for those — they fall back to a sensible default until explicitly
+  // toggled. An explicit '-key' entry means "switched off".
+  const widgetDefault = (k) =>
+    k === 'added_today' ? true
+    : k === 'revenue_cost' ? modules.includes('money_revenue_cost')
+    : k === 'budget_spend' ? modules.includes('money_budget_spend')
+    : false
+  const widgetChecked = (k) => widgets.includes('-' + k) ? false : widgets.includes(k) ? true : widgetDefault(k)
+  const toggleWidget = (k) => {
+    markTouched('dashboard')
+    setWidgets(prev => widgetChecked(k)
+      ? [...prev.filter(x => x !== k), '-' + k]     // turn OFF (explicit marker)
+      : [...prev.filter(x => x !== '-' + k), k])    // turn ON
+  }
   const toggleModule = (k) => { markTouched('dashboard'); setModules(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]) }
 
   const addField = () => {
@@ -1205,8 +1221,8 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
               </div>
               <div className="space-y-2">
                 {ALL_WIDGETS.map(w => (
-                  <label key={w.key} className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition ${widgets.includes(w.key) ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-emerald-300'}`}>
-                    <input type="checkbox" checked={widgets.includes(w.key)} onChange={() => toggleWidget(w.key)} className="h-4 w-4 accent-emerald-600" />
+                  <label key={w.key} className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition ${widgetChecked(w.key) ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-emerald-300'}`}>
+                    <input type="checkbox" checked={widgetChecked(w.key)} onChange={() => toggleWidget(w.key)} className="h-4 w-4 accent-emerald-600" />
                     <span className="text-sm font-medium">{w.label}</span>
                   </label>
                 ))}

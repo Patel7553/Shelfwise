@@ -3432,7 +3432,7 @@ export async function GET(request, { params }) {
     }
 
     // ----- OWNER / CHEF endpoints (kitchen-scoped) -----
-    const ownerOrChef = ['products','settings','facets','stats','recipes','rota','waste','haccp','suppliers','sensors','receipts','barcodes','trash'].some(p => path === p || path.startsWith(p + '/'))
+    const ownerOrChef = ['products','settings','facets','stats','notifications','financials','recipes','rota','waste','haccp','suppliers','sensors','receipts','barcodes','trash'].some(p => path === p || path.startsWith(p + '/'))
     if (ownerOrChef) {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
@@ -3597,6 +3597,22 @@ export async function GET(request, { params }) {
           sb.from('products').select('*', { count: 'exact', head: true }).eq('kitchen_id', kid).not('expiry_date', 'is', null).gt('expiry_date', in7ISO),
           sb.from('products').select('quantity,unit_cost,reorder_point,expiry_date').eq('kitchen_id', kid),
         ])
+        // MONEY TRACKING (Sept 2026): monthly spend (receipts) + entered
+        // revenue/budget figures for the current month — feeds the
+        // "Revenue vs cost" and "Budget vs spend" dashboard cards.
+        const monthKey = todayISO.slice(0, 7) // 'YYYY-MM'
+        const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1).toISOString().slice(0, 10)
+        let monthSpend = 0, monthRevenue = null, monthBudget = null
+        try {
+          const [{ data: rcp }, { data: kRow }] = await Promise.all([
+            sb.from('receipts').select('amount').eq('kitchen_id', kid).gte('receipt_date', monthKey + '-01').lt('receipt_date', nextMonth),
+            sb.from('kitchens').select('supplier_profile').eq('id', kid).maybeSingle(),
+          ])
+          for (const r of (rcp || [])) monthSpend += Number(r.amount) || 0
+          const fin = kRow?.supplier_profile?.financials?.[monthKey] || {}
+          if (fin.revenue != null) monthRevenue = Number(fin.revenue)
+          if (fin.budget != null) monthBudget = Number(fin.budget)
+        } catch { /* money cards are best-effort */ }
         // Compute inventory value + below-reorder count from a single fetched list
         let totalValue = 0
         let belowReorder = 0
@@ -3620,7 +3636,73 @@ export async function GET(request, { params }) {
           expiredCost,
           belowReorder,
           expiryAlertDays: alertDaysK,
+          monthSpend,
+          monthRevenue,
+          monthBudget,
+          month: monthKey,
         })
+      }
+
+      // =====================================================================
+      // GET /api/notifications — ONE shared alert feed (Sept 2026 user req).
+      // Combines, newest first:
+      //   • price alerts   — stored activity_logs rows (action='price_alert')
+      //                      written automatically by (a) item cost edits and
+      //                      (b) supplier catalogue price changes
+      //   • expiring items — computed live (within the kitchen's alert window,
+      //                      plus items expired in the last 3 days)
+      //   • low stock      — computed live (quantity <= reorder point)
+      // Nothing to configure — works automatically. Unread state is client-side.
+      // Optional filters: ?type=price and ?supplier=<name> (for the supplier
+      // page "Recent price changes" section).
+      // =====================================================================
+      if (path === 'notifications') {
+        const url = new URL(request.url)
+        const typeFilter = url.searchParams.get('type') || ''
+        const supplierFilter = (url.searchParams.get('supplier') || '').trim()
+        const sym = CURRENCY_SYMBOL_SERVER[ctx.kitchen?.currency] || '£'
+        const items = []
+
+        // 1) stored price alerts
+        let pq = sb.from('activity_logs').select('id,person,detail,created_at')
+          .eq('kitchen_id', kid).eq('action', 'price_alert')
+          .order('created_at', { ascending: false }).limit(30)
+        if (supplierFilter) pq = pq.eq('person', supplierFilter)
+        const { data: alerts } = await pq
+        for (const a of (alerts || [])) {
+          items.push({ id: a.id, type: 'price', message: a.detail || '', by: a.person || '', at: a.created_at })
+        }
+
+        // 2+3) live expiry / low-stock entries (skipped when filtering to price)
+        if (!typeFilter && !supplierFilter) {
+          const now = new Date()
+          const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+          const todayISO = start.toISOString().slice(0, 10)
+          const alertDaysK = await fetchAlertDays(sb, kid, ctx.kitchen)
+          const winISO = new Date(start.getTime() + alertDaysK * 86400000).toISOString().slice(0, 10)
+          const recentISO = new Date(start.getTime() - 3 * 86400000).toISOString().slice(0, 10)
+          const { data: prods } = await sb.from('products')
+            .select('id,name,quantity,unit,expiry_date,reorder_point')
+            .eq('kitchen_id', kid).limit(2000)
+          // stable per-day timestamp so "unread" resets once per day, not per request
+          const dayStamp = todayISO + 'T06:00:00.000Z'
+          for (const p of (prods || [])) {
+            const exp = p.expiry_date ? String(p.expiry_date).slice(0, 10) : null
+            if (exp && exp < todayISO && exp >= recentISO) {
+              const days = Math.round((start - new Date(exp + 'T00:00:00Z')) / 86400000)
+              items.push({ id: `exp-${p.id}`, type: 'expired', message: `${p.name} expired ${days === 0 ? 'today' : days === 1 ? 'yesterday' : days + ' days ago'}`, at: dayStamp })
+            } else if (exp && exp >= todayISO && exp <= winISO) {
+              const days = Math.round((new Date(exp + 'T00:00:00Z') - start) / 86400000)
+              items.push({ id: `exp-${p.id}`, type: 'expiry', message: `${p.name} ${days === 0 ? 'expires today' : days === 1 ? 'expires tomorrow' : `expires in ${days} days`} (${new Date(exp + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })})`, at: dayStamp })
+            }
+            if (p.reorder_point != null && Number(p.quantity) <= Number(p.reorder_point)) {
+              items.push({ id: `low-${p.id}`, type: 'low', message: `${p.name} is low on stock — ${p.quantity} ${p.unit || ''} left (reorder at ${p.reorder_point})`, at: dayStamp })
+            }
+          }
+        }
+
+        items.sort((a, b) => new Date(b.at) - new Date(a.at))
+        return json({ items: items.slice(0, 80), serverTime: new Date().toISOString(), currencySymbol: sym })
       }
 
       if (path === 'recipes') {
@@ -6453,6 +6535,12 @@ export async function PUT(request, { params }) {
             const bnorm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim()
             const pn = bnorm(data.name)
             for (const c of (conns || [])) {
+              // ALWAYS log the change into the kitchen's shared notification
+              // feed (Sept 2026) — the bell picks these up as price alerts.
+              try {
+                await logActivity(sb, c.kitchen_id, supName, 'price_alert',
+                  `${data.name}: ${sym}${(Number(oldRow.price) || 0).toFixed(2)} → ${sym}${(Number(data.price) || 0).toFixed(2)} (${supName} catalogue)`)
+              } catch {}
               let relevant = false
               const { data: prods } = await sb.from('products').select('name').eq('kitchen_id', c.kitchen_id).limit(1000)
               relevant = (prods || []).some(p => { const n = bnorm(p.name); return n && pn && (n === pn || n.includes(pn) || pn.includes(n)) })
@@ -6760,6 +6848,29 @@ export async function PUT(request, { params }) {
       return json(supplierFromDb(data))
     }
 
+    // ------- FINANCIALS (Sept 2026): monthly revenue / budget figures -------
+    // PUT /api/financials {month:'YYYY-MM', revenue?, budget?} — stored per
+    // month inside kitchens.supplier_profile.financials (zero-migration).
+    // Any kitchen member can log figures (chef included) — it's daily ops data.
+    if (segs[0] === 'financials') {
+      const { ctx, error } = await requireOwnerOrChef(request)
+      if (error) return error
+      const body = await request.json()
+      const month = /^\d{4}-\d{2}$/.test(String(body.month || '')) ? body.month : new Date().toISOString().slice(0, 7)
+      const { data: kRow, error: kErr } = await sb.from('kitchens').select('supplier_profile').eq('id', ctx.kitchenId).single()
+      if (kErr) throw kErr
+      const prof = (kRow?.supplier_profile && typeof kRow.supplier_profile === 'object') ? kRow.supplier_profile : {}
+      const fin = (prof.financials && typeof prof.financials === 'object') ? prof.financials : {}
+      const entry = { ...(fin[month] || {}) }
+      if (body.revenue !== undefined) entry.revenue = body.revenue === null || body.revenue === '' ? null : Math.max(0, Number(body.revenue) || 0)
+      if (body.budget !== undefined) entry.budget = body.budget === null || body.budget === '' ? null : Math.max(0, Number(body.budget) || 0)
+      fin[month] = entry
+      const { error: uErr } = await sb.from('kitchens')
+        .update({ supplier_profile: { ...prof, financials: fin } }).eq('id', ctx.kitchenId)
+      if (uErr) throw uErr
+      return json({ ok: true, month, revenue: entry.revenue ?? null, budget: entry.budget ?? null })
+    }
+
     if (segs[0] === 'settings') {
       const { ctx, error } = await requireOwnerOrChef(request)
       if (error) return error
@@ -6838,7 +6949,7 @@ export async function PUT(request, { params }) {
       let prevQty = null
       let prevRow = null
       try {
-        const { data: prev } = await sb.from('products').select('quantity, unit_cost, custom_fields').eq('id', id).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+        const { data: prev } = await sb.from('products').select('name, quantity, unit_cost, custom_fields').eq('id', id).eq('kitchen_id', ctx.kitchenId).maybeSingle()
         prevRow = prev || null
         prevQty = prev ? Number(prev.quantity) : null
       } catch {}
@@ -6867,6 +6978,15 @@ export async function PUT(request, { params }) {
             const hist = Array.isArray(patch.custom_fields?._priceHistory) ? [...patch.custom_fields._priceHistory] : []
             hist.push({ cost: newCost, prevCost: oldCost, at: new Date().toISOString(), by: editPerson || 'Unknown' })
             patch.custom_fields = { ...(patch.custom_fields || {}), _priceHistory: hist.slice(-50) }
+            // PRICE ALERT (Sept 2026): a cost CHANGE (not the first cost) is also
+            // logged as a persistent alert in the shared notification feed —
+            // not just the inline warning that disappears on save.
+            if (oldCost != null) {
+              const symK = CURRENCY_SYMBOL_SERVER[ctx.kitchen?.currency] || '£'
+              const nm = String(body.name || prevRow?.name || 'Item').slice(0, 80)
+              await logActivity(sb, ctx.kitchenId, editPerson || 'Unknown', 'price_alert',
+                `${nm}: ${symK}${oldCost.toFixed(2)} → ${symK}${newCost.toFixed(2)} (edited by ${editPerson || 'staff'})`)
+            }
           }
         }
       } catch { /* history is best-effort — never blocks the edit */ }

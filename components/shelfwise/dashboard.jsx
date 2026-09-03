@@ -167,7 +167,7 @@ export function UseItOrLoseItPanel({ products, currency, openRecipeGenFromExpiri
   )
 }
 
-export function DashboardView({ stats, statsLoading, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, openReceipt, printLogbook, openRecipe, onViewRecipe, widgets, recipesCount, gotoRecipes, gotoStockLevels, personName, currency, openRecipeGen, openRecipeGenFromExpiring, openEdit, refreshAll, isStaff }) {
+export function DashboardView({ stats, statsLoading, products, goToInventory, seedData, openAdd, openScan, openSnap, openBarcode, openVoice, openReceipt, printLogbook, openRecipe, onViewRecipe, widgets, modules, recipesCount, gotoRecipes, gotoStockLevels, personName, currency, openRecipeGen, openRecipeGenFromExpiring, openEdit, refreshAll, isStaff }) {
   const [quickSearch, setQuickSearch] = useState('')
   const [globalResults, setGlobalResults] = useState(null)
   const [globalLoading, setGlobalLoading] = useState(false)
@@ -175,9 +175,28 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
   // Stat-card filtered list view (UX overhaul): when set, the dashboard is
   // replaced by a simple filtered list with stacked detail cards + back button.
   const [statFilter, setStatFilter] = useState(null) // null | 'total' | 'expiring' | 'low' | 'expired'
-  // If widgets is undefined → show all (backwards compat).
-  // If widgets array is provided (even empty) → strict include check.
-  const show = (k) => widgets === undefined || (Array.isArray(widgets) && widgets.includes(k))
+  // ==========================================================================
+  // WIDGET VISIBILITY (Sept 2026 fix): Settings > Dashboard layout now applies
+  // to EVERY card. Rules:
+  //   • widgets undefined      → defaults (all legacy cards on)
+  //   • '-key' in the array    → explicitly OFF
+  //   • 'key' in the array     → explicitly ON
+  //   • otherwise              → per-key default (keys newer than saved arrays
+  //                              fall back sensibly instead of vanishing)
+  // ==========================================================================
+  const mods = Array.isArray(modules) ? modules : []
+  const widgetDefault = (k) =>
+    k === 'revenue_cost' ? mods.includes('money_revenue_cost')
+    : k === 'budget_spend' ? mods.includes('money_budget_spend')
+    : k === 'added_today' ? true
+    : false
+  const NEW_KEYS = ['added_today', 'revenue_cost', 'budget_spend']
+  const show = (k) => {
+    if (!Array.isArray(widgets)) return NEW_KEYS.includes(k) ? widgetDefault(k) : true
+    if (widgets.includes('-' + k)) return false
+    if (widgets.includes(k)) return true
+    return NEW_KEYS.includes(k) ? widgetDefault(k) : false
+  }
 
   const onSearch = async (e) => {
     e.preventDefault()
@@ -211,12 +230,13 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
   const expiredSub = statsLoading ? null : (expiredCost > 0 ? `${stats.expired} item${stats.expired === 1 ? '' : 's'}` : null)
   // 2x2 tappable stat cards (UX overhaul) — tapping opens a simple filtered
   // list (NOT the full inventory view) rendered by FilteredStatList below.
+  // Each card maps to a Settings > Dashboard layout widget key (Sept 2026).
   const statCards = [
-    { key: 'total', label: 'Total Items', value: L(stats.total), pastel: 'bg-emerald-100/70', labelCls: 'text-emerald-700' },
-    { key: 'expiring', label: 'Expiring Soon', value: L(stats.expiring), pastel: 'bg-amber-100/70', labelCls: 'text-amber-700' },
-    { key: 'low', label: 'Low Stock', value: L(stats.critical), pastel: 'bg-orange-100/70', labelCls: 'text-orange-700' },
-    { key: 'expired', label: 'Expired', value: expiredMain, sub: expiredSub, pastel: 'bg-red-100/60', labelCls: 'text-red-700' },
-  ]
+    { key: 'total', widget: 'all_items', label: 'Total Items', value: L(stats.total), pastel: 'bg-emerald-100/70', labelCls: 'text-emerald-700' },
+    { key: 'expiring', widget: 'expiring', label: 'Expiring Soon', value: L(stats.expiring), pastel: 'bg-amber-100/70', labelCls: 'text-amber-700' },
+    { key: 'low', widget: 'critical', label: 'Low Stock', value: L(stats.critical), pastel: 'bg-orange-100/70', labelCls: 'text-orange-700' },
+    { key: 'expired', widget: 'expired', label: 'Expired', value: expiredMain, sub: expiredSub, pastel: 'bg-red-100/60', labelCls: 'text-red-700' },
+  ].filter(c => show(c.widget))
   const isEmpty = !statsLoading && stats.total === 0
 
   // Time-based greeting for the hero
@@ -264,9 +284,12 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
           SOON stat card below stays. */}
 
       {/* Groceries expiring soon + recipe ideas + money-saved tracking */}
-      <UseItOrLoseItPanel products={products} currency={currency} openRecipeGenFromExpiring={openRecipeGenFromExpiring} refreshAll={refreshAll} goToInventory={goToInventory} />
+      {show('use_today') && (
+        <UseItOrLoseItPanel products={products} currency={currency} openRecipeGenFromExpiring={openRecipeGenFromExpiring} refreshAll={refreshAll} goToInventory={goToInventory} />
+      )}
 
       {/* 2x2 tappable stat cards — soft pastel fills, minimal borders */}
+      {statCards.length > 0 && (
       <div className="grid grid-cols-2 gap-2.5">
         {statCards.map(c => (
           <button key={c.key} onClick={() => setStatFilter(c.key)}
@@ -277,6 +300,18 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
           </button>
         ))}
       </div>
+      )}
+
+      {/* MONEY TRACKING cards (Sept 2026): Revenue vs cost + Budget vs spend.
+          Tap a card to enter this month's figure — spend/cost comes from the
+          month's receipts automatically. */}
+      <MoneyCards
+        stats={stats}
+        currency={currency}
+        showRevenue={show('revenue_cost')}
+        showBudget={show('budget_spend')}
+        refreshAll={refreshAll}
+      />
 
       {/* NOTE: the old "Use today or tomorrow" panel (UseTodayPanel) was a
           DUPLICATE of Use It or Lose It and has been deleted entirely
@@ -354,8 +389,126 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
           Sept 2026). "Use It or Lose It" is the single source of truth. */}
 
       {/* Items added today. Resets every midnight. Click any item to view / edit. */}
-      <RecentItemsToday products={products} goToInventory={goToInventory} openEdit={openEdit} />
+      {show('added_today') && (
+        <RecentItemsToday products={products} goToInventory={goToInventory} openEdit={openEdit} />
+      )}
     </div>
+  )
+}
+
+// ============================================================================
+// MONEY TRACKING CARDS (Sept 2026 user request)
+//   • "Revenue vs cost"  — profit margin from entered revenue vs monthly spend
+//   • "Budget vs spend"  — over/under from entered budget vs monthly spend
+// Spend/cost comes automatically from the month's receipts (stats.monthSpend).
+// Tapping a card opens a small entry dialog (PUT /api/financials).
+// ============================================================================
+function MoneyCards({ stats, currency, showRevenue, showBudget, refreshAll }) {
+  const [dialog, setDialog] = useState(null)          // 'revenue' | 'budget' | null
+  const [value, setValue] = useState('')
+  const [busy, setBusy] = useState(false)
+  const sym = CURRENCY_SYMBOL[currency] || '£'
+  if (!showRevenue && !showBudget) return null
+
+  const spend = Number(stats.monthSpend) || 0
+  const revenue = stats.monthRevenue != null ? Number(stats.monthRevenue) : null
+  const budget = stats.monthBudget != null ? Number(stats.monthBudget) : null
+  const monthLabel = new Date().toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+  const fmt = (n) => `${sym}${Number(n).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`
+
+  const openDialog = (kind) => {
+    setDialog(kind)
+    setValue(kind === 'revenue' ? (revenue != null ? String(revenue) : '') : (budget != null ? String(budget) : ''))
+  }
+  const save = async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const month = new Date().toISOString().slice(0, 7)
+      const body = { month }
+      body[dialog] = value === '' ? null : Number(value)
+      const res = await apiFetch('/api/financials', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Could not save') }
+      toast.success(dialog === 'revenue' ? 'Revenue saved' : 'Budget saved')
+      setDialog(null)
+      refreshAll?.()
+    } catch (e) { toast.error(e.message || 'Could not save') } finally { setBusy(false) }
+  }
+
+  // Revenue vs cost — profit margin
+  let revMain = null, revSub = null, revTone = 'text-teal-800'
+  if (revenue != null && revenue > 0) {
+    const profit = revenue - spend
+    const margin = (profit / revenue) * 100
+    revMain = `${margin.toFixed(0)}% margin`
+    revSub = `${fmt(revenue)} revenue − ${fmt(spend)} costs = ${profit >= 0 ? fmt(profit) + ' profit' : fmt(Math.abs(profit)) + ' loss'}`
+    if (profit < 0) revTone = 'text-red-700'
+  }
+
+  // Budget vs spend — over/under
+  let budMain = null, budSub = null, budTone = 'text-indigo-800'
+  if (budget != null && budget > 0) {
+    const diff = budget - spend
+    budMain = diff >= 0 ? `${fmt(diff)} left` : `${fmt(Math.abs(diff))} over`
+    budSub = `${fmt(spend)} spent of ${fmt(budget)} budget`
+    if (diff < 0) budTone = 'text-red-700'
+  }
+
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-2.5">
+        {showRevenue && (
+          <button onClick={() => openDialog('revenue')} className="text-left rounded-2xl p-4 bg-teal-100/70 transition hover:brightness-[0.98] active:scale-[0.99]">
+            {revMain ? (
+              <>
+                <div className={`text-2xl font-bold tracking-tight ${revTone}`}>{revMain}</div>
+                <div className="text-xs font-medium text-teal-800/70 mt-0.5">{revSub}</div>
+              </>
+            ) : (
+              <div className="text-sm font-semibold text-teal-700 flex items-center gap-1 py-2"><Plus className="h-4 w-4" /> Set {monthLabel.split(' ')[0]} revenue</div>
+            )}
+            <div className="text-[11px] font-semibold uppercase tracking-wider mt-1 text-teal-700">Revenue vs Cost</div>
+          </button>
+        )}
+        {showBudget && (
+          <button onClick={() => openDialog('budget')} className="text-left rounded-2xl p-4 bg-indigo-100/70 transition hover:brightness-[0.98] active:scale-[0.99]">
+            {budMain ? (
+              <>
+                <div className={`text-2xl font-bold tracking-tight ${budTone}`}>{budMain}</div>
+                <div className="text-xs font-medium text-indigo-800/70 mt-0.5">{budSub}</div>
+              </>
+            ) : (
+              <div className="text-sm font-semibold text-indigo-700 flex items-center gap-1 py-2"><Plus className="h-4 w-4" /> Set {monthLabel.split(' ')[0]} budget</div>
+            )}
+            <div className="text-[11px] font-semibold uppercase tracking-wider mt-1 text-indigo-700">Budget vs Spend</div>
+          </button>
+        )}
+      </div>
+
+      <Dialog open={!!dialog} onOpenChange={(o) => !o && setDialog(null)}>
+        <DialogContent className="sm:max-w-[380px]">
+          <DialogHeader>
+            <DialogTitle>{dialog === 'revenue' ? 'Revenue' : 'Budget'} — {monthLabel}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label htmlFor="finVal">{dialog === 'revenue' ? `Total revenue for ${monthLabel} (${sym})` : `Budget allocated for ${monthLabel} (${sym})`}</Label>
+              <Input id="finVal" type="number" min="0" step="0.01" value={value} onChange={e => setValue(e.target.value)} placeholder="e.g. 8500" autoFocus />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              This month's costs so far: <b>{fmt(spend)}</b> (from your receipts).
+              {dialog === 'revenue' ? ' Margin is calculated as (revenue − costs) ÷ revenue.' : ' The card shows how much budget is left (or overspent).'}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialog(null)}>Cancel</Button>
+            <Button onClick={save} disabled={busy} className="bg-emerald-600 hover:bg-emerald-700">
+              {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />} Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

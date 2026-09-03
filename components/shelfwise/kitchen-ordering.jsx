@@ -44,6 +44,41 @@ const daysAgoLabel = (iso) => {
 }
 
 // ---------------------------------------------------------------------------
+// RECENT PRICE CHANGES (Sept 2026): small section on the supplier page showing
+// the latest logged price alerts for THIS supplier — same data as the bell feed.
+// Renders nothing when there are no recorded changes.
+// ---------------------------------------------------------------------------
+function RecentPriceChanges({ supplierName }) {
+  const [items, setItems] = useState([])
+  useEffect(() => {
+    if (!supplierName) return
+    let alive = true
+    apiJson(`/api/notifications?type=price&supplier=${encodeURIComponent(supplierName)}`)
+      .then(d => { if (alive) setItems(Array.isArray(d.items) ? d.items.slice(0, 5) : []) })
+      .catch(() => {})
+    return () => { alive = false }
+  }, [supplierName])
+  if (items.length === 0) return null
+  return (
+    <Card className="border-teal-200 bg-teal-50/50 shadow-none">
+      <CardContent className="py-3 px-4">
+        <p className="text-xs font-bold text-teal-800 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+          <History className="h-3.5 w-3.5" /> Recent price changes
+        </p>
+        <ul className="space-y-1">
+          {items.map(n => (
+            <li key={n.id} className="text-sm text-teal-900 flex items-baseline justify-between gap-2">
+              <span className="truncate">💷 {String(n.message || '').replace(/\s*\(.*catalogue\)\s*$/, '')}</span>
+              <span className="text-[10px] text-teal-700/70 shrink-0">{new Date(n.at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // DELIVERY CHECK (Aug 2026): staff tick off each item as Received /
 // Not received / Missing-Damaged when the delivery arrives, leave an optional
 // note to the supplier, then "Close invoice". Issues are sent to the supplier
@@ -442,6 +477,9 @@ function OrderWizard({ supplier, initialCart = {}, editOrder = null, startStep =
       {/* ---------- STEP: browse ---------- */}
       {step === 'browse' && (
         <>
+          {/* Recent price changes at this supplier (Sept 2026) — pulled from the
+              same logged price-alert data that feeds the notifications bell. */}
+          <RecentPriceChanges supplierName={supInfo?.businessName} />
           {loading ? (
             <div className="text-center py-16"><Loader2 className="h-8 w-8 mx-auto animate-spin text-indigo-500" /></div>
           ) : catalog.length === 0 ? (

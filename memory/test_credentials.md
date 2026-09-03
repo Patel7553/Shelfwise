@@ -30,3 +30,4 @@
 - Seed scripts (idempotent, guarded): /app/scripts/seed-coffee-demo.mjs, /app/scripts/topup-catalogue.mjs.
 - PATEL FOOD supplier (995016c0-249b-48e7-aa24-51de2ecde382) catalogue: 158 items; Coffee↔PATEL FOOD connection was created BY THE USER (not by agents).
 - Part 2 seeds (Sept 2026): /app/scripts/seed-coffee-part2.mjs + seed-coffee-part2-fixup.mjs → 7 recipes, 39 HACCP temp logs (Main Fridge/Main Freezer kept from user, Milk Fridge added), 9 receipts (user's £528.80 auto-receipt untouched), 'haccp' module enabled on Coffee.
+- Part 3 (Sept 2026): notifications bell (/api/notifications), price alerts (activity_logs action=price_alert), financials (PUT /api/financials, stored in kitchens.supplier_profile.financials). Coffee Sept demo figures: revenue £9500, budget £2500 (set via UI test — real values, user can change by tapping the dashboard cards). Widget visibility uses '-key' off-markers in dashboard_widgets.
