@@ -475,6 +475,12 @@ function App() {
   const [settings, setSettings] = useState({ kitchenName: '', kitchenType: '', customFields: [], onboarded: true, inviteCode: '', alertEmail: '', tagline: 'From shelf to plate — never lose track.' })
   const [wizardOpen, setWizardOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // UNIVERSAL HOME (Sept 2026 P0 fix): the bottom nav is now rendered ABOVE
+  // full-screen overlays (Settings etc., z-[60] > z-50). Tapping any bottom
+  // tab must therefore also CLOSE every overlay so the target screen is
+  // actually visible. homeKey remounts the dashboard so nested stat-filter
+  // lists (e.g. "Expired items") reset back to the true home screen.
+  const [homeKey, setHomeKey] = useState(0)
   const [authed, setAuthed] = useState(null) // null = checking, true/false
   const [me, setMe] = useState(null)         // { role, isAdmin, userEmail, kitchen }
   const [mobileNav, setMobileNav] = useState(false)
@@ -2168,6 +2174,25 @@ function App() {
   const hasRota = modulesEnabled.includes('rota')
   const hasHaccp = modulesEnabled.includes('haccp')
   const hasAnalytics = modulesEnabled.length === 0 || modulesEnabled.includes('analytics')
+  // Feature toggles (Sept 2026) — set in the setup wizard, mirrored in Settings.
+  // Allergen tagging & Audit trail are OFF by default until switched on.
+  const hasAllergens = modulesEnabled.includes('allergens')
+  const hasAudit = modulesEnabled.includes('audit')
+
+  // Close EVERY overlay (settings, add/edit dialog, add sheet, recipe viewer)
+  // so bottom-nav taps always land on the requested screen — even from deep
+  // views like Settings sections or an open item dialog.
+  const closeAllOverlays = () => {
+    setSettingsOpen(false)
+    setDialogOpen(false)
+    setAddSheetOpen(false)
+    setViewRecipe(null)
+  }
+  const goHomeUniversal = () => {
+    closeAllOverlays()
+    setHomeKey(k => k + 1)   // remount dashboard → resets nested stat-filter lists
+    setView('dashboard')
+  }
 
   // ---- KIOSK LOCK — staff must enter their 4-digit code ----
   if (kioskLocked && me && (me.role === 'owner' || me.role === 'admin')) {
@@ -2442,7 +2467,7 @@ function App() {
           </Button>
         )}
         {view === 'dashboard' && (
-          <DashboardView stats={stats} statsLoading={statsLoading} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} isStaff={!can('logbook')} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} gotoStockLevels={() => { if (!can('orders')) { toast.error("You don't have permission to view stock levels"); return } setOrdersInitialStock(true); setView('orders') }} personName={me?.personName || ''} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} openEdit={openEdit} refreshAll={() => { fetchProducts(); fetchStats() }} />
+          <DashboardView key={homeKey} stats={stats} statsLoading={statsLoading} products={products} goToInventory={goToInventory} seedData={seedData} openAdd={openAdd} openScan={openScan} openSnap={openSnap} openBarcode={openBarcode} openVoice={openVoice} openReceipt={openReceipt} printLogbook={printLogbook} isStaff={!can('logbook')} openRecipe={openRecipe} onViewRecipe={setViewRecipe} widgets={settings.dashboardWidgets} recipesCount={savedRecipes.length} gotoRecipes={() => setView('recipes')} gotoStockLevels={() => { if (!can('orders')) { toast.error("You don't have permission to view stock levels"); return } setOrdersInitialStock(true); setView('orders') }} personName={me?.personName || ''} currency={settings.currency} openRecipeGen={openRecipeGen} openRecipeGenFromExpiring={openRecipeGenFromExpiring} openEdit={openEdit} refreshAll={() => { fetchProducts(); fetchStats() }} />
         )}
         {view === 'inventory' && (
           <InventoryView
@@ -2467,6 +2492,7 @@ function App() {
             openDispose={openDispose}
             exportCSV={exportCSV}
             formatDate={formatDate}
+            showAllergens={hasAllergens}
           />
         )}
         {view === 'recipes' && (
@@ -2512,28 +2538,31 @@ function App() {
           FIXED BOTTOM NAV BAR (user request, June 2025) — Inventory /
           Add Items / Stock Levels pinned at all times. Small rounded pastel
           icon badges above centred labels; active section highlighted.
+          Sept 2026 P0 fix: z-[60] + pointer-events-auto so the bar stays
+          VISIBLE AND TAPPABLE above full-screen overlays (Settings z-50,
+          Radix dialogs z-50). Every tap first closes all overlays.
           ==================================================================== */}
-      <nav className="fixed bottom-0 inset-x-0 z-40 bg-card/95 backdrop-blur border-t border-border">
+      <nav className="fixed bottom-0 inset-x-0 z-[60] pointer-events-auto bg-card/95 backdrop-blur border-t border-border">
         <div className="max-w-md mx-auto grid grid-cols-4 px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-          <button onClick={() => setView('dashboard')} className="flex flex-col items-center gap-1 py-1">
+          <button onClick={goHomeUniversal} className="flex flex-col items-center gap-1 py-1">
             <span className={`h-10 w-10 rounded-xl flex items-center justify-center transition ${view === 'dashboard' ? 'bg-slate-300/80' : 'bg-slate-200/60'}`}>
               <HomeIcon className={`h-5 w-5 ${view === 'dashboard' ? 'text-slate-800' : 'text-slate-500'}`} />
             </span>
             <span className={`text-[11px] font-semibold ${view === 'dashboard' ? 'text-slate-800' : 'text-slate-500'}`}>Home</span>
           </button>
-          <button onClick={() => goToInventory('All')} className="flex flex-col items-center gap-1 py-1">
+          <button onClick={() => { closeAllOverlays(); goToInventory('All') }} className="flex flex-col items-center gap-1 py-1">
             <span className={`h-10 w-10 rounded-xl flex items-center justify-center transition ${view === 'inventory' ? 'bg-emerald-200/90' : 'bg-emerald-100/70'}`}>
               <Package className={`h-5 w-5 ${view === 'inventory' ? 'text-emerald-800' : 'text-emerald-600'}`} />
             </span>
             <span className={`text-[11px] font-semibold ${view === 'inventory' ? 'text-emerald-800' : 'text-emerald-700/80'}`}>Inventory</span>
           </button>
-          <button onClick={() => setAddSheetOpen(true)} className="flex flex-col items-center gap-1 py-1">
+          <button onClick={() => { setSettingsOpen(false); setDialogOpen(false); setViewRecipe(null); setAddSheetOpen(true) }} className="flex flex-col items-center gap-1 py-1">
             <span className={`h-10 w-10 rounded-xl flex items-center justify-center transition ${addSheetOpen ? 'bg-blue-200/90' : 'bg-blue-100/70'}`}>
               <Plus className={`h-5 w-5 ${addSheetOpen ? 'text-blue-800' : 'text-blue-600'}`} />
             </span>
             <span className={`text-[11px] font-semibold ${addSheetOpen ? 'text-blue-800' : 'text-blue-700/80'}`}>Add Items</span>
           </button>
-          <button onClick={() => { if (!can('orders')) { toast.error("You don't have permission to view stock levels"); return } setOrdersInitialStock(true); setView('orders') }} className="flex flex-col items-center gap-1 py-1">
+          <button onClick={() => { if (!can('orders')) { toast.error("You don't have permission to view stock levels"); return } closeAllOverlays(); setOrdersInitialStock(true); setView('orders') }} className="flex flex-col items-center gap-1 py-1">
             <span className={`h-10 w-10 rounded-xl flex items-center justify-center transition ${view === 'orders' ? 'bg-purple-200/90' : 'bg-purple-100/70'}`}>
               <BarChart3 className={`h-5 w-5 ${view === 'orders' ? 'text-purple-800' : 'text-purple-600'}`} />
             </span>
@@ -2561,7 +2590,7 @@ function App() {
       </Dialog>
       {/* Add/Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="sm:max-w-[560px] max-h-[92vh] flex flex-col p-0 gap-0">
+        <DialogContent className="sm:max-w-[560px] max-h-[calc(100dvh-10rem)] flex flex-col p-0 gap-0">
           <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
             <DialogTitle>{editing ? 'Edit Product' : 'Add Product'}</DialogTitle>
           </DialogHeader>
@@ -2670,6 +2699,30 @@ function App() {
                 <div>
                   <Label htmlFor="unitCost">Cost per {form.unit || 'unit'} ({CURRENCY_SYMBOL[settings.currency] || settings.currency || ''})</Label>
                   <Input id="unitCost" type="number" step="0.01" min="0" value={form.unitCost} onChange={e => setForm({ ...form, unitCost: e.target.value })} placeholder="e.g. 2.50" />
+                  {/* PRICE DISCREPANCY FLAG (Sept 2026): non-blocking inline warning
+                      when the new cost differs >N% from the last recorded price.
+                      Threshold comes from settings (priceWarnPct), default 10%. */}
+                  {(() => {
+                    const DEFAULT_PRICE_WARN_PCT = 10
+                    const warnPct = Number(settings.priceWarnPct) > 0 ? Number(settings.priceWarnPct) : DEFAULT_PRICE_WARN_PCT
+                    const hist = Array.isArray(editing?.priceHistory) ? editing.priceHistory : []
+                    const lastRecorded = hist.length > 0 && hist[hist.length - 1]?.cost != null
+                      ? Number(hist[hist.length - 1].cost)
+                      : (editing?.unitCost != null ? Number(editing.unitCost) : null)
+                    const entered = form.unitCost === '' || form.unitCost == null ? null : Number(form.unitCost)
+                    if (lastRecorded == null || lastRecorded <= 0 || entered == null || !Number.isFinite(entered)) return null
+                    const diffPct = ((entered - lastRecorded) / lastRecorded) * 100
+                    if (Math.abs(diffPct) <= warnPct) return null
+                    const sym = CURRENCY_SYMBOL[settings.currency] || ''
+                    return (
+                      <p className="mt-1 text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5 flex items-start gap-1">
+                        <span>⚠️</span>
+                        <span>
+                          This is {Math.abs(diffPct).toFixed(0)}% {diffPct > 0 ? 'higher' : 'lower'} than the last recorded price ({sym}{lastRecorded.toFixed(2)}). Double-check before saving — you can still save if it's correct.
+                        </span>
+                      </p>
+                    )
+                  })()}
                 </div>
                 <div>
                   <Label htmlFor="reorder">Reorder when qty ≤</Label>
@@ -2682,7 +2735,9 @@ function App() {
               </div>
             </div>
 
-            {/* Allergens — legal requirement in UK/EU */}
+            {/* Allergens — legal requirement in UK/EU. Only shown when the
+                "Allergen tagging" feature toggle is ON (Settings, Sept 2026). */}
+            {hasAllergens && (
             <div className="sm:col-span-2 pt-2 border-t">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
                 ⚠️ Allergens present in this product
@@ -2714,6 +2769,7 @@ function App() {
                 })}
               </div>
             </div>
+            )}
 
             <div className="sm:col-span-2">
               <Label htmlFor="note">Note (optional)</Label>

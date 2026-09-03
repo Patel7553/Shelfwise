@@ -32,6 +32,11 @@ export function SetupWizardV2({ settings, onComplete }) {
   const [modules, setModules] = useState([])
   const [widgets, setWidgets] = useState([])
   const [busy, setBusy] = useState(false)
+  // Step 2 — MONEY TRACKING (Sept 2026 user request): two INDEPENDENT booleans
+  // (not one option). Kitchens can pick either, both, or skip entirely.
+  // Mirrored in Settings → Dashboard & features so it's never locked-in.
+  const [moneyRevenueCost, setMoneyRevenueCost] = useState(false)
+  const [moneyBudgetSpend, setMoneyBudgetSpend] = useState(false)
   // Step 0: kitchen basics — pre-filled if already saved
   const [kitchenName, setKitchenName] = useState(settings?.kitchenName || settings?.kitchen_name || '')
   const [kitchenType, setKitchenType] = useState(settings?.kitchenType || settings?.kitchen_type || '')
@@ -58,6 +63,9 @@ export function SetupWizardV2({ settings, onComplete }) {
     { id: 'rota',      title: 'Rota (Staff Scheduling)', desc: 'Plan weekly shifts, roles and days off.',        icon: ChefHat,  ready: true },
     { id: 'analytics', title: 'Waste Analytics',         desc: 'Track disposed items, reasons and cost of waste.', icon: BarChart3, ready: true },
     { id: 'haccp',     title: 'HACCP Compliance',        desc: 'Fridge temps, cleaning logs, delivery checks. Pass health inspections.', icon: ShieldCheck, ready: true },
+    // Feature toggles (Sept 2026) — OFF by default, changeable anytime in Settings.
+    { id: 'allergens', title: 'Allergen Tagging',        desc: 'Tag items with the 14 UK allergens — shown as badges on item cards.', icon: AlertTriangle, ready: true },
+    { id: 'audit',     title: 'Audit Trail',             desc: 'Activity log of who added, edited, used or deleted items.', icon: FileText, ready: true },
   ]
 
   const WIDGETS_BY_MODULE = {
@@ -95,7 +103,14 @@ export function SetupWizardV2({ settings, onComplete }) {
     setBusy(true)
     try {
       // Only include kitchenName/type if they're non-empty — never overwrite existing values with blanks
-      const payload = { modulesEnabled: modules, dashboardWidgets: widgets }
+      // Money-tracking picks are stored as independent tokens inside modulesEnabled
+      // (zero-migration storage) — the API/UI read them as two separate booleans.
+      const moduleTokens = [
+        ...modules,
+        ...(moneyRevenueCost ? ['money_revenue_cost'] : []),
+        ...(moneyBudgetSpend ? ['money_budget_spend'] : []),
+      ]
+      const payload = { modulesEnabled: moduleTokens, dashboardWidgets: widgets }
       const kn = (kitchenName || '').trim()
       if (kn) payload.kitchenName = kn
       if (kitchenType) payload.kitchenType = kitchenType
@@ -106,10 +121,10 @@ export function SetupWizardV2({ settings, onComplete }) {
     }
   }
 
-  const totalSteps = canSkipWidgetStep ? 2 : 3
+  const totalSteps = canSkipWidgetStep ? 3 : 4
 
   return (
-    <div className="fixed inset-0 z-50 bg-gradient-to-br from-emerald-50 via-white to-teal-50 overflow-y-auto">
+    <div className="fixed inset-0 z-[70] bg-gradient-to-br from-emerald-50 via-white to-teal-50 overflow-y-auto">
       <div className="max-w-2xl mx-auto p-4 md:p-8 min-h-full">
         <div className="flex flex-col items-center mb-6">
           <img src="/logo-icon.png" alt="ShelfWise" className="h-16 w-16 rounded-2xl object-contain bg-white shadow-md" />
@@ -164,13 +179,62 @@ export function SetupWizardV2({ settings, onComplete }) {
           </Card>
         )}
 
-        {/* Step 2 — module picker */}
+        {/* Step 2 — MONEY TRACKING (multi-select, both independent, or skip) */}
         {step === 2 && (
           <Card className="shadow-lg border-emerald-100">
             <CardContent className="p-6 space-y-4">
               <div>
-                <h2 className="font-bold text-lg text-emerald-900">Step 2 · What do you want to track?</h2>
-                <p className="text-sm text-muted-foreground">Pick the tools your kitchen needs. You can add more later in Settings.</p>
+                <h2 className="font-bold text-lg text-emerald-900">Step 2 · Money tracking</h2>
+                <p className="text-sm text-muted-foreground">How do you want to track money in your kitchen? Pick one, both — or skip for now. You can change this anytime in Settings.</p>
+              </div>
+              <div className="space-y-2">
+                {[
+                  { key: 'revenue', title: 'Revenue vs cost', desc: 'Compare what you earn against what your stock costs.', active: moneyRevenueCost, set: setMoneyRevenueCost },
+                  { key: 'budget', title: 'Budget vs spend', desc: 'Set budgets and track your actual supplier spending.', active: moneyBudgetSpend, set: setMoneyBudgetSpend },
+                ].map(opt => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => opt.set(!opt.active)}
+                    className={`w-full text-left p-4 rounded-lg border-2 transition ${opt.active ? 'bg-emerald-50 border-emerald-500' : 'bg-white border-slate-200 hover:border-emerald-300'}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`h-11 w-11 rounded-lg flex items-center justify-center ${opt.active ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                        <BarChart3 className="h-5 w-5" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold">{opt.title}</div>
+                        <div className="text-xs text-muted-foreground">{opt.desc}</div>
+                      </div>
+                      <div className={`h-6 w-6 rounded-md border-2 flex items-center justify-center ${opt.active ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300 bg-white'}`}>
+                        {opt.active && <Check className="h-4 w-4 text-white" />}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+              <div className="flex justify-between pt-2">
+                <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
+                <div className="flex gap-2">
+                  {!moneyRevenueCost && !moneyBudgetSpend && (
+                    <Button variant="ghost" onClick={() => setStep(3)} className="text-slate-500">Skip</Button>
+                  )}
+                  <Button onClick={() => setStep(3)} className="bg-emerald-600 hover:bg-emerald-700">
+                    Next <ArrowRight className="h-4 w-4 ml-2" />
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Step 3 — module picker + feature toggles */}
+        {step === 3 && (
+          <Card className="shadow-lg border-emerald-100">
+            <CardContent className="p-6 space-y-4">
+              <div>
+                <h2 className="font-bold text-lg text-emerald-900">Step 3 · What do you want to track?</h2>
+                <p className="text-sm text-muted-foreground">Pick the tools your kitchen needs. Everything is off until you switch it on — change any of these later in Settings.</p>
               </div>
               <div className="space-y-2">
                 {MODULES.map(m => {
@@ -207,9 +271,9 @@ export function SetupWizardV2({ settings, onComplete }) {
                 })}
               </div>
               <div className="flex justify-between pt-2">
-                <Button variant="outline" onClick={() => setStep(1)}>Back</Button>
+                <Button variant="outline" onClick={() => setStep(2)}>Back</Button>
                 <Button
-                  onClick={() => canSkipWidgetStep ? finish() : setStep(3)}
+                  onClick={() => canSkipWidgetStep ? finish() : setStep(4)}
                   disabled={modules.length === 0 || busy}
                   className="bg-emerald-600 hover:bg-emerald-700"
                 >
@@ -221,12 +285,12 @@ export function SetupWizardV2({ settings, onComplete }) {
           </Card>
         )}
 
-        {/* Step 3 — widgets grouped by module */}
-        {step === 3 && !canSkipWidgetStep && (
+        {/* Step 4 — widgets grouped by module */}
+        {step === 4 && !canSkipWidgetStep && (
           <Card className="shadow-lg border-emerald-100">
             <CardContent className="p-6 space-y-4">
               <div>
-                <h2 className="font-bold text-lg text-emerald-900">Step 3 · Pick your dashboard cards</h2>
+                <h2 className="font-bold text-lg text-emerald-900">Step 4 · Pick your dashboard cards</h2>
                 <p className="text-sm text-muted-foreground">Choose which cards appear on your dashboard. You can change these later in Settings.</p>
               </div>
 
@@ -260,7 +324,7 @@ export function SetupWizardV2({ settings, onComplete }) {
               ))}
 
               <div className="flex justify-between pt-2">
-                <Button variant="outline" onClick={() => setStep(2)}>Back</Button>
+                <Button variant="outline" onClick={() => setStep(3)}>Back</Button>
                 <Button onClick={finish} disabled={busy} className="bg-emerald-600 hover:bg-emerald-700">
                   {busy ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />}
                   Finish Setup
@@ -552,6 +616,131 @@ export function ChefCodeCard() {
   )
 }
 
+// ============================================================================
+// ACTIVITY LOG (Audit Trail) — Settings section (Sept 2026 user request).
+// Reverse-chronological list of who did what & when (add / edit / use / delete
+// including soft-deletes to Trash), filterable by date. Only reachable when
+// the "Audit trail" feature toggle is ON (Settings → Dashboard & features).
+// ============================================================================
+const ACTIVITY_ACTION_META = {
+  item_added: { emoji: '➕', label: 'Added item', cls: 'bg-emerald-100 text-emerald-800' },
+  item_updated: { emoji: '✏️', label: 'Edited item', cls: 'bg-blue-100 text-blue-800' },
+  item_deleted: { emoji: '🗑️', label: 'Deleted item', cls: 'bg-red-100 text-red-800' },
+  item_restored: { emoji: '♻️', label: 'Restored item', cls: 'bg-teal-100 text-teal-800' },
+  item_used: { emoji: '🍳', label: 'Used item', cls: 'bg-amber-100 text-amber-800' },
+  cooked: { emoji: '🍽️', label: 'Cooked recipe', cls: 'bg-orange-100 text-orange-800' },
+  waste_logged: { emoji: '📉', label: 'Logged waste', cls: 'bg-rose-100 text-rose-800' },
+  temp_logged: { emoji: '🌡️', label: 'Logged temp', cls: 'bg-sky-100 text-sky-800' },
+  temp_updated: { emoji: '🌡️', label: 'Edited temp', cls: 'bg-sky-100 text-sky-800' },
+  recipe_saved: { emoji: '📖', label: 'Saved recipe', cls: 'bg-violet-100 text-violet-800' },
+  recipe_updated: { emoji: '📖', label: 'Edited recipe', cls: 'bg-violet-100 text-violet-800' },
+  recipe_deleted: { emoji: '📕', label: 'Deleted recipe', cls: 'bg-red-100 text-red-800' },
+  receipt_added: { emoji: '🧾', label: 'Added receipt', cls: 'bg-lime-100 text-lime-800' },
+  receipt_deleted: { emoji: '🧾', label: 'Deleted receipt', cls: 'bg-red-100 text-red-800' },
+  order_placed: { emoji: '🛒', label: 'Placed order', cls: 'bg-indigo-100 text-indigo-800' },
+  delivery_check: { emoji: '🚚', label: 'Checked delivery', cls: 'bg-cyan-100 text-cyan-800' },
+  staff_renamed: { emoji: '👤', label: 'Renamed staff', cls: 'bg-slate-100 text-slate-700' },
+}
+
+function ActivityLogPanel() {
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+
+  const load = async (offset = 0, f = from, t = to) => {
+    setLoading(true)
+    try {
+      const params = new URLSearchParams({ limit: '50', offset: String(offset) })
+      if (f) params.set('from', f)
+      if (t) params.set('to', t)
+      const res = await fetch(`/api/activity?${params.toString()}`)
+      const data = await safeJson(res)
+      if (!res.ok) throw new Error(data.error || 'Failed to load activity')
+      const list = Array.isArray(data.items) ? data.items : []
+      setItems(prev => offset === 0 ? list : [...prev, ...list])
+      setHasMore(!!data.hasMore)
+      if (data.note) toast.info(data.note)
+    } catch (e) {
+      toast.error(e.message || 'Could not load the activity log')
+    } finally { setLoading(false) }
+  }
+
+  useEffect(() => { load(0) /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
+
+  const fmtWhen = (iso) => {
+    const d = new Date(iso)
+    if (isNaN(d)) return ''
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + ' · ' +
+      d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+  }
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <Label className="text-base font-bold">Activity log</Label>
+        <p className="text-xs text-muted-foreground">Every item action — who did it, what happened and when. Newest first.</p>
+      </div>
+
+      {/* Date filter */}
+      <div className="flex items-end gap-2 flex-wrap">
+        <div>
+          <Label className="text-xs">From</Label>
+          <Input type="date" value={from} onChange={e => setFrom(e.target.value)} className="h-9 w-[150px]" />
+        </div>
+        <div>
+          <Label className="text-xs">To</Label>
+          <Input type="date" value={to} onChange={e => setTo(e.target.value)} className="h-9 w-[150px]" />
+        </div>
+        <Button size="sm" variant="outline" onClick={() => load(0)} disabled={loading} className="h-9">
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4 mr-1" />} Filter
+        </Button>
+        {(from || to) && (
+          <Button size="sm" variant="ghost" onClick={() => { setFrom(''); setTo(''); load(0, '', '') }} className="h-9 text-slate-500">
+            <X className="h-4 w-4 mr-1" /> Clear
+          </Button>
+        )}
+      </div>
+
+      {loading && items.length === 0 ? (
+        <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-emerald-600" /></div>
+      ) : items.length === 0 ? (
+        <div className="text-center py-12 text-muted-foreground border-2 border-dashed rounded-lg">
+          <FileText className="h-10 w-10 mx-auto mb-2 opacity-30" />
+          <p className="text-sm font-medium">No activity {from || to ? 'in this date range' : 'recorded yet'}</p>
+          <p className="text-xs">Adding, editing, using or deleting items will appear here.</p>
+        </div>
+      ) : (
+        <div className="rounded-xl border divide-y overflow-hidden bg-card">
+          {items.map(e => {
+            const meta = ACTIVITY_ACTION_META[e.action] || { emoji: '📋', label: String(e.action || '').replace(/_/g, ' '), cls: 'bg-slate-100 text-slate-700' }
+            return (
+              <div key={e.id} className="px-3 py-2.5 flex items-start gap-2.5">
+                <span className="text-lg leading-none mt-0.5">{meta.emoji}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold text-sm capitalize">{e.person || 'Unknown'}</span>
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${meta.cls}`}>{meta.label}</span>
+                  </div>
+                  {e.detail && <p className="text-xs text-slate-600 truncate mt-0.5">{e.detail}</p>}
+                  <p className="text-[10px] text-muted-foreground mt-0.5">{fmtWhen(e.created_at)}</p>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {hasMore && (
+        <Button variant="outline" size="sm" className="w-full" disabled={loading} onClick={() => load(items.length)}>
+          {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null} Load more
+        </Button>
+      )}
+    </div>
+  )
+}
+
 export function SettingsDialog({ open, onClose, settings, saveSettings, openWizard, isStaff, isOwner }) {
   const [tab, setTab] = useState(null) // null = Settings HOME list; else section key
   // Version indicator (Settings home footer)
@@ -599,6 +788,9 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
     { key: 'rota',      label: 'Rota',             desc: 'Weekly staff scheduling' },
     { key: 'analytics', label: 'Waste Analytics',  desc: 'Track disposals, reasons & cost' },
     { key: 'haccp',     label: 'HACCP Compliance', desc: 'Fridge temps, cleaning, delivery checks' },
+    // Feature toggles (Sept 2026) — set in the setup wizard, mirrored here.
+    { key: 'allergens', label: 'Allergen tagging', desc: 'Tag items with the 14 UK allergens — badges on item cards' },
+    { key: 'audit',     label: 'Audit trail',      desc: 'Activity log of who added, edited, used or deleted items' },
   ]
 
   useEffect(() => {
@@ -749,10 +941,13 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
     { title: 'Data', items: [
       { key: 'haccp', label: 'Fridges', icon: Thermometer, hint: 'Fridges, freezers & temperature ranges' },
       { key: 'fields', label: 'Custom fields', icon: Package, hint: 'Extra fields on your products' },
+      // Activity log — ONLY visible when the "Audit trail" feature toggle is ON
+      // (owner only — the /api/activity endpoint is owner-scoped)
+      ...(modules.includes('audit') && isOwner ? [{ key: 'activity', label: 'Activity log', icon: FileText, hint: 'Who did what & when — full audit trail' }] : []),
       { key: 'trash', label: 'Trash', icon: Trash2, hint: 'Restore deleted items (30 days)' },
     ] },
   ]
-  const sectionTitles = { profile: 'Kitchen details', dashboard: 'Dashboard layout', login: 'Login & staff access', haccp: 'Fridges', fields: 'Custom fields', trash: 'Trash' }
+  const sectionTitles = { profile: 'Kitchen details', dashboard: 'Dashboard layout', login: 'Login & staff access', haccp: 'Fridges', fields: 'Custom fields', activity: 'Activity log', trash: 'Trash' }
 
   // ---- HACCP location handlers ----
   const [selectedLocIds, setSelectedLocIds] = useState(new Set())
@@ -799,7 +994,7 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent hideBack className="sm:max-w-[680px] max-h-[92vh] overflow-hidden flex flex-col p-0">
+      <DialogContent hideBack className="sm:max-w-[680px] max-h-[calc(100dvh-10rem)] overflow-hidden flex flex-col p-0">
         <DialogHeader className="px-4 sm:px-6 pt-5 pb-3 border-b">
           <DialogTitle className="flex items-center gap-2">
             {/* Back: from a section -> Settings home; from home -> close */}
@@ -981,6 +1176,30 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
               </div>
 
               <div className="pt-3 border-t">
+                <Label className="text-base font-bold">Money tracking</Label>
+                <p className="text-xs text-muted-foreground">Two independent options — pick either, both, or neither. Set during setup, changeable here anytime.</p>
+              </div>
+              <div className="space-y-2">
+                {[
+                  { key: 'money_revenue_cost', label: 'Revenue vs cost', desc: 'Compare what you earn against what your stock costs' },
+                  { key: 'money_budget_spend', label: 'Budget vs spend', desc: 'Set budgets and track your actual supplier spending' },
+                ].map(m => (
+                  <label key={m.key} className={`flex items-center gap-3 p-3 rounded-lg border-2 cursor-pointer transition ${modules.includes(m.key) ? 'border-emerald-500 bg-emerald-50' : 'border-slate-200 hover:border-emerald-300'}`}>
+                    <input
+                      type="checkbox"
+                      checked={modules.includes(m.key)}
+                      onChange={() => toggleModule(m.key)}
+                      className="h-4 w-4 accent-emerald-600"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium">{m.label}</div>
+                      <div className="text-xs text-muted-foreground">{m.desc}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              <div className="pt-3 border-t">
                 <Label className="text-base font-bold">Dashboard cards</Label>
                 <p className="text-xs text-muted-foreground">Tick the widgets you want to see on your dashboard.</p>
               </div>
@@ -1113,6 +1332,10 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
               {/* ---- Automatic sensor integration ---- */}
               <SensorSettingsCard locations={locations} />
             </div>
+          )}
+
+          {tab === 'activity' && (
+            <ActivityLogPanel />
           )}
 
           {tab === 'trash' && (

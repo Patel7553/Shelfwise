@@ -257,6 +257,8 @@ function fromDb(row) {
     imageUrl: row.image_url || '',
     dateReceived: cf._dateReceived || row.created_at?.slice(0, 10) || null,
     unitCost: row.unit_cost != null ? Number(row.unit_cost) : null,
+    // Price history — [{cost, prevCost, at, by}] appended whenever unit_cost changes (Sept 2026)
+    priceHistory: Array.isArray(cf._priceHistory) ? cf._priceHistory : [],
     reorderPoint: row.reorder_point != null ? Number(row.reorder_point) : null,
     allergens: Array.isArray(row.allergens) ? row.allergens : [],
     supplier: row.supplier || '',
@@ -3593,16 +3595,20 @@ export async function GET(request, { params }) {
           sb.from('products').select('*', { count: 'exact', head: true }).eq('kitchen_id', kid).not('expiry_date', 'is', null).gte('expiry_date', todayISO).lte('expiry_date', in7ISO),
           sb.from('products').select('*', { count: 'exact', head: true }).eq('kitchen_id', kid).lte('quantity', 2).or(`expiry_date.is.null,expiry_date.gt.${in7ISO}`),
           sb.from('products').select('*', { count: 'exact', head: true }).eq('kitchen_id', kid).not('expiry_date', 'is', null).gt('expiry_date', in7ISO),
-          sb.from('products').select('quantity,unit_cost,reorder_point').eq('kitchen_id', kid),
+          sb.from('products').select('quantity,unit_cost,reorder_point,expiry_date').eq('kitchen_id', kid),
         ])
         // Compute inventory value + below-reorder count from a single fetched list
         let totalValue = 0
         let belowReorder = 0
+        // WASTAGE AS COST (Sept 2026): total £ value of items already expired —
+        // shown on the dashboard "Expired" stat card as "£47 · 3 items".
+        let expiredCost = 0
         for (const p of (valueRes.data || [])) {
           const qty = Number(p.quantity) || 0
           const c = p.unit_cost != null ? Number(p.unit_cost) : 0
           if (c > 0 && qty > 0) totalValue += qty * c
           if (p.reorder_point != null && qty <= Number(p.reorder_point)) belowReorder++
+          if (p.expiry_date && String(p.expiry_date).slice(0, 10) < todayISO && c > 0 && qty > 0) expiredCost += qty * c
         }
         return json({
           total: total || 0,
@@ -3611,6 +3617,7 @@ export async function GET(request, { params }) {
           critical: critical || 0,
           inDate: inDate || 0,
           totalValue,
+          expiredCost,
           belowReorder,
           expiryAlertDays: alertDaysK,
         })
@@ -3867,9 +3874,14 @@ export async function GET(request, { params }) {
       const url = new URL(request.url)
       const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 100)
       const offset = Math.max(Number(url.searchParams.get('offset')) || 0, 0)
-      const { data, error: aErr } = await sb.from('activity_logs').select('*')
+      // Optional date filtering (?from=YYYY-MM-DD&to=YYYY-MM-DD) — Sept 2026
+      const from = url.searchParams.get('from')
+      const to = url.searchParams.get('to')
+      let q = sb.from('activity_logs').select('*')
         .eq('kitchen_id', kId).neq('action', 'login').order('created_at', { ascending: false })
-        .range(offset, offset + limit - 1)
+      if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) q = q.gte('created_at', from)
+      if (to && /^\d{4}-\d{2}-\d{2}$/.test(to)) q = q.lte('created_at', to + 'T23:59:59.999Z')
+      const { data, error: aErr } = await q.range(offset, offset + limit - 1)
       if (aErr) {
         if (/does not exist|schema cache/i.test(aErr.message || '')) {
           return json({ items: [], note: 'Run migration-18-activity-log.sql in Supabase to enable the activity log.' })
@@ -5978,7 +5990,12 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
         const body = await request.json()
         let doc = { id: uuidv4(), kitchen_id: kid, ...toDb(body) }
         // Attribution: stamp WHO added this item (shown on the item card).
-        doc.custom_fields = { ...(doc.custom_fields || {}), _addedBy: await validatedPersonFromRequest(sb, request, ctx) }
+        const addPerson = await validatedPersonFromRequest(sb, request, ctx)
+        doc.custom_fields = { ...(doc.custom_fields || {}), _addedBy: addPerson }
+        // PRICE HISTORY: seed the first entry when a cost is provided at creation (Sept 2026)
+        if (doc.unit_cost != null && Number.isFinite(Number(doc.unit_cost))) {
+          doc.custom_fields._priceHistory = [{ cost: Number(doc.unit_cost), prevCost: null, at: new Date().toISOString(), by: addPerson }]
+        }
         let { data, error } = await sb.from('products').insert(doc).select().single()
         if (error && /column .* does not exist|schema cache/i.test(error.message || '')) {
           const {
@@ -6816,23 +6833,43 @@ export async function PUT(request, { params }) {
       // SINGLE ATTRIBUTION (Aug 2026 user request): show ONE always-current
       // name — any edit REPLACES the "Added by" name with whoever made the
       // change (no separate "Last edited by" line any more).
+      // Fetch the row BEFORE updating — needed for low-stock transition,
+      // custom_fields preservation and price-history tracking (Sept 2026).
+      let prevQty = null
+      let prevRow = null
       try {
-        const person = await validatedPersonFromRequest(sb, request, ctx)
+        const { data: prev } = await sb.from('products').select('quantity, unit_cost, custom_fields').eq('id', id).eq('kitchen_id', ctx.kitchenId).maybeSingle()
+        prevRow = prev || null
+        prevQty = prev ? Number(prev.quantity) : null
+      } catch {}
+      // Preserve server-managed custom_fields keys (_priceHistory etc.) that the
+      // client payload doesn't know about — merge previous cf UNDER the new cf.
+      if (prevRow?.custom_fields && typeof prevRow.custom_fields === 'object') {
+        patch.custom_fields = { ...prevRow.custom_fields, ...(patch.custom_fields || {}) }
+      }
+      let editPerson = ''
+      try {
+        editPerson = await validatedPersonFromRequest(sb, request, ctx)
         patch.custom_fields = {
           ...(patch.custom_fields || {}),
-          _addedBy: person,
+          _addedBy: editPerson,
           _editedAt: new Date().toISOString(),
         }
         delete patch.custom_fields._editedBy
       } catch { /* attribution is best-effort */ }
-      // low-stock transition detection needs the quantity BEFORE the update
-      let prevQty = null
+      // PRICE HISTORY: when the cost per unit changes, append {cost, prevCost, at, by}
+      // into custom_fields._priceHistory (capped at 50 entries). No migration needed.
       try {
-        if (body.quantity !== undefined) {
-          const { data: prev } = await sb.from('products').select('quantity').eq('id', id).eq('kitchen_id', ctx.kitchenId).maybeSingle()
-          prevQty = prev ? Number(prev.quantity) : null
+        if (patch.unit_cost !== undefined) {
+          const oldCost = prevRow?.unit_cost != null ? Number(prevRow.unit_cost) : null
+          const newCost = patch.unit_cost != null ? Number(patch.unit_cost) : null
+          if (newCost != null && Number.isFinite(newCost) && newCost !== oldCost) {
+            const hist = Array.isArray(patch.custom_fields?._priceHistory) ? [...patch.custom_fields._priceHistory] : []
+            hist.push({ cost: newCost, prevCost: oldCost, at: new Date().toISOString(), by: editPerson || 'Unknown' })
+            patch.custom_fields = { ...(patch.custom_fields || {}), _priceHistory: hist.slice(-50) }
+          }
         }
-      } catch {}
+      } catch { /* history is best-effort — never blocks the edit */ }
       let { data, error: e2 } = await sb.from('products').update(patch).eq('id', id).eq('kitchen_id', ctx.kitchenId).select().single()
       if (e2 && /column .* does not exist|schema cache/i.test(e2.message || '')) {
         // Migration 8 not run yet — retry without new columns

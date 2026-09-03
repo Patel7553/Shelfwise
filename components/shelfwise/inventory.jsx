@@ -25,7 +25,7 @@ import { STATUS_META, EMPTY_FORM, ALLERGENS, CURRENCY_SYMBOL, guessShelfLifeDays
 // `fetch` inside this file transparently uses `apiFetch` (auth token attached).
 const fetch = apiFetch
 
-export function InventoryView({ products, loading, statusFilter, setStatusFilter, search, setSearch, sort, setSort, categoryFilter, setCategoryFilter, storageFilter, setStorageFilter, facets, openAdd, openScan, openSnap, openBarcode, openVoice, printLogbook, openEdit, deleteProduct, disposeProduct, openDispose, exportCSV, formatDate }) {
+export function InventoryView({ products, loading, statusFilter, setStatusFilter, search, setSearch, sort, setSort, categoryFilter, setCategoryFilter, storageFilter, setStorageFilter, facets, openAdd, openScan, openSnap, openBarcode, openVoice, printLogbook, openEdit, deleteProduct, disposeProduct, openDispose, exportCSV, formatDate, showAllergens = false }) {
   const activeFilters = [statusFilter !== 'All', categoryFilter !== 'All', storageFilter !== 'All', !!search].filter(Boolean).length
 
   // -------- BULK SELECT + DELETE --------
@@ -265,7 +265,7 @@ export function InventoryView({ products, loading, statusFilter, setStatusFilter
                     </TableCell>
                     <TableCell className="font-medium">
                       <div>{p.name}</div>
-                      {Array.isArray(p.allergens) && p.allergens.length > 0 && (
+                      {showAllergens && Array.isArray(p.allergens) && p.allergens.length > 0 && (
                         <div className="flex gap-0.5 flex-wrap mt-0.5">
                           {p.allergens.slice(0, 5).map(a => {
                             const meta = ALLERGENS.find(x => x.id === a)

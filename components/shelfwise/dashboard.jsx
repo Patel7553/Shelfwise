@@ -202,13 +202,20 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
 
   // While the first stats fetch is in flight, show "…" instead of misleading 0s
   const L = (v) => (statsLoading ? '…' : v)
+  // WASTAGE AS COST (Sept 2026): the Expired card shows the total £ value of
+  // expired items as the headline, with the item count as smaller subtext
+  // (e.g. "£47.20 · 3 items"). Falls back to a plain count when no cost data.
+  const sym = CURRENCY_SYMBOL[currency] || ''
+  const expiredCost = Number(stats.expiredCost) || 0
+  const expiredMain = statsLoading ? '…' : (expiredCost > 0 ? `${sym}${expiredCost.toFixed(2)}` : stats.expired)
+  const expiredSub = statsLoading ? null : (expiredCost > 0 ? `${stats.expired} item${stats.expired === 1 ? '' : 's'}` : null)
   // 2x2 tappable stat cards (UX overhaul) — tapping opens a simple filtered
   // list (NOT the full inventory view) rendered by FilteredStatList below.
   const statCards = [
     { key: 'total', label: 'Total Items', value: L(stats.total), pastel: 'bg-emerald-100/70', labelCls: 'text-emerald-700' },
     { key: 'expiring', label: 'Expiring Soon', value: L(stats.expiring), pastel: 'bg-amber-100/70', labelCls: 'text-amber-700' },
     { key: 'low', label: 'Low Stock', value: L(stats.critical), pastel: 'bg-orange-100/70', labelCls: 'text-orange-700' },
-    { key: 'expired', label: 'Expired', value: L(stats.expired), pastel: 'bg-red-100/60', labelCls: 'text-red-700' },
+    { key: 'expired', label: 'Expired', value: expiredMain, sub: expiredSub, pastel: 'bg-red-100/60', labelCls: 'text-red-700' },
   ]
   const isEmpty = !statsLoading && stats.total === 0
 
@@ -265,6 +272,7 @@ export function DashboardView({ stats, statsLoading, products, goToInventory, se
           <button key={c.key} onClick={() => setStatFilter(c.key)}
             className={`text-left rounded-2xl p-4 ${c.pastel} transition hover:brightness-[0.98] active:scale-[0.99]`}>
             <div className="text-3xl font-bold tracking-tight">{c.value}</div>
+            {c.sub && <div className="text-xs font-semibold text-red-800/70 mt-0.5">{c.sub}</div>}
             <div className={`text-[11px] font-semibold uppercase tracking-wider mt-1 ${c.labelCls}`}>{c.label}</div>
           </button>
         ))}
