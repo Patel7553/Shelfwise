@@ -1321,6 +1321,33 @@ async function computeWeeklyDigest(sb, kitchen) {
     atRisk += (Number(p.unit_cost) || 0) * (Number(p.quantity) || 0)
   }
 
+  // PRICE CHANGES last 7 days (Sept 2026) — from the shared price-alert log
+  let priceChanges = []
+  try {
+    const { data } = await sb.from('activity_logs').select('detail,created_at')
+      .eq('kitchen_id', kid).eq('action', 'price_alert')
+      .gte('created_at', weekAgoISO).order('created_at', { ascending: false }).limit(8)
+    priceChanges = (data || []).map(r => ({ detail: r.detail || '', at: r.created_at }))
+  } catch { /* optional section */ }
+
+  // BUDGET POSITION for the current month — entered budget/revenue vs receipts spend
+  let budget = null
+  try {
+    const monthKey = new Date().toISOString().slice(0, 7)
+    const nm = new Date(); const nextMonth = new Date(nm.getFullYear(), nm.getMonth() + 1, 1).toISOString().slice(0, 10)
+    const { data: kRow } = await sb.from('kitchens').select('supplier_profile').eq('id', kid).maybeSingle()
+    const fin = kRow?.supplier_profile?.financials?.[monthKey] || {}
+    const { data: rcp } = await sb.from('receipts').select('amount').eq('kitchen_id', kid).gte('receipt_date', monthKey + '-01').lt('receipt_date', nextMonth)
+    let spend = 0
+    for (const r of (rcp || [])) spend += Number(r.amount) || 0
+    budget = {
+      month: monthKey,
+      spend,
+      budget: fin.budget != null ? Number(fin.budget) : null,
+      revenue: fin.revenue != null ? Number(fin.revenue) : null,
+    }
+  } catch { /* optional section */ }
+
   return {
     generatedAt: nowISO,
     kitchen: { name: kitchen.kitchen_name || 'Your kitchen', currency: kitchen.currency || 'GBP', timezone: kitchen.timezone },
@@ -1334,6 +1361,8 @@ async function computeWeeklyDigest(sb, kitchen) {
     wasteCount,
     wasteCost,
     topWasted, // [[name, cost], ...]
+    priceChanges, // [{detail, at}] — last 7 days of price alerts
+    budget, // {month, spend, budget, revenue} — current-month position
   }
 }
 
@@ -1439,6 +1468,43 @@ function buildDigestHtml(digest) {
       </td></tr>`).join('')}
     </table>
   </div>` : ''}
+
+  <!-- Price changes this week (Sept 2026) -->
+  ${(digest.priceChanges || []).length > 0 ? `<div style="padding:0 24px 20px 24px">
+    <h3 style="margin:0 0 8px 0;font-size:16px;color:#0f172a">💷 Price changes this week</h3>
+    <table role="presentation" style="width:100%;border-collapse:collapse">
+      ${digest.priceChanges.map(pc => `<tr><td style="padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13px;color:#334155">
+        ${escapeHtml(pc.detail)} <span style="color:#94a3b8">· ${fmtDate(pc.at)}</span>
+      </td></tr>`).join('')}
+    </table>
+  </div>` : ''}
+
+  <!-- Budget position (Sept 2026) -->
+  ${digest.budget && (digest.budget.budget != null || digest.budget.revenue != null) ? (() => {
+    const b = digest.budget
+    const monthName = new Date(b.month + '-01T00:00:00Z').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+    let rows = ''
+    if (b.budget != null) {
+      const diff = b.budget - b.spend
+      rows += `<div style="padding:10px 12px;background:${diff >= 0 ? '#eef2ff' : '#fef2f2'};border-left:4px solid ${diff >= 0 ? '#6366f1' : '#dc2626'};border-radius:4px;font-size:14px;color:#1e293b;margin-bottom:8px">
+        ${diff >= 0
+          ? `✅ <b>${fmtCurrency(cur, diff)}</b> of your ${fmtCurrency(cur, b.budget)} ${escapeHtml(monthName)} budget left (${fmtCurrency(cur, b.spend)} spent)`
+          : `⚠️ <b>${fmtCurrency(cur, Math.abs(diff))} over</b> your ${fmtCurrency(cur, b.budget)} ${escapeHtml(monthName)} budget (${fmtCurrency(cur, b.spend)} spent)`}
+      </div>`
+    }
+    if (b.revenue != null && b.revenue > 0) {
+      const profit = b.revenue - b.spend
+      const margin = ((profit / b.revenue) * 100).toFixed(0)
+      rows += `<div style="padding:10px 12px;background:${profit >= 0 ? '#f0fdfa' : '#fef2f2'};border-left:4px solid ${profit >= 0 ? '#14b8a6' : '#dc2626'};border-radius:4px;font-size:14px;color:#1e293b">
+        ${profit >= 0 ? `📈 <b>${margin}% margin</b> so far — ${fmtCurrency(cur, b.revenue)} revenue vs ${fmtCurrency(cur, b.spend)} costs (${fmtCurrency(cur, profit)} profit)`
+          : `📉 <b>${fmtCurrency(cur, Math.abs(profit))} loss</b> so far — ${fmtCurrency(cur, b.revenue)} revenue vs ${fmtCurrency(cur, b.spend)} costs`}
+      </div>`
+    }
+    return `<div style="padding:0 24px 20px 24px">
+      <h3 style="margin:0 0 8px 0;font-size:16px;color:#0f172a">📊 Budget position — ${escapeHtml(monthName)}</h3>
+      ${rows}
+    </div>`
+  })() : ''}
 
   <!-- CTA -->
   <div style="padding:8px 24px 32px 24px;text-align:center">
@@ -3702,7 +3768,20 @@ export async function GET(request, { params }) {
         }
 
         items.sort((a, b) => new Date(b.at) - new Date(a.at))
-        return json({ items: items.slice(0, 80), serverTime: new Date().toISOString(), currencySymbol: sym })
+        // SERVER-SIDE read/dismiss state (Sept 2026): shared per kitchen so all
+        // devices see the identical feed + badge. Dismissed entries stay hidden
+        // unless the alert regenerates on a LATER day (at > dismissedAt).
+        let seenAt = '1970-01-01T00:00:00Z'
+        let dismissed = {}
+        try {
+          const { data: kRow } = await sb.from('kitchens').select('supplier_profile').eq('id', kid).maybeSingle()
+          const st = kRow?.supplier_profile?.notif_state || {}
+          if (st.seenAt) seenAt = st.seenAt
+          if (st.dismissed && typeof st.dismissed === 'object') dismissed = st.dismissed
+        } catch {}
+        const visible = items.filter(i => { const d = dismissed[i.id]; return !d || String(i.at) > d }).slice(0, 80)
+        const unread = visible.filter(i => String(i.at) > seenAt).length
+        return json({ items: visible, unread, serverTime: new Date().toISOString(), currencySymbol: sym })
       }
 
       if (path === 'recipes') {
@@ -5382,7 +5461,7 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
     }
 
     // -------- Kitchen-scoped mutations --------
-    const kitchenScoped = ['products','products/bulk','products/assign-supplier','trash/restore','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','rota/config','rota/copy-week','rota/bulk','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract','receipts/ocr','receipts/line-items','barcodes'].some(p => path === p)
+    const kitchenScoped = ['products','products/bulk','products/assign-supplier','trash/restore','recipe','recipes','email/test','email/check-expiring','digest/send-test','rota','rota/config','rota/copy-week','rota/bulk','waste','haccp/temperatures','haccp/cleaning-tasks','haccp/cleaning-log','haccp/deliveries','suppliers','suppliers/order-email','push/subscribe','push/unsubscribe','push/test','push/heartbeat','usage/apply','sensors/connect','sensors/mappings','sensors/sync','sensors/disconnect','receipts','receipts/ai-extract','receipts/ocr','receipts/line-items','barcodes','notifications/dismiss','notifications/seen'].some(p => path === p)
       || (path.startsWith('recipes/') && (path.endsWith('/favorite') || path.endsWith('/cook')))
     if (kitchenScoped) {
       const { ctx, error } = await requireOwnerOrChef(request)
@@ -5407,6 +5486,32 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
         } catch (e) {
           return json({ ok: false, error: e.message })
         }
+      }
+
+      // ------- NOTIFICATION STATE (Sept 2026): read/dismiss state lives
+      //         SERVER-SIDE per kitchen (kitchens.supplier_profile.notif_state)
+      //         so every device logged into the same kitchen sees the same
+      //         feed and the same badge. Model: PER-KITCHEN (shared team inbox).
+      if (path === 'notifications/dismiss' || path === 'notifications/seen') {
+        const body = await request.json().catch(() => ({}))
+        const { data: kRow } = await sb.from('kitchens').select('supplier_profile').eq('id', kid).maybeSingle()
+        const prof = (kRow?.supplier_profile && typeof kRow.supplier_profile === 'object') ? kRow.supplier_profile : {}
+        const st = (prof.notif_state && typeof prof.notif_state === 'object') ? prof.notif_state : {}
+        const now = new Date().toISOString()
+        if (path === 'notifications/seen') {
+          st.seenAt = now
+        } else {
+          const dismissed = (st.dismissed && typeof st.dismissed === 'object') ? st.dismissed : {}
+          const ids = Array.isArray(body.ids) ? body.ids.slice(0, 200) : []
+          for (const id of ids) dismissed[String(id)] = now
+          // cap so the jsonb never grows unbounded
+          const keys = Object.keys(dismissed)
+          if (keys.length > 300) for (const k of keys.slice(0, keys.length - 300)) delete dismissed[k]
+          st.dismissed = dismissed
+        }
+        const { error: uErr } = await sb.from('kitchens').update({ supplier_profile: { ...prof, notif_state: st } }).eq('id', kid)
+        if (uErr) return json({ error: uErr.message }, 500)
+        return json({ ok: true })
       }
 
       // ------- RECEIPTS: save a scanned / uploaded / manual receipt -------
@@ -6467,10 +6572,16 @@ ${issues.length > 0 ? `<p style="background:#eef2ff;border:1px solid #c7d2fe;bor
 
       // ---- Weekly Digest: send-test — owner triggers a live preview to their own email ----
       if (path === 'digest/send-test') {
-        if (!ctx.kitchen) return json({ error: 'No kitchen' }, 404)
-        const to = ctx.kitchen.owner_email
+        // Fetch kitchen if using chef JWT (ctx.kitchen is null for chef tokens)
+        let kitchen = ctx.kitchen
+        if (!kitchen && ctx.kitchenId) {
+          const { data: k } = await sb.from('kitchens').select('*').eq('id', ctx.kitchenId).maybeSingle()
+          kitchen = k
+        }
+        if (!kitchen) return json({ error: 'No kitchen' }, 404)
+        const to = kitchen.owner_email
         if (!to) return json({ error: 'No owner email on file' }, 400)
-        const digest = await computeWeeklyDigest(sb, ctx.kitchen)
+        const digest = await computeWeeklyDigest(sb, kitchen)
         const html = buildDigestHtml(digest)
         const subject = `📊 [TEST] ShelfWise: your ${digest.kitchen.name} weekly digest`
         const send = await resendSend({ to, subject, html })

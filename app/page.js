@@ -35,7 +35,8 @@ import { RotaView, RotaShiftDialog } from '@/components/shelfwise/rota'
 import { AnalyticsView } from '@/components/shelfwise/analytics'
 import { OrdersView } from '@/components/shelfwise/orders'
 import { CartView } from '@/components/shelfwise/cart'
-import { cartLineCount, cartSubtotal } from '@/lib/cart'
+import { cartLineCount, cartSubtotal, addToCart } from '@/lib/cart'
+import { matchCatalog, findConnected } from '@/components/shelfwise/stock-levels'
 import { ShoppingCart } from 'lucide-react'
 import { ReceiptsView } from '@/components/shelfwise/receipts'
 import SupplierDashboard from '@/components/shelfwise/supplier'
@@ -483,44 +484,39 @@ function App() {
   // ==========================================================================
   const [notifOpen, setNotifOpen] = useState(false)
   const [notifItems, setNotifItems] = useState([])
-  const [notifSeen, setNotifSeen] = useState(null)
+  const [notifUnread, setNotifUnread] = useState(0)
   const fetchNotifications = async () => {
     try {
       const res = await fetch('/api/notifications')
       if (!res.ok) return
       const d = await res.json()
       setNotifItems(Array.isArray(d.items) ? d.items : [])
+      setNotifUnread(Number(d.unread) || 0)
     } catch { /* feed is best-effort */ }
   }
-  useEffect(() => { try { setNotifSeen(localStorage.getItem('sw_notif_seen') || '1970-01-01T00:00:00Z') } catch {} }, [])
-  // Dismissals (swipe-to-delete / clear-all) persist per device. Stored as
-  // {id: dismissedAtISO} — a live alert regenerated on a LATER day (newer 'at')
-  // reappears; anything else stays deleted.
-  const [notifDismissed, setNotifDismissed] = useState({})
+  // SERVER-SIDE SYNC (Sept 2026 fix): the feed, unread badge, deletions and
+  // read-state all live on the SERVER per kitchen (notif_state jsonb) — every
+  // device logged into the same kitchen sees the identical list. Model chosen:
+  // PER-KITCHEN (a shared team inbox — clearing on one device clears for all).
+  // Devices converge via refetch on focus + a 60s poll.
   const [notifClearConfirm, setNotifClearConfirm] = useState(false)
-  useEffect(() => { try { setNotifDismissed(JSON.parse(localStorage.getItem('sw_notif_dismissed_v1') || '{}')) } catch {} }, [])
-  const persistDismissed = (map) => {
-    const keys = Object.keys(map)
-    if (keys.length > 300) for (const k of keys.slice(0, keys.length - 300)) delete map[k]
-    setNotifDismissed({ ...map })
-    try { localStorage.setItem('sw_notif_dismissed_v1', JSON.stringify(map)) } catch {}
+  const visibleNotifItems = notifItems   // server already filters dismissed ones
+  const dismissNotif = (id) => {
+    setNotifItems(prev => prev.filter(i => i.id !== id))   // optimistic
+    fetch('/api/notifications/dismiss', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [id] }) }).catch(() => {})
   }
-  const dismissNotif = (id) => persistDismissed({ ...notifDismissed, [id]: new Date().toISOString() })
-  const visibleNotifItems = notifItems.filter(i => { const d = notifDismissed[i.id]; return !d || String(i.at) > d })
   const clearAllNotifs = () => {
-    const now = new Date().toISOString()
-    const map = { ...notifDismissed }
-    for (const i of visibleNotifItems) map[i.id] = now
-    persistDismissed(map)
+    const ids = notifItems.map(i => i.id)
+    setNotifItems([])
+    setNotifUnread(0)
+    fetch('/api/notifications/dismiss', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) }).catch(() => {})
   }
-  const notifUnread = notifSeen ? visibleNotifItems.filter(i => String(i.at) > notifSeen).length : 0
-  const openNotifications = () => {
+  const openNotifications = async () => {
     setNotifOpen(true)
     setNotifClearConfirm(false)
+    setNotifUnread(0)
+    try { await fetch('/api/notifications/seen', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }) } catch {}
     fetchNotifications()
-    const now = new Date().toISOString()
-    try { localStorage.setItem('sw_notif_seen', now) } catch {}
-    setNotifSeen(now)
   }
   // Tap a notification → jump to the related item (expiring/low → item detail;
   // price → item detail with its price history under the cost field).
@@ -537,6 +533,37 @@ function App() {
     if (n.type === 'expiry' || n.type === 'expired') { goToInventory('All'); return }
     toast.info('This item is no longer in your inventory')
   }
+
+  // ORDER FROM ALERT (Sept 2026): one-tap "Add to cart" on low-stock
+  // notifications — matches the item to its connected supplier's catalogue and
+  // adds a top-up quantity (same logic as Stock Levels bulk ordering).
+  const supListCacheRef = useRef(null)
+  const addLowToCart = async (n) => {
+    try {
+      const product = products.find(p => p.id === n.productId)
+      if (!product) { toast.error('Item not found in inventory'); return }
+      if (!supListCacheRef.current) {
+        const r = await fetch('/api/kitchen/suppliers')
+        const slist = await r.json().catch(() => [])
+        supListCacheRef.current = Array.isArray(slist) ? slist : []
+      }
+      const conn = findConnected(product.supplier, supListCacheRef.current)
+      if (!conn) {
+        toast.info('No connected supplier for this item — opening Stock Levels')
+        setNotifOpen(false); setOrdersInitialStock(true); setView('orders'); return
+      }
+      const r2 = await fetch(`/api/kitchen/suppliers/${conn.supplierId}/catalog`)
+      const d2 = await r2.json().catch(() => ({}))
+      const m = matchCatalog(product.name, Array.isArray(d2.products) ? d2.products : [])
+      if (!m || m.available === false) {
+        toast.info(`"${product.name}" isn't orderable from ${conn.businessName} — opening Stock Levels`)
+        setNotifOpen(false); setOrdersInitialStock(true); setView('orders'); return
+      }
+      const qty = Math.max(1, Math.round(Number(product.reorderPoint ?? 0) - Number(product.quantity ?? 0)) + 1)
+      addToCart({ supplierId: conn.supplierId, supplierName: conn.businessName, productId: m.id, name: m.name, unit: m.unit || product.unit || '', qty, price: Number(m.price) || 0 })
+      toast.success(`Added ${qty} × ${m.name} to cart 🛒`, { action: { label: 'View cart', onClick: () => { setNotifOpen(false); setView('cart') } } })
+    } catch { toast.error('Could not add to cart') }
+  }
   // UNIVERSAL HOME (Sept 2026 P0 fix): the bottom nav is now rendered ABOVE
   // full-screen overlays (Settings etc., z-[60] > z-50). Tapping any bottom
   // tab must therefore also CLOSE every overlay so the target screen is
@@ -548,6 +575,14 @@ function App() {
   // initial notifications fetch once the session is known
   useEffect(() => { if (me) fetchNotifications() // eslint-disable-line react-hooks/exhaustive-deps
   }, [me])
+  // cross-device convergence: refetch on window focus + a 60s poll
+  useEffect(() => {
+    if (!me) return
+    const t = setInterval(fetchNotifications, 60000)
+    const onFocus = () => fetchNotifications()
+    window.addEventListener('focus', onFocus)
+    return () => { clearInterval(t); window.removeEventListener('focus', onFocus) }
+  }, [me]) // eslint-disable-line react-hooks/exhaustive-deps
   const [mobileNav, setMobileNav] = useState(false)
   const [namePromptOpen, setNamePromptOpen] = useState(false)   // "add your name" popup for existing users
   const [namePromptValue, setNamePromptValue] = useState('')
@@ -3717,7 +3752,7 @@ function App() {
                     : { emoji: '📉', cls: 'bg-orange-50 border-orange-200', tag: 'Low stock', tagCls: 'bg-orange-100 text-orange-800' }
                   const d = new Date(n.at)
                   const when = isNaN(d) ? '' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-                  return <NotifRow key={n.id} n={n} meta={meta} when={when} onDismiss={dismissNotif} onOpen={openNotifTarget} />
+                  return <NotifRow key={n.id} n={n} meta={meta} when={when} onDismiss={dismissNotif} onOpen={openNotifTarget} onAddToCart={addLowToCart} />
                 })}
 
                 {/* CLEAR ALL — below the last card, with inline confirmation */}
@@ -3818,7 +3853,7 @@ function App() {
 // notification (red trash reveal behind), tap to jump to the related item.
 // Pointer events work for both touch swipes and mouse drags.
 // ============================================================================
-function NotifRow({ n, meta, when, onDismiss, onOpen }) {
+function NotifRow({ n, meta, when, onDismiss, onOpen, onAddToCart }) {
   const [dx, setDx] = useState(0)
   const [dragging, setDragging] = useState(false)
   const startX = useRef(null)
@@ -3873,6 +3908,18 @@ function NotifRow({ n, meta, when, onDismiss, onOpen }) {
             {when}
           </p>
         </div>
+        {/* ORDER FROM ALERT: one-tap add-to-cart on low-stock notifications */}
+        {n.type === 'low' && onAddToCart && (
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onPointerUp={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onAddToCart(n) }}
+            className="shrink-0 self-center flex items-center gap-1 text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-full px-2.5 py-1.5"
+            title="Add to cart"
+          >
+            <Plus className="h-3 w-3" /> Cart
+          </button>
+        )}
         {/* tappable cue — consistent with tappable rows elsewhere */}
         <ChevronRight className="h-4 w-4 text-slate-400 shrink-0 self-center" />
       </div>

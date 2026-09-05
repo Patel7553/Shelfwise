@@ -23,7 +23,7 @@ const fetch = apiFetch
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim()
 
 // Match an inventory item name against a supplier catalog (best-effort fuzzy).
-function matchCatalog(name, catalog) {
+export function matchCatalog(name, catalog) {
   const n = norm(name)
   if (!n) return null
   let best = null
@@ -48,7 +48,7 @@ function matchCatalog(name, catalog) {
 }
 
 // products.supplier is free text — match it to a connected supplier account.
-function findConnected(supName, suppliers) {
+export function findConnected(supName, suppliers) {
   const n = norm(supName)
   if (!n) return null
   return (
