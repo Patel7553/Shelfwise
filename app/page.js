@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogT
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { toast } from 'sonner'
-import { Boxes, AlertTriangle, Clock, PackageX, Plus, Home as HomeIcon, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, ArrowLeft, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe, Users, Lock, Delete, Eye, EyeOff, ReceiptText } from 'lucide-react'
+import { Boxes, AlertTriangle, Clock, PackageX, Plus, Home as HomeIcon, Search, Download, ArrowUpDown, Pencil, Trash2, LayoutDashboard, Package, Sparkles, ChefHat, ScanLine, Upload, Loader2, Check, X, BookOpen, AlertCircle, ShieldAlert, ShieldCheck, Settings, ArrowRight, ArrowLeft, Copy, RefreshCw, LogOut, Printer, BarChart3, Bell, BellOff, Calendar as CalendarIcon, Sun, Moon, Monitor, Thermometer, Droplets, Truck, ClipboardCheck, FileText, Globe, Users, Lock, Delete, Eye, EyeOff, ReceiptText, ChevronRight } from 'lucide-react'
 import { apiFetch, signOutAll, getChefToken, setChefToken, clearChefToken } from '@/lib/apiClient'
 import { getBrowserSupabase } from '@/lib/supabaseBrowser'
 import InstallAppPrompt from '@/components/InstallAppPrompt'
@@ -493,13 +493,49 @@ function App() {
     } catch { /* feed is best-effort */ }
   }
   useEffect(() => { try { setNotifSeen(localStorage.getItem('sw_notif_seen') || '1970-01-01T00:00:00Z') } catch {} }, [])
-  const notifUnread = notifSeen ? notifItems.filter(i => String(i.at) > notifSeen).length : 0
+  // Dismissals (swipe-to-delete / clear-all) persist per device. Stored as
+  // {id: dismissedAtISO} — a live alert regenerated on a LATER day (newer 'at')
+  // reappears; anything else stays deleted.
+  const [notifDismissed, setNotifDismissed] = useState({})
+  const [notifClearConfirm, setNotifClearConfirm] = useState(false)
+  useEffect(() => { try { setNotifDismissed(JSON.parse(localStorage.getItem('sw_notif_dismissed_v1') || '{}')) } catch {} }, [])
+  const persistDismissed = (map) => {
+    const keys = Object.keys(map)
+    if (keys.length > 300) for (const k of keys.slice(0, keys.length - 300)) delete map[k]
+    setNotifDismissed({ ...map })
+    try { localStorage.setItem('sw_notif_dismissed_v1', JSON.stringify(map)) } catch {}
+  }
+  const dismissNotif = (id) => persistDismissed({ ...notifDismissed, [id]: new Date().toISOString() })
+  const visibleNotifItems = notifItems.filter(i => { const d = notifDismissed[i.id]; return !d || String(i.at) > d })
+  const clearAllNotifs = () => {
+    const now = new Date().toISOString()
+    const map = { ...notifDismissed }
+    for (const i of visibleNotifItems) map[i.id] = now
+    persistDismissed(map)
+  }
+  const notifUnread = notifSeen ? visibleNotifItems.filter(i => String(i.at) > notifSeen).length : 0
   const openNotifications = () => {
     setNotifOpen(true)
+    setNotifClearConfirm(false)
     fetchNotifications()
     const now = new Date().toISOString()
     try { localStorage.setItem('sw_notif_seen', now) } catch {}
     setNotifSeen(now)
+  }
+  // Tap a notification → jump to the related item (expiring/low → item detail;
+  // price → item detail with its price history under the cost field).
+  const openNotifTarget = (n) => {
+    let product = null
+    if (n.productId) product = products.find(p => p.id === n.productId) || null
+    if (!product && n.type === 'price') {
+      const nm = String(n.message || '').split(':')[0].trim().toLowerCase()
+      product = products.find(p => String(p.name || '').trim().toLowerCase() === nm) || null
+    }
+    setNotifOpen(false)
+    if (product) { openEdit(product); return }
+    if (n.type === 'low') { setOrdersInitialStock(true); setView('orders'); return }
+    if (n.type === 'expiry' || n.type === 'expired') { goToInventory('All'); return }
+    toast.info('This item is no longer in your inventory')
   }
   // UNIVERSAL HOME (Sept 2026 P0 fix): the bottom nav is now rendered ABOVE
   // full-screen overlays (Settings etc., z-[60] > z-50). Tapping any bottom
@@ -2769,6 +2805,25 @@ function App() {
                       </p>
                     )
                   })()}
+                  {/* PRICE HISTORY (Sept 2026): last few recorded changes — the
+                      target view when tapping a price alert in the bell feed. */}
+                  {editing?.priceHistory?.length > 0 && (
+                    <div className="mt-1.5 rounded-md bg-slate-50 border border-slate-200 px-2 py-1.5 space-y-0.5">
+                      <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Price history</p>
+                      {editing.priceHistory.slice(-3).reverse().map((h, i) => {
+                        const symH = CURRENCY_SYMBOL[settings.currency] || ''
+                        const dH = new Date(h.at)
+                        return (
+                          <p key={i} className="text-[11px] text-slate-600">
+                            {h.prevCost != null ? `${symH}${Number(h.prevCost).toFixed(2)} → ` : ''}
+                            <span className="font-semibold">{symH}{Number(h.cost).toFixed(2)}</span>
+                            {!isNaN(dH) ? ` · ${dH.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : ''}
+                            {h.by ? ` · by ${h.by}` : ''}
+                          </p>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <Label htmlFor="reorder">Reorder when qty ≤</Label>
@@ -3647,7 +3702,7 @@ function App() {
             <DialogTitle className="flex items-center gap-2"><Bell className="h-5 w-5 text-emerald-600" /> Notifications</DialogTitle>
           </DialogHeader>
           <div className="flex-1 overflow-y-auto p-3">
-            {notifItems.length === 0 ? (
+            {visibleNotifItems.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
                 <Bell className="h-10 w-10 mx-auto mb-2 opacity-30" />
                 <p className="text-sm font-medium">All caught up</p>
@@ -3655,26 +3710,32 @@ function App() {
               </div>
             ) : (
               <div className="space-y-1.5">
-                {notifItems.map(n => {
+                {visibleNotifItems.map(n => {
                   const meta = n.type === 'price' ? { emoji: '💷', cls: 'bg-teal-50 border-teal-200', tag: 'Price change', tagCls: 'bg-teal-100 text-teal-800' }
                     : n.type === 'expired' ? { emoji: '🗑️', cls: 'bg-red-50 border-red-200', tag: 'Expired', tagCls: 'bg-red-100 text-red-800' }
                     : n.type === 'expiry' ? { emoji: '⏰', cls: 'bg-amber-50 border-amber-200', tag: 'Expiring', tagCls: 'bg-amber-100 text-amber-800' }
                     : { emoji: '📉', cls: 'bg-orange-50 border-orange-200', tag: 'Low stock', tagCls: 'bg-orange-100 text-orange-800' }
                   const d = new Date(n.at)
                   const when = isNaN(d) ? '' : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-                  return (
-                    <div key={n.id} className={`flex items-start gap-2.5 rounded-lg border px-3 py-2 ${meta.cls}`}>
-                      <span className="text-base leading-none mt-0.5">{meta.emoji}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm leading-snug">{n.message}</p>
-                        <p className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-1.5">
-                          <span className={`px-1.5 py-0.5 rounded-full font-bold ${meta.tagCls}`}>{meta.tag}</span>
-                          {when}
-                        </p>
+                  return <NotifRow key={n.id} n={n} meta={meta} when={when} onDismiss={dismissNotif} onOpen={openNotifTarget} />
+                })}
+
+                {/* CLEAR ALL — below the last card, with inline confirmation */}
+                <div className="pt-2">
+                  {notifClearConfirm ? (
+                    <div className="flex items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+                      <p className="text-sm font-semibold text-red-800">Clear all notifications?</p>
+                      <div className="flex gap-2 shrink-0">
+                        <Button size="sm" variant="outline" onClick={() => setNotifClearConfirm(false)}>Cancel</Button>
+                        <Button size="sm" className="bg-red-600 hover:bg-red-700 text-white" onClick={() => { clearAllNotifs(); setNotifClearConfirm(false) }}>Clear all</Button>
                       </div>
                     </div>
-                  )
-                })}
+                  ) : (
+                    <Button variant="ghost" size="sm" className="w-full text-slate-500 hover:text-red-600" onClick={() => setNotifClearConfirm(true)}>
+                      <Trash2 className="h-4 w-4 mr-1.5" /> Clear all notifications
+                    </Button>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -3751,5 +3812,72 @@ function App() {
 // Receipt / delivery-note scanner — snap a photo → AI parses → confirm → import
 // Uses GPT-4o vision to extract supplier, items, prices, categories, etc.
 // ============================================================================
+
+// ============================================================================
+// NOTIFICATION ROW (Sept 2026): swipe LEFT OR RIGHT to delete a single
+// notification (red trash reveal behind), tap to jump to the related item.
+// Pointer events work for both touch swipes and mouse drags.
+// ============================================================================
+function NotifRow({ n, meta, when, onDismiss, onOpen }) {
+  const [dx, setDx] = useState(0)
+  const [dragging, setDragging] = useState(false)
+  const startX = useRef(null)
+  const moved = useRef(false)
+
+  const onPointerDown = (e) => {
+    startX.current = e.clientX
+    moved.current = false
+    setDragging(true)
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch {}
+  }
+  const onPointerMove = (e) => {
+    if (startX.current == null) return
+    const d = e.clientX - startX.current
+    if (Math.abs(d) > 6) moved.current = true
+    setDx(Math.max(-140, Math.min(140, d)))
+  }
+  const endDrag = () => {
+    const d = dx
+    startX.current = null
+    setDragging(false)
+    if (Math.abs(d) > 70) {
+      // fling out in the swipe direction, then remove
+      setDx(d > 0 ? 400 : -400)
+      setTimeout(() => onDismiss(n.id), 180)
+    } else {
+      setDx(0)
+      if (!moved.current) onOpen(n)   // a still tap = open the item
+    }
+  }
+
+  return (
+    <div className="relative overflow-hidden rounded-lg">
+      {/* delete reveal — visible on BOTH swipe directions */}
+      <div className={`absolute inset-0 rounded-lg bg-red-500 flex items-center justify-between px-4 transition-opacity ${dx !== 0 ? 'opacity-100' : 'opacity-0'}`}>
+        <Trash2 className="h-4 w-4 text-white" />
+        <Trash2 className="h-4 w-4 text-white" />
+      </div>
+      <div
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        style={{ transform: `translateX(${dx}px)`, transition: dragging ? 'none' : 'transform 0.18s ease', touchAction: 'pan-y' }}
+        className={`relative flex items-start gap-2.5 rounded-lg border px-3 py-2 select-none cursor-pointer ${meta.cls}`}
+      >
+        <span className="text-base leading-none mt-0.5">{meta.emoji}</span>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm leading-snug">{n.message}</p>
+          <p className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-1.5">
+            <span className={`px-1.5 py-0.5 rounded-full font-bold ${meta.tagCls}`}>{meta.tag}</span>
+            {when}
+          </p>
+        </div>
+        {/* tappable cue — consistent with tappable rows elsewhere */}
+        <ChevronRight className="h-4 w-4 text-slate-400 shrink-0 self-center" />
+      </div>
+    </div>
+  )
+}
 
 export default App

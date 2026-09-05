@@ -7951,3 +7951,45 @@ agent_communication:
         **Test file:** /app/backend_test_sept2026_part2.py (can be re-run anytime)
         
         **Note:** Supplier endpoints cannot be tested locally with JWT alone. They require actual Supabase email/password login. This is expected behavior, not a bug.
+
+# ============================================================
+# SEPT 2026 SESSION PART 3 — Notification management + low-stock ordering
+# ============================================================
+frontend:
+  - task: "Swipe-to-delete notifications (both directions) + Clear all with confirm + badge updates"
+    implemented: true
+    working: true
+    file: "app/page.js (NotifRow component + dismissal state)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "Verified via Playwright: left swipe 30->29, right swipe 29->28, clear-all shows inline confirmation then 'All caught up', bell badge hidden. Dismissals persist in localStorage sw_notif_dismissed_v1 as {id: dismissedAtISO}; live alerts regenerated on a later day reappear."
+  - task: "Tappable notifications with chevron -> item edit view (price history shown under cost field)"
+    implemented: true
+    working: true
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "Backend /api/notifications now includes productId on computed items. Tap opens Edit Product (verified: low-stock notif -> Semi-Skimmed Milk edit dialog with Price history block). Price alerts match product by name; fallbacks: low->Stock Levels, expiry->Inventory."
+  - task: "Stock Levels: LOW STOCK badges (reorder threshold) + Select-all-low one-tap + supplier-grouped cart"
+    implemented: true
+    working: true
+    file: "components/shelfwise/stock-levels.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "Verified: 10 LOW STOCK badges, 'Select all low stock (10 items)' pre-fills top-up quantities, selection bar moved above bottom nav (bottom-24), Add to Cart -> header badge £317.95/10 lines, Basket grouped under PATEL FOOD. Cart splits per supplier automatically (existing CartView grouping)."
+
+agent_communication:
+    - agent: "main"
+      message: "Part 3 complete and Playwright-verified. Backend delta was additive only (productId on notifications items)."

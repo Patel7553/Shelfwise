@@ -107,15 +107,20 @@ export function StockLevelsView({ onBack, goCart, currency = '£' }) {
     for (const p of products) {
       const key = `${norm(p.name)}|${p.unit || 'ea'}`
       if (!map.has(key)) {
-        map.set(key, { key, name: p.name, unit: p.unit || 'ea', qty: 0, supplierRaw: p.supplier || '', batches: 0 })
+        map.set(key, { key, name: p.name, unit: p.unit || 'ea', qty: 0, supplierRaw: p.supplier || '', batches: 0, reorder: null })
       }
       const it = map.get(key)
       it.qty += Number(p.quantity) || 0
       it.batches += 1
       if (!it.supplierRaw && p.supplier) it.supplierRaw = p.supplier
+      // per-item reorder threshold (Sept 2026) — drives the LOW badge +
+      // "Select all low stock" one-tap ordering
+      if (p.reorderPoint != null) it.reorder = Math.max(Number(it.reorder ?? -Infinity), Number(p.reorderPoint))
     }
     return [...map.values()]
   }, [products])
+
+  const isLow = (it) => it.reorder != null && it.qty <= it.reorder
 
   // ---- group ALL items by supplier (before search/filter, so the filter
   //      chips always list every supplier) ----
@@ -157,6 +162,28 @@ export function StockLevelsView({ onBack, goCart, currency = '£' }) {
     for (const g of groups) if (g.items.some(it => (sel[it.key] || 0) > 0)) set.add(g.gk)
     return set.size
   }, [groups, sel])
+
+  // ---- LOW STOCK one-tap selection (Sept 2026): items at/below their reorder
+  //      threshold in ORDERABLE (connected) groups, pre-filled with a top-up
+  //      quantity that brings them back above the threshold ----
+  const lowOrderable = useMemo(() => {
+    const out = []
+    for (const g of groups) {
+      if (!g.connected) continue
+      for (const it of g.items) if (isLow(it)) out.push(it)
+    }
+    return out
+  }, [groups]) // eslint-disable-line react-hooks/exhaustive-deps
+  const selectAllLow = () => {
+    if (lowOrderable.length === 0) return
+    setSel(s => {
+      const next = { ...s }
+      for (const it of lowOrderable) {
+        if (!(next[it.key] > 0)) next[it.key] = Math.max(1, Math.round(Number(it.reorder) - Number(it.qty)) + 1)
+      }
+      return next
+    })
+  }
 
   const toggle = (it) => setSel(s => {
     const next = { ...s }
@@ -214,6 +241,19 @@ export function StockLevelsView({ onBack, goCart, currency = '£' }) {
         <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
         <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search products or suppliers…" className="pl-9" />
       </div>
+
+      {/* One-tap low-stock ordering — select every orderable item at/below its
+          reorder threshold, pre-filled with a top-up quantity */}
+      {lowOrderable.length > 0 && (
+        <Button
+          variant="outline"
+          onClick={selectAllLow}
+          className="w-full border-2 border-orange-300 bg-orange-50 text-orange-800 hover:bg-orange-100 font-semibold"
+        >
+          <AlertTriangle className="h-4 w-4 mr-2" />
+          Select all low stock ({lowOrderable.length} item{lowOrderable.length === 1 ? '' : 's'})
+        </Button>
+      )}
 
       {/* Supplier filter — works together with search */}
       {baseGroups.length > 1 && (
@@ -285,8 +325,14 @@ export function StockLevelsView({ onBack, goCart, currency = '£' }) {
                       {selected && <CheckCircle2 className="h-3.5 w-3.5 text-white" />}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{it.name}</p>
+                      <p className="text-sm font-medium truncate flex items-center gap-1.5">
+                        <span className="truncate">{it.name}</span>
+                        {isLow(it) && (
+                          <span className="shrink-0 text-[9px] font-bold bg-orange-100 text-orange-700 border border-orange-200 rounded-full px-1.5 py-0.5">LOW STOCK</span>
+                        )}
+                      </p>
                       {it.batches > 1 && <p className="text-[10px] text-muted-foreground">{it.batches} batches combined</p>}
+                      {isLow(it) && <p className="text-[10px] text-orange-600">reorder at {it.reorder} {it.unit}</p>}
                     </div>
                     {priceEl}
                     <span className={`text-xs font-bold border rounded-full px-2.5 py-1 whitespace-nowrap ${qtyTone(it.qty)}`}>
@@ -307,9 +353,9 @@ export function StockLevelsView({ onBack, goCart, currency = '£' }) {
         ))
       )}
 
-      {/* Sticky selection bar */}
+      {/* Sticky selection bar — sits ABOVE the global bottom nav (Sept 2026) */}
       {selCount > 0 && (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-2rem)] max-w-xl">
+        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-40 w-[calc(100%-2rem)] max-w-xl">
           <div className="bg-slate-900 text-white rounded-2xl shadow-xl px-4 py-3 flex items-center gap-3">
             <ShoppingCart className="h-5 w-5 text-emerald-400 shrink-0" />
             <div className="flex-1 min-w-0">

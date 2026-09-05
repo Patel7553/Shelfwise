@@ -3690,13 +3690,13 @@ export async function GET(request, { params }) {
             const exp = p.expiry_date ? String(p.expiry_date).slice(0, 10) : null
             if (exp && exp < todayISO && exp >= recentISO) {
               const days = Math.round((start - new Date(exp + 'T00:00:00Z')) / 86400000)
-              items.push({ id: `exp-${p.id}`, type: 'expired', message: `${p.name} expired ${days === 0 ? 'today' : days === 1 ? 'yesterday' : days + ' days ago'}`, at: dayStamp })
+              items.push({ id: `exp-${p.id}`, productId: p.id, type: 'expired', message: `${p.name} expired ${days === 0 ? 'today' : days === 1 ? 'yesterday' : days + ' days ago'}`, at: dayStamp })
             } else if (exp && exp >= todayISO && exp <= winISO) {
               const days = Math.round((new Date(exp + 'T00:00:00Z') - start) / 86400000)
-              items.push({ id: `exp-${p.id}`, type: 'expiry', message: `${p.name} ${days === 0 ? 'expires today' : days === 1 ? 'expires tomorrow' : `expires in ${days} days`} (${new Date(exp + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })})`, at: dayStamp })
+              items.push({ id: `exp-${p.id}`, productId: p.id, type: 'expiry', message: `${p.name} ${days === 0 ? 'expires today' : days === 1 ? 'expires tomorrow' : `expires in ${days} days`} (${new Date(exp + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })})`, at: dayStamp })
             }
             if (p.reorder_point != null && Number(p.quantity) <= Number(p.reorder_point)) {
-              items.push({ id: `low-${p.id}`, type: 'low', message: `${p.name} is low on stock — ${p.quantity} ${p.unit || ''} left (reorder at ${p.reorder_point})`, at: dayStamp })
+              items.push({ id: `low-${p.id}`, productId: p.id, type: 'low', message: `${p.name} is low on stock — ${p.quantity} ${p.unit || ''} left (reorder at ${p.reorder_point})`, at: dayStamp })
             }
           }
         }
