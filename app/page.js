@@ -500,6 +500,66 @@ function App() {
   // PER-KITCHEN (a shared team inbox — clearing on one device clears for all).
   // Devices converge via refetch on focus + a 60s poll.
   const [notifClearConfirm, setNotifClearConfirm] = useState(false)
+
+  // ==========================================================================
+  // GLOBAL PULL-TO-REFRESH (Sept 2026): pull down at the top of ANY screen to
+  // refresh — shared data (products, stats, notifications) is refetched and
+  // the current view is remounted so view-specific data (rota, receipts,
+  // compliance, waste…) reloads too. Touch-only, native-app feel. Never fires
+  // inside modals or when an inner list isn't scrolled to its top.
+  // ==========================================================================
+  const [ptrPull, setPtrPull] = useState(0)
+  const [ptrRefreshing, setPtrRefreshing] = useState(false)
+  const [viewRefreshKey, setViewRefreshKey] = useState(0)
+  const ptrActionRef = useRef(() => {})
+  useEffect(() => {
+    let startY = null, pulling = false, lastPull = 0
+    const atInnerTop = (target) => {
+      let el = target
+      while (el && el !== document.body) {
+        if (el.scrollTop && el.scrollTop > 0) return false
+        el = el.parentElement
+      }
+      return true
+    }
+    const onStart = (e) => {
+      if (window.scrollY > 2) return
+      if (document.querySelector("[role='dialog']")) return   // never hijack modals
+      if (!atInnerTop(e.target)) return
+      startY = e.touches[0].clientY
+      pulling = true
+      lastPull = 0
+    }
+    const onMove = (e) => {
+      if (!pulling || startY == null) return
+      const dy = e.touches[0].clientY - startY
+      if (dy > 0 && window.scrollY <= 2) {
+        lastPull = Math.min(120, dy * 0.5)   // rubber-band resistance
+        setPtrPull(lastPull)
+        if (dy > 12 && e.cancelable) e.preventDefault()   // stop overscroll bounce
+      } else {
+        lastPull = 0
+        setPtrPull(0)
+      }
+    }
+    const onEnd = () => {
+      if (!pulling) return
+      pulling = false
+      startY = null
+      setPtrPull(0)
+      if (lastPull > 55) ptrActionRef.current()
+    }
+    window.addEventListener('touchstart', onStart, { passive: true })
+    window.addEventListener('touchmove', onMove, { passive: false })
+    window.addEventListener('touchend', onEnd)
+    window.addEventListener('touchcancel', onEnd)
+    return () => {
+      window.removeEventListener('touchstart', onStart)
+      window.removeEventListener('touchmove', onMove)
+      window.removeEventListener('touchend', onEnd)
+      window.removeEventListener('touchcancel', onEnd)
+    }
+  }, [])
   const visibleNotifItems = notifItems   // server already filters dismissed ones
   const dismissNotif = (id) => {
     setNotifItems(prev => prev.filter(i => i.id !== id))   // optimistic
@@ -851,6 +911,19 @@ function App() {
       setStats(data)
     } catch {} finally {
       setStatsLoading(false)
+    }
+  }
+
+  // Pull-to-refresh action (assigned via ref so the touch listeners — attached
+  // once — always call the latest fetchers).
+  ptrActionRef.current = async () => {
+    if (ptrRefreshing) return
+    setPtrRefreshing(true)
+    try {
+      await Promise.allSettled([fetchProducts(), fetchStats(), fetchFacets(), fetchNotifications()])
+      setViewRefreshKey(k => k + 1)   // remount the active view → refetches its own data
+    } finally {
+      setTimeout(() => setPtrRefreshing(false), 350)
     }
   }
 
@@ -2569,7 +2642,18 @@ function App() {
       )}
 
 
-      <main className="container mx-auto px-4 py-8 pb-28">
+      {/* Pull-to-refresh indicator */}
+      {(ptrPull > 0 || ptrRefreshing) && (
+        <div className="fixed left-1/2 -translate-x-1/2 z-[70] pointer-events-none" style={{ top: ptrRefreshing ? 72 : Math.min(ptrPull, 100) }}>
+          <div className="h-10 w-10 rounded-full bg-card border shadow-lg flex items-center justify-center">
+            {ptrRefreshing
+              ? <Loader2 className="h-5 w-5 animate-spin text-emerald-600" />
+              : <RefreshCw className="h-5 w-5 text-emerald-600" style={{ transform: `rotate(${ptrPull * 2.5}deg)`, opacity: Math.min(1, ptrPull / 55) }} />}
+          </div>
+        </div>
+      )}
+
+      <main key={viewRefreshKey} className="container mx-auto px-4 py-8 pb-28">
         {/* Universal Back button — every screen except the dashboard (top-left,
             standard placement); returns to the exact previous screen. */}
         {view !== 'dashboard' && (

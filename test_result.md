@@ -8255,3 +8255,16 @@ frontend:
         - working: true
           agent: "main"
           comment: "Tap only registers when pointer moved <6px in BOTH axes; pointercancel (native scroll takeover) resets without opening; card only slides when gesture is clearly horizontal (|dx|>10 && |dx|>1.2*|dy|). Verified: vertical drag on row does NOT open item, genuine tap does, swipe-to-delete unaffected. Real iOS/Android device verification recommended by user (pointer-events + touch-action:pan-y is the standard cross-platform approach)."
+
+# ============================================================
+# SEPT 2026 SESSION PART 6 — Global pull-to-refresh
+# ============================================================
+frontend:
+  - task: "Global pull-to-refresh (any screen, touch): refetch products/stats/facets/notifications + remount active view"
+    implemented: true
+    working: true
+    file: "app/page.js (touch listeners + ptrActionRef + <main key={viewRefreshKey}>)"
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "Verified with synthetic TouchEvents: rotating indicator during pull, spinner + refetches (facets/notifications/products/stats) on release past 55px threshold, small pulls do nothing. Guards: never inside dialogs, only when window & inner scrollables are at top, rubber-band resistance, preventDefault only while actively pulling."
