@@ -1585,7 +1585,7 @@ export function ReceiptsView({ currency }) {
 
       {/* ================= ADD DIALOG ================= */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="sm:max-w-[640px] max-h-[92vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-[640px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ReceiptText className="h-5 w-5 text-emerald-600" /> Add receipt
@@ -1752,7 +1752,7 @@ export function ReceiptsView({ currency }) {
 
       {/* ================= VIEW / EDIT DIALOG ================= */}
       <Dialog open={!!viewing} onOpenChange={(v) => { if (!v) setViewing(null) }}>
-        <DialogContent className="sm:max-w-[640px] max-h-[92vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-[640px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
           {viewing && editForm && (
             <>
               <DialogHeader>
@@ -1844,7 +1844,7 @@ export function ReceiptsView({ currency }) {
 
       {/* ================= LINE ITEMS REVIEW DIALOG ================= */}
       <Dialog open={!!reviewItems} onOpenChange={(v) => { if (!v) setReviewItems(null) }}>
-        <DialogContent className="sm:max-w-[680px] max-h-[92vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-[680px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><PackagePlus className="h-5 w-5 text-emerald-600" /> Review items before adding</DialogTitle>
           </DialogHeader>

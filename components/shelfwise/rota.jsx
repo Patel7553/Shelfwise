@@ -279,7 +279,7 @@ function EntryDialog({ editing, onClose, staffNames, config, personMeta, onSaved
 
   return (
     <Dialog open={!!editing} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-w-md max-h-[88vh] overflow-y-auto">
+      <DialogContent className="max-w-md max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{s?.id ? 'Edit entry' : 'Add entry'}</DialogTitle>
           <DialogDescription>{longLabel(date)}</DialogDescription>
@@ -547,7 +547,7 @@ function TemplatesDialog({ open, onClose, config, saveConfig, staffNames, weekDa
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) { setAssign(null); onClose() } }}>
-      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogContent className="max-w-lg max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle><LayoutTemplate className="h-5 w-5 inline mr-1.5 text-emerald-600" />Shift templates</DialogTitle>
           <DialogDescription>Save common shifts once, then reuse them — or assign to several staff and days in one go.</DialogDescription>
@@ -675,7 +675,7 @@ function HoursDialog({ open, onClose, isStaff, personName, staffNames, personMet
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) { setDetail(null); onClose() } }}>
-      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle><Clock className="h-5 w-5 inline mr-1.5 text-emerald-600" />{detail ? `${detail} — full log` : isStaff ? 'My hours' : 'Hours sheet'}</DialogTitle>
           <DialogDescription>{dayLabel(from)} → {dayLabel(to)} · unpaid breaks deducted</DialogDescription>

@@ -165,7 +165,7 @@ function OrderEmailDialog({ initial, suppliers, onClose, onSent }) {
 
   return (
     <Dialog open onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-2xl max-h-[92vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-2xl max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><Mail className="h-5 w-5 text-emerald-600" /> Purchase Order Email</DialogTitle>
           <p className="text-sm text-muted-foreground">Review, adjust quantities, and send. Replies go straight to your inbox.</p>

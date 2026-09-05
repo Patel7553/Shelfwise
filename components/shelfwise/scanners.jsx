@@ -183,7 +183,7 @@ export function ReceiptScanDialog({ open, onClose, onImport, settings }) {
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v && !parsing) onClose() }}>
-      <DialogContent className="sm:max-w-[720px] max-h-[92vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[720px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">🧾 Supplier Invoice Scanner</DialogTitle>
           <p className="text-sm text-muted-foreground">
@@ -535,7 +535,7 @@ export function ExpiryScanDialog({ open, onClose, onDateFound }) {
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-[520px] max-h-[92vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[520px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             📅 Scan Expiry Date
@@ -708,7 +708,7 @@ export function BarcodeScanDialog({ open, onClose, onFound, loading, onManual })
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-[520px] max-h-[92vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[520px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ScanLine className="h-5 w-5 text-emerald-600" /> Scan Barcode
@@ -1382,7 +1382,7 @@ export function BarcodeFlowDialog({ open, initialMode = 'add', onClose, onDone }
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-[520px] max-h-[92vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[520px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ScanLine className="h-5 w-5 text-emerald-600" /> Scan barcode

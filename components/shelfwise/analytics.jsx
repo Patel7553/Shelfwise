@@ -83,7 +83,7 @@ export function LogWasteDialog({ open, onClose, onSaved, currency }) {
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v && !saving) onClose() }}>
-      <DialogContent className="sm:max-w-[440px] max-h-[92vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[440px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">♻️ Log Waste</DialogTitle>
           <p className="text-sm text-muted-foreground">For anything not in your inventory — spoiled veg, leftover prepped food, curry, fillings…</p>

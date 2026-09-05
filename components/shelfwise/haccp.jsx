@@ -96,7 +96,7 @@ export function QuickCheckDialog({ open, onClose, locations, currentUser, onDone
 
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="sm:max-w-lg max-h-[92vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-lg max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>⚡ Quick temperature check</DialogTitle>
           <p className="text-xs text-muted-foreground mt-1">Type today's temps for every fridge & freezer in one go. Tap Save at the bottom when done.</p>
@@ -1394,7 +1394,7 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
 
       {/* ---- AI TEMP-LOG SCANNER DIALOG ---- */}
       <Dialog open={scanTempOpen} onOpenChange={o => { if (!o) { setScanTempOpen(false); setScanTempImage(null); setScanTempRotation(0); setScanTempReadings([]) } }}>
-        <DialogContent className="sm:max-w-2xl max-h-[92vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-2xl max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">📸 Scan Temperature Log <span className="text-[10px] bg-emerald-600 text-white rounded px-1.5 py-0.5 font-bold">AI</span></DialogTitle>
             <p className="text-sm text-muted-foreground">
@@ -1713,7 +1713,7 @@ ${data.deliveries.map(d => `<tr><td>${fmt(d.deliveryDate)}</td><td>${d.supplier 
 
       {/* ---- DELIVERY CHECK MODAL ---- */}
       <Dialog open={!!deliveryModal} onOpenChange={o => !o && setDeliveryModal(null)}>
-        <DialogContent className="sm:max-w-md max-h-[92vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-md max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
           <DialogHeader><DialogTitle>Delivery quality check</DialogTitle></DialogHeader>
           {deliveryModal && (
             <div className="grid gap-3 py-2">

@@ -8234,3 +8234,24 @@ frontend:
         - working: true
           agent: "main"
           comment: "Playwright-verified: 11 +Cart buttons, tap added '1 × Semi-Skimmed Milk' with toast + View cart action, header cart badge updated to £1.10/1."
+
+# ============================================================
+# SEPT 2026 SESSION PART 5 — Bottom-nav spacing + notification touch fixes
+# ============================================================
+frontend:
+  - task: "GLOBAL bottom-nav clearance for all dialogs/forms"
+    implemented: true
+    working: true
+    file: "components/ui/dialog.jsx + 28 DialogContent instances across page.js/shelfwise components"
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "Base DialogContent raised (top calc(50%-1.5rem)) + default max-h calc(100dvh-9.5rem) overflow-y-auto; ALL per-dialog caps (92vh/90vh/88vh/85vh/10rem-calc) normalized to calc(100dvh-9.5rem) via sed across 11 files. Verified 15px min gap between dialog bottom and nav top at BOTH 375x667 and 1920x900 (dvh-based, uniform on all heights). Main container already pb-28; stock-levels bar bottom-24."
+  - task: "Notifications scroll vs tap misfire fix"
+    implemented: true
+    working: true
+    file: "app/page.js (NotifRow)"
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "Tap only registers when pointer moved <6px in BOTH axes; pointercancel (native scroll takeover) resets without opening; card only slides when gesture is clearly horizontal (|dx|>10 && |dx|>1.2*|dy|). Verified: vertical drag on row does NOT open item, genuine tap does, swipe-to-delete unaffected. Real iOS/Android device verification recommended by user (pointer-events + touch-action:pan-y is the standard cross-platform approach)."

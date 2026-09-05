@@ -843,7 +843,7 @@ export function CookLogDialog({ recipe, open, onClose }) {
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-[520px] max-h-[92vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[520px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><ChefHat className="h-5 w-5 text-emerald-600" /> Log cooked — {recipe.title || 'Recipe'}</DialogTitle>
         </DialogHeader>
@@ -968,7 +968,7 @@ export function ViewRecipeDialog({ recipe, onClose, onDelete, onUpdated }) {
 
   return (
     <Dialog open={!!recipe} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-[760px] max-h-[92vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[760px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           {editMode ? (
             <div className="space-y-2 pr-8">
@@ -1283,7 +1283,7 @@ ${r.notes ? `<h2>Chef's Note</h2><p>${escapeText(r.notes)}</p>` : ''}
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-2xl max-h-[92vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-2xl max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">✨ Recipe Generator from Stock</DialogTitle>
           <p className="text-sm text-muted-foreground">

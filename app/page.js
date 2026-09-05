@@ -2707,7 +2707,7 @@ function App() {
       </Dialog>
       {/* Add/Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="sm:max-w-[560px] max-h-[calc(100dvh-10rem)] flex flex-col p-0 gap-0">
+        <DialogContent className="sm:max-w-[560px] max-h-[calc(100dvh-9.5rem)] flex flex-col p-0 gap-0">
           <DialogHeader className="px-6 pt-6 pb-2 shrink-0">
             <DialogTitle>{editing ? 'Edit Product' : 'Add Product'}</DialogTitle>
           </DialogHeader>
@@ -2963,7 +2963,7 @@ function App() {
       </Dialog>
       {/* Voice Input Dialog */}
       <Dialog open={voiceOpen} onOpenChange={(v) => { if (!v) forceCloseVoice() }}>
-        <DialogContent className="sm:max-w-[500px] max-h-[92vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-[500px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-2">🎤 Voice Add Items</span>
@@ -3293,7 +3293,7 @@ function App() {
 
       {/* AI Snap Label Dialog — single product photo */}
       <Dialog open={snapOpen} onOpenChange={setSnapOpen}>
-        <DialogContent className="sm:max-w-[520px] max-h-[92vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-[520px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-emerald-600" /> Snap Product Label
@@ -3449,7 +3449,7 @@ function App() {
 
       {/* AI Scan Dialog */}
       <Dialog open={scanOpen} onOpenChange={setScanOpen}>
-        <DialogContent className="sm:max-w-[860px] max-h-[90vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-[860px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ScanLine className="h-5 w-5 text-emerald-600" /> Scan Logbook with AI
@@ -3596,7 +3596,7 @@ function App() {
       </Dialog>
       {/* Recipe Scan Dialog */}
       <Dialog open={recipeOpen} onOpenChange={setRecipeOpen}>
-        <DialogContent className="sm:max-w-[920px] max-h-[92vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-[920px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <BookOpen className="h-5 w-5 text-purple-600" /> Scan Recipe
@@ -3732,7 +3732,7 @@ function App() {
           price alerts, expiring items, low stock. Opened from the bell icon.
           ===================================================================== */}
       <Dialog open={notifOpen} onOpenChange={setNotifOpen}>
-        <DialogContent className="sm:max-w-[480px] max-h-[calc(100dvh-10rem)] flex flex-col p-0 gap-0">
+        <DialogContent className="sm:max-w-[480px] max-h-[calc(100dvh-9.5rem)] flex flex-col p-0 gap-0">
           <DialogHeader className="px-4 pt-4 pb-2 border-b">
             <DialogTitle className="flex items-center gap-2"><Bell className="h-5 w-5 text-emerald-600" /> Notifications</DialogTitle>
           </DialogHeader>
@@ -3857,10 +3857,12 @@ function NotifRow({ n, meta, when, onDismiss, onOpen, onAddToCart }) {
   const [dx, setDx] = useState(0)
   const [dragging, setDragging] = useState(false)
   const startX = useRef(null)
+  const startY = useRef(null)
   const moved = useRef(false)
 
   const onPointerDown = (e) => {
     startX.current = e.clientX
+    startY.current = e.clientY
     moved.current = false
     setDragging(true)
     try { e.currentTarget.setPointerCapture(e.pointerId) } catch {}
@@ -3868,12 +3870,31 @@ function NotifRow({ n, meta, when, onDismiss, onOpen, onAddToCart }) {
   const onPointerMove = (e) => {
     if (startX.current == null) return
     const d = e.clientX - startX.current
-    if (Math.abs(d) > 6) moved.current = true
-    setDx(Math.max(-140, Math.min(140, d)))
+    const dy = e.clientY - startY.current
+    // ANY significant movement (either axis) means this is NOT a tap.
+    if (Math.abs(d) > 6 || Math.abs(dy) > 6) moved.current = true
+    // Only slide the card when the gesture is CLEARLY horizontal — vertical
+    // scrolling must never drag the card sideways.
+    if (Math.abs(d) > 10 && Math.abs(d) > Math.abs(dy) * 1.2) {
+      setDx(Math.max(-140, Math.min(140, d)))
+    } else {
+      setDx(0)
+    }
+  }
+  // Scroll takeover / lost pointer: reset WITHOUT opening — this is what used
+  // to misfire taps while scrolling the list (Sept 2026 fix).
+  const cancelDrag = () => {
+    startX.current = null
+    startY.current = null
+    moved.current = true
+    setDragging(false)
+    setDx(0)
   }
   const endDrag = () => {
     const d = dx
+    const wasTap = !moved.current
     startX.current = null
+    startY.current = null
     setDragging(false)
     if (Math.abs(d) > 70) {
       // fling out in the swipe direction, then remove
@@ -3881,7 +3902,9 @@ function NotifRow({ n, meta, when, onDismiss, onOpen, onAddToCart }) {
       setTimeout(() => onDismiss(n.id), 180)
     } else {
       setDx(0)
-      if (!moved.current) onOpen(n)   // a still tap = open the item
+      // Open ONLY on a genuine tap: pointer went down and up in (roughly) the
+      // same place with no meaningful movement in either axis.
+      if (wasTap) onOpen(n)
     }
   }
 
@@ -3896,7 +3919,7 @@ function NotifRow({ n, meta, when, onDismiss, onOpen, onAddToCart }) {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
-        onPointerCancel={endDrag}
+        onPointerCancel={cancelDrag}
         style={{ transform: `translateX(${dx}px)`, transition: dragging ? 'none' : 'transform 0.18s ease', touchAction: 'pan-y' }}
         className={`relative flex items-start gap-2.5 rounded-lg border px-3 py-2 select-none cursor-pointer ${meta.cls}`}
       >

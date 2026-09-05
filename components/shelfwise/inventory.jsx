@@ -498,7 +498,7 @@ export function DisposeProductDialog({ product, onClose, onConfirm }) {
 
   return (
     <Dialog open={!!product} onOpenChange={(v) => { if (!v && !busy) onClose() }}>
-      <DialogContent className="sm:max-w-[520px] max-h-[92vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[520px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Remove &quot;{product.name}&quot;</DialogTitle>
           <p className="text-sm text-muted-foreground">

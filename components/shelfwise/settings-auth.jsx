@@ -403,7 +403,7 @@ export function SetupWizard({ open, onClose, settings, saveSettings }) {
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-[640px] max-h-[92vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[640px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             {Array.from({ length: totalSteps }).map((_, i) => (
@@ -1010,7 +1010,7 @@ export function SettingsDialog({ open, onClose, settings, saveSettings, openWiza
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent hideBack className="sm:max-w-[680px] max-h-[calc(100dvh-10rem)] overflow-hidden flex flex-col p-0">
+      <DialogContent hideBack className="sm:max-w-[680px] max-h-[calc(100dvh-9.5rem)] overflow-hidden flex flex-col p-0">
         <DialogHeader className="px-4 sm:px-6 pt-5 pb-3 border-b">
           <DialogTitle className="flex items-center gap-2">
             {/* Back: from a section -> Settings home; from home -> close */}

@@ -117,7 +117,7 @@ function DeliveryCheckDialog({ order, onClose, onDone, readonlyData }) {
 
   return (
     <Dialog open={!!order} onOpenChange={(v) => { if (!v && !busy) onClose() }}>
-      <DialogContent className="sm:max-w-[560px] max-h-[92vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-[560px] max-h-[calc(100dvh-9.5rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><ClipboardCheck className="h-5 w-5 text-indigo-600" /> {ro ? `Delivery check — ${order.orderRef}` : `Check delivery — ${order.orderRef}`}</DialogTitle>
         </DialogHeader>
